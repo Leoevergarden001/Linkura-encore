@@ -139,9 +139,6 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetCharacterInfoByIdLocked(std::string_view characterId);
         std::optional<MockStoredResponse> GetDeckListResponseLocked();
         std::optional<MockStoredResponse> ModifyDeckListLocked(std::string_view payloadJson);
-        int currentRhythmMusicId = 0;
-        int currentRhythmDifficulty = 1;
-
         struct QuestLiveState {
             std::string questLiveId;
             int questLiveType = 0;
@@ -380,6 +377,7 @@ namespace LinkuraLocal::HttpMock {
             ExecSql(db, "DELETE FROM deck;");
             ExecSql(db, "DELETE FROM rhythm_music_score;");
             ExecSql(db, "DELETE FROM rhythm_game_deck;");
+            ExecSql(db, "DELETE FROM rhythm_runtime_session;");
             ExecSql(db, "DELETE FROM quest_stage;");
             ExecSql(db, "DELETE FROM daily_quest_stage;");
             ExecSql(db, "DELETE FROM dream_quest_stage;");
@@ -412,7 +410,7 @@ namespace LinkuraLocal::HttpMock {
             return false;
         }
 
-        if (!ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
+        if (!ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
             return false;
         }
 
@@ -936,13 +934,69 @@ namespace LinkuraLocal::HttpMock {
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::RhythmGameSetStartLocked(std::string_view payloadJson) {
-        if (!payloadJson.empty()) {
-            auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
-            if (payload.is_object()) {
-                currentRhythmMusicId = payload.value("music_id", 0);
-                currentRhythmDifficulty = payload.value("music_score_difficulty", 1);
-            }
+        if (!initialized && !EnsureReadyLocked()) {
+            return std::nullopt;
         }
+        if (!db || payloadJson.empty()) {
+            return std::nullopt;
+        }
+        auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        if (!payload.is_object()) {
+            return std::nullopt;
+        }
+        const int musicId = payload.value("music_id", 0);
+        const int difficulty = payload.value("music_score_difficulty", 1);
+        if (musicId <= 0 || difficulty <= 0) {
+            return std::nullopt;
+        }
+
+        sqlite3_stmt* existing = nullptr;
+        constexpr const char* existingSql =
+            "SELECT music_id, difficulty, state FROM rhythm_runtime_session "
+            "WHERE singleton_id = 1;";
+        if (sqlite3_prepare_v2(db, existingSql, -1, &existing, nullptr) == SQLITE_OK && existing) {
+            if (sqlite3_step(existing) == SQLITE_ROW &&
+                sqlite3_column_int(existing, 0) == musicId &&
+                sqlite3_column_int(existing, 1) == difficulty) {
+                const auto* rawState = reinterpret_cast<const char*>(sqlite3_column_text(existing, 2));
+                const bool playing = rawState && std::string_view(rawState) == "PLAYING";
+                sqlite3_finalize(existing);
+                if (playing) {
+                    MockStoredResponse replay;
+                    replay.body = "null";
+                    return replay;
+                }
+            } else {
+                sqlite3_finalize(existing);
+            }
+        } else if (existing) {
+            sqlite3_finalize(existing);
+        }
+
+        constexpr const char* startSql =
+            "INSERT OR REPLACE INTO rhythm_runtime_session "
+            "(singleton_id, session_id, music_id, difficulty, state, "
+            "start_payload_json, finish_payload_json, result_json, updated_at) "
+            "VALUES (1, ?, ?, ?, 'PLAYING', ?, NULL, NULL, CURRENT_TIMESTAMP);";
+        sqlite3_stmt* start = nullptr;
+        if (sqlite3_prepare_v2(db, startSql, -1, &start, nullptr) != SQLITE_OK || !start) {
+            Log::ErrorFmt("[HttpMockBackend] rhythm session start prepare failed: %s", sqlite3_errmsg(db));
+            if (start) sqlite3_finalize(start);
+            return std::nullopt;
+        }
+        const std::string sessionId = GenerateUuid4();
+        const std::string startPayload = payload.dump();
+        const bool bound =
+            BindText(start, 1, sessionId) &&
+            sqlite3_bind_int(start, 2, musicId) == SQLITE_OK &&
+            sqlite3_bind_int(start, 3, difficulty) == SQLITE_OK &&
+            BindText(start, 4, startPayload);
+        if (!bound || sqlite3_step(start) != SQLITE_DONE) {
+            Log::ErrorFmt("[HttpMockBackend] rhythm session start failed: %s", sqlite3_errmsg(db));
+            sqlite3_finalize(start);
+            return std::nullopt;
+        }
+        sqlite3_finalize(start);
         MockStoredResponse response;
         response.body = "null";
         return response;
@@ -962,7 +1016,47 @@ namespace LinkuraLocal::HttpMock {
         }
 
         const int score = payload.value("score", 0);
-        const int musicId = currentRhythmMusicId;
+        if (score < 0) {
+            return std::nullopt;
+        }
+        int musicId = 0;
+        int difficulty = 0;
+        std::string sessionState;
+        std::string storedResult;
+        {
+            sqlite3_stmt* stmt = nullptr;
+            constexpr const char* sql =
+                "SELECT music_id, difficulty, state, result_json "
+                "FROM rhythm_runtime_session WHERE singleton_id = 1;";
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+                Log::ErrorFmt("[HttpMockBackend] rhythm session lookup failed: %s", sqlite3_errmsg(db));
+                if (stmt) sqlite3_finalize(stmt);
+                return std::nullopt;
+            }
+            if (sqlite3_step(stmt) != SQLITE_ROW) {
+                sqlite3_finalize(stmt);
+                Log::Warn("[HttpMockBackend] rhythm finish has no persisted session");
+                return std::nullopt;
+            }
+            musicId = sqlite3_column_int(stmt, 0);
+            difficulty = sqlite3_column_int(stmt, 1);
+            const auto* rawState = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            const auto* rawResult = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+            sessionState = rawState ? rawState : "";
+            storedResult = rawResult ? rawResult : "";
+            sqlite3_finalize(stmt);
+        }
+        if (sessionState == "FINISHED" && !storedResult.empty()) {
+            MockStoredResponse replay;
+            replay.body = std::move(storedResult);
+            return replay;
+        }
+        if (sessionState != "PLAYING" || musicId <= 0 || difficulty <= 0) {
+            return std::nullopt;
+        }
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) {
+            return std::nullopt;
+        }
 
         int highScoreBefore = 0;
         int hsStatusBefore = 0;
@@ -991,7 +1085,6 @@ namespace LinkuraLocal::HttpMock {
             }
         }
 
-        const int difficulty = currentRhythmDifficulty;
         int maxComboBefore = 0;
         int comboStatusBefore = 0;
         nlohmann::json* currentDiffEntry = nullptr;
@@ -1080,8 +1173,16 @@ namespace LinkuraLocal::HttpMock {
                 BindText(stmt, 8, diffScoresStr);
                 if (sqlite3_step(stmt) != SQLITE_DONE) {
                     Log::ErrorFmt("[HttpMockBackend] rhythm_music_score upsert failed: %s", sqlite3_errmsg(db));
+                    sqlite3_finalize(stmt);
+                    ExecSql(db, "ROLLBACK;");
+                    return std::nullopt;
                 }
                 sqlite3_finalize(stmt);
+            } else {
+                Log::ErrorFmt("[HttpMockBackend] rhythm_music_score prepare failed: %s", sqlite3_errmsg(db));
+                if (stmt) sqlite3_finalize(stmt);
+                ExecSql(db, "ROLLBACK;");
+                return std::nullopt;
             }
         }
 
@@ -1142,8 +1243,35 @@ namespace LinkuraLocal::HttpMock {
         result["rhythm_game_star_total_count"] = starTotalAfter;
         result["applied_campaign_types"] = nlohmann::json::array();
 
+        const std::string resultJson = result.dump();
+        const std::string finishPayload = payload.dump();
+        sqlite3_stmt* finish = nullptr;
+        constexpr const char* finishSql =
+            "UPDATE rhythm_runtime_session SET state = 'FINISHED', "
+            "finish_payload_json = ?, result_json = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE singleton_id = 1 AND state = 'PLAYING';";
+        if (sqlite3_prepare_v2(db, finishSql, -1, &finish, nullptr) != SQLITE_OK || !finish) {
+            Log::ErrorFmt("[HttpMockBackend] rhythm session finish prepare failed: %s", sqlite3_errmsg(db));
+            if (finish) sqlite3_finalize(finish);
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        const bool finishBound =
+            BindText(finish, 1, finishPayload) && BindText(finish, 2, resultJson);
+        if (!finishBound || sqlite3_step(finish) != SQLITE_DONE || sqlite3_changes(db) != 1) {
+            Log::ErrorFmt("[HttpMockBackend] rhythm session finish failed: %s", sqlite3_errmsg(db));
+            sqlite3_finalize(finish);
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        sqlite3_finalize(finish);
+        if (!ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+
         MockStoredResponse response;
-        response.body = result.dump();
+        response.body = resultJson;
         return response;
     }
 
@@ -3229,13 +3357,15 @@ namespace LinkuraLocal::HttpMock {
             return false;
         }
 
-        bool ok = ExecSql(db, "DELETE FROM archive_detail;") &&
+        bool ok = ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SchemaScripts, "schema") &&
+                  ExecSql(db, "DELETE FROM archive_detail;") &&
                   ExecSql(db, "DELETE FROM card_detail;") &&
                   ExecSql(db, "DELETE FROM character_info;") &&
                   ExecSql(db, "DELETE FROM item;") &&
                   ExecSql(db, "DELETE FROM deck;") &&
                   ExecSql(db, "DELETE FROM rhythm_music_score;") &&
                   ExecSql(db, "DELETE FROM rhythm_game_deck;") &&
+                  ExecSql(db, "DELETE FROM rhythm_runtime_session;") &&
                   ExecSql(db, "DELETE FROM quest_stage;") &&
                   ExecSql(db, "DELETE FROM daily_quest_stage;") &&
                   ExecSql(db, "DELETE FROM dream_quest_stage;") &&
