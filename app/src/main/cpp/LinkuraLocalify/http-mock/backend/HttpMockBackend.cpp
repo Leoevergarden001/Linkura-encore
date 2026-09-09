@@ -671,6 +671,10 @@ namespace LinkuraLocal::HttpMock {
 
         nlohmann::json responseDeckList = nlohmann::json::array();
 
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) {
+            return std::nullopt;
+        }
+
         constexpr const char* upsertSql =
             "INSERT OR REPLACE INTO deck (d_deck_datas_id, deck_name, deck_no, generations_id, ace_card, deck_cards_json) "
             "VALUES (?, ?, ?, ?, ?, ?);";
@@ -716,18 +720,29 @@ namespace LinkuraLocal::HttpMock {
             if (sqlite3_prepare_v2(db, upsertSql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
                 Log::ErrorFmt("[HttpMockBackend] sqlite prepare failed for deck upsert: %s", sqlite3_errmsg(db));
                 if (stmt) sqlite3_finalize(stmt);
-                continue;
+                ExecSql(db, "ROLLBACK;");
+                return std::nullopt;
             }
 
-            BindText(stmt, 1, deckId);
-            BindText(stmt, 2, deckName);
-            sqlite3_bind_int(stmt, 3, deckNo);
-            sqlite3_bind_int(stmt, 4, genId);
-            BindText(stmt, 5, aceCard);
-            BindText(stmt, 6, cardsJsonStr);
+            const bool bound =
+                BindText(stmt, 1, deckId) &&
+                BindText(stmt, 2, deckName) &&
+                sqlite3_bind_int(stmt, 3, deckNo) == SQLITE_OK &&
+                sqlite3_bind_int(stmt, 4, genId) == SQLITE_OK &&
+                BindText(stmt, 5, aceCard) &&
+                BindText(stmt, 6, cardsJsonStr);
+            if (!bound) {
+                Log::ErrorFmt("[HttpMockBackend] sqlite bind failed for deck upsert: %s", sqlite3_errmsg(db));
+                sqlite3_finalize(stmt);
+                ExecSql(db, "ROLLBACK;");
+                return std::nullopt;
+            }
 
             if (sqlite3_step(stmt) != SQLITE_DONE) {
                 Log::ErrorFmt("[HttpMockBackend] sqlite step failed for deck upsert: %s", sqlite3_errmsg(db));
+                sqlite3_finalize(stmt);
+                ExecSql(db, "ROLLBACK;");
+                return std::nullopt;
             }
             sqlite3_finalize(stmt);
 
@@ -742,6 +757,11 @@ namespace LinkuraLocal::HttpMock {
             responseDeck["deck_cards_list"] = cardsList;
 
             responseDeckList.push_back(std::move(responseDeck));
+        }
+
+        if (!ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
         }
 
         nlohmann::json result;
@@ -1140,6 +1160,10 @@ namespace LinkuraLocal::HttpMock {
             return std::nullopt;
         }
 
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) {
+            return std::nullopt;
+        }
+
         constexpr const char* upsertSql =
             "INSERT OR REPLACE INTO rhythm_game_deck "
             "(rhythm_game_deck_id, name, deck_no, deck_card_list_json) "
@@ -1181,16 +1205,29 @@ namespace LinkuraLocal::HttpMock {
             const std::string cardsJsonStr = cardList.dump();
 
             sqlite3_stmt* stmt = nullptr;
-            if (sqlite3_prepare_v2(db, upsertSql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
-                BindText(stmt, 1, deckId);
-                BindText(stmt, 2, deckName);
-                sqlite3_bind_int(stmt, 3, deckNo);
-                BindText(stmt, 4, cardsJsonStr);
-                if (sqlite3_step(stmt) != SQLITE_DONE) {
-                    Log::ErrorFmt("[HttpMockBackend] rhythm_game_deck upsert failed: %s", sqlite3_errmsg(db));
-                }
-                sqlite3_finalize(stmt);
+            if (sqlite3_prepare_v2(db, upsertSql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+                Log::ErrorFmt("[HttpMockBackend] rhythm_game_deck prepare failed: %s", sqlite3_errmsg(db));
+                if (stmt) sqlite3_finalize(stmt);
+                ExecSql(db, "ROLLBACK;");
+                return std::nullopt;
             }
+            const bool bound =
+                BindText(stmt, 1, deckId) &&
+                BindText(stmt, 2, deckName) &&
+                sqlite3_bind_int(stmt, 3, deckNo) == SQLITE_OK &&
+                BindText(stmt, 4, cardsJsonStr);
+            if (!bound || sqlite3_step(stmt) != SQLITE_DONE) {
+                Log::ErrorFmt("[HttpMockBackend] rhythm_game_deck upsert failed: %s", sqlite3_errmsg(db));
+                sqlite3_finalize(stmt);
+                ExecSql(db, "ROLLBACK;");
+                return std::nullopt;
+            }
+            sqlite3_finalize(stmt);
+        }
+
+        if (!ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
         }
 
         MockStoredResponse response;
