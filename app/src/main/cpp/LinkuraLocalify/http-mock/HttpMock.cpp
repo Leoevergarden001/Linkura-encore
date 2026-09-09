@@ -61,6 +61,19 @@ namespace LinkuraLocal::HttpMock {
             return std::string(buf);
         }
 
+        static std::string FormatIso8601NowUtc() {
+            std::time_t now = std::time(nullptr);
+            std::tm tmUtc{};
+#if defined(_WIN32)
+            gmtime_s(&tmUtc, &now);
+#else
+            gmtime_r(&now, &tmUtc);
+#endif
+            char buf[32]{};
+            std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tmUtc);
+            return std::string(buf);
+        }
+
         static std::string ReadFileToString(const std::filesystem::path& path) {
             std::ifstream ifs(path, std::ios::binary);
             if (!ifs) return {};
@@ -687,6 +700,13 @@ namespace LinkuraLocal::HttpMock {
                 const auto filePath = dumpDir / (sanitized + ".json");
 
                 nlohmann::json dumpObj;
+                dumpObj["schemaVersion"] = 1;
+                dumpObj["path"] = apiPath;
+                dumpObj["status"] = httpStatusCode;
+                dumpObj["capturedAt"] = FormatIso8601NowUtc();
+                dumpObj["responseSource"] = routeResponse.has_value()
+                    ? "REGISTERED_ROUTE"
+                    : "DISK_FIXTURE";
                 if (!requestBodyJson.empty()) {
                     auto reqParsed = nlohmann::json::parse(requestBodyJson, nullptr, false);
                     dumpObj["request"] = reqParsed.is_discarded() ? nlohmann::json(requestBodyJson) : reqParsed;
