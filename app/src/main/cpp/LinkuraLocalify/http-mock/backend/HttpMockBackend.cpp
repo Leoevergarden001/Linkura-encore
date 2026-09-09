@@ -3479,10 +3479,21 @@ namespace LinkuraLocal::HttpMock {
         if (!cardObj.is_object()) {
             return std::nullopt;
         }
+        const auto cardDataIt = cardObj.find("user_card_data");
+        if (cardDataIt == cardObj.end() || !cardDataIt->is_object()) {
+            Log::ErrorFmt(
+                "[HttpMockBackend] card detail has no user_card_data object: d_card_datas_id=%s",
+                dCardDatasId.c_str()
+            );
+            return std::nullopt;
+        }
+        const auto& cardData = *cardDataIt;
+        const int currentStyleLevel = cardData.value("style_level", 0);
+        const int selectableMaxLevel = cardData.value("max_style_level", 0);
         nlohmann::json result;
-        result["is_possible"] = false;
-        result["current_style_level"] = cardObj.value("style_level", 0);
-        result["selectable_max_level"] = cardObj.value("max_style_level", 0);
+        result["is_possible"] = currentStyleLevel < selectableMaxLevel;
+        result["current_style_level"] = currentStyleLevel;
+        result["selectable_max_level"] = selectableMaxLevel;
         result["style_point"] = 0;
         return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
     }
