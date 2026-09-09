@@ -28,10 +28,12 @@ namespace LinkuraLocal::HttpMock {
                                                                          std::string_view fallbackArchiveId = {});
 
         std::optional<MockStoredResponse> GetCardDetailByDCardId(std::string_view dCardDatasId);
+        std::optional<MockStoredResponse> GetCardListResponse();
         std::optional<MockStoredResponse> LookupCardDetailFromPayload(std::string_view payloadJson);
         std::optional<MockStoredResponse> CheckStyleLevelUp(std::string_view payloadJson);
 
         std::optional<MockStoredResponse> GetItemDetailByDItemId(std::string_view dItemDatasId);
+        std::optional<MockStoredResponse> GetItemListResponse();
         std::optional<MockStoredResponse> LookupItemDetailFromPayload(std::string_view payloadJson);
 
         std::optional<MockStoredResponse> GetDeckListResponse();

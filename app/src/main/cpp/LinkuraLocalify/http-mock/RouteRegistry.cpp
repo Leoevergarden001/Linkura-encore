@@ -125,6 +125,23 @@ namespace LinkuraLocal::HttpMock {
             };
         }
 
+        static std::optional<MockResponse> HandleCardGetList(const MockRequestContext&,
+                                                              HttpMockBackend& backend) {
+            auto record = backend.GetCardListResponse();
+            if (!record.has_value()) {
+                Log::WarnFmt("[HttpMockRouteRegistry] card get_list failed backend=%s",
+                             backend.GetStatusSummary().c_str());
+                return std::nullopt;
+            }
+            if (record->headersText.empty()) {
+                record->headersText = std::string(OfflineApiMockBuiltIn::DefaultHeadersView);
+            }
+            return MockResponse{
+                std::move(record->body), std::move(record->headersText),
+                record->statusCode, std::move(record->statusDescription),
+            };
+        }
+
         static std::optional<MockResponse> HandleCheckStyleLevelUp(const MockRequestContext& request,
                                                                     HttpMockBackend& backend) {
             auto record = backend.CheckStyleLevelUp(request.payloadJson);
@@ -162,6 +179,23 @@ namespace LinkuraLocal::HttpMock {
                 std::move(record->headersText),
                 record->statusCode,
                 std::move(record->statusDescription),
+            };
+        }
+
+        static std::optional<MockResponse> HandleItemGetList(const MockRequestContext&,
+                                                              HttpMockBackend& backend) {
+            auto record = backend.GetItemListResponse();
+            if (!record.has_value()) {
+                Log::WarnFmt("[HttpMockRouteRegistry] item get_list failed backend=%s",
+                             backend.GetStatusSummary().c_str());
+                return std::nullopt;
+            }
+            if (record->headersText.empty()) {
+                record->headersText = std::string(OfflineApiMockBuiltIn::DefaultHeadersView);
+            }
+            return MockResponse{
+                std::move(record->body), std::move(record->headersText),
+                record->statusCode, std::move(record->statusDescription),
             };
         }
 
@@ -539,10 +573,10 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/in_quest_live/set_finish", HandleQuestSetFinish);
             RegisterBackend(routes, "/v1/out_quest_live/get_result", HandleQuestGetResult);
             RegisterBackend(routes, "/v1/in_quest_live/skip_quest", HandleQuestSkip);
-            RegisterStaticJson(routes, "/v1/user/card/get_list", OfflineApiMockBuiltIn::UserCardGetListJsonView);
+            RegisterBackend(routes, "/v1/user/card/get_list", HandleCardGetList);
             RegisterBackend(routes, "/v1/user/card/get_detail", HandleCardDetail);
             RegisterBackend(routes, "/v1/user/card/check_style_level_up", HandleCheckStyleLevelUp);
-            RegisterStaticJson(routes, "/v1/user/items/get_list", OfflineApiMockBuiltIn::UserItemsGetListJsonView);
+            RegisterBackend(routes, "/v1/user/items/get_list", HandleItemGetList);
             RegisterBackend(routes, "/v1/user/item/get_detail", HandleItemDetail);
             RegisterBackend(routes, "/v1/collection/get_character_info", HandleCharacterInfo);
             RegisterStaticJson(routes, "/v1/activity_record/get_top", OfflineApiMockBuiltIn::ActivityRecordGetTopJsonView);

@@ -135,7 +135,9 @@ namespace LinkuraLocal::HttpMock {
         bool RebuildLocked();
         std::optional<MockStoredResponse> GetArchiveDetailByIdLocked(std::string_view archivesId);
         std::optional<MockStoredResponse> GetCardDetailByDCardIdLocked(std::string_view dCardDatasId);
+        std::optional<MockStoredResponse> GetCardListResponseLocked();
         std::optional<MockStoredResponse> GetItemDetailByDItemIdLocked(std::string_view dItemDatasId);
+        std::optional<MockStoredResponse> GetItemListResponseLocked();
         std::optional<MockStoredResponse> GetCharacterInfoByIdLocked(std::string_view characterId);
         std::optional<MockStoredResponse> GetDeckListResponseLocked();
         std::optional<MockStoredResponse> ModifyDeckListLocked(std::string_view payloadJson);
@@ -513,6 +515,48 @@ namespace LinkuraLocal::HttpMock {
         return response;
     }
 
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetCardListResponseLocked() {
+        if (!initialized && !EnsureReadyLocked()) {
+            return std::nullopt;
+        }
+        if (!db) {
+            return std::nullopt;
+        }
+
+        sqlite3_stmt* stmt = nullptr;
+        constexpr const char* sql =
+            "SELECT response_json FROM card_detail ORDER BY d_card_datas_id;";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            Log::ErrorFmt("[HttpMockBackend] sqlite prepare failed for card list: %s", sqlite3_errmsg(db));
+            if (stmt) sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+
+        nlohmann::json cards = nlohmann::json::array();
+        int rc = SQLITE_ROW;
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+            const auto* responseJson = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            auto parsed = nlohmann::json::parse(responseJson ? responseJson : "{}", nullptr, false);
+            if (!parsed.is_object() || !parsed.contains("user_card_data") ||
+                !parsed["user_card_data"].is_object()) {
+                Log::ErrorFmt("[HttpMockBackend] invalid card_detail response_json while building list");
+                sqlite3_finalize(stmt);
+                return std::nullopt;
+            }
+            cards.push_back(std::move(parsed["user_card_data"]));
+        }
+        if (rc != SQLITE_DONE) {
+            Log::ErrorFmt("[HttpMockBackend] sqlite card list step failed: %s", sqlite3_errmsg(db));
+            sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+        sqlite3_finalize(stmt);
+
+        nlohmann::json result;
+        result["user_card_data_list"] = std::move(cards);
+        return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetItemDetailByDItemIdLocked(std::string_view dItemDatasId) {
         if (!initialized && !EnsureReadyLocked()) {
             return std::nullopt;
@@ -550,6 +594,70 @@ namespace LinkuraLocal::HttpMock {
         response.body = responseJson ? responseJson : "{}";
         sqlite3_finalize(stmt);
         return response;
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetItemListResponseLocked() {
+        if (!initialized && !EnsureReadyLocked()) {
+            return std::nullopt;
+        }
+        if (!db) {
+            return std::nullopt;
+        }
+
+        sqlite3_stmt* stmt = nullptr;
+        constexpr const char* sql =
+            "SELECT d_item_datas_id, item_id, item_type, item_category, rarity, "
+            "item_num, resource_file_name FROM item ORDER BY item_category, item_id;";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            Log::ErrorFmt("[HttpMockBackend] sqlite prepare failed for item list: %s", sqlite3_errmsg(db));
+            if (stmt) sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+
+        nlohmann::json categories = nlohmann::json::array();
+        int currentCategory = 0;
+        bool hasCategory = false;
+        nlohmann::json items = nlohmann::json::array();
+        auto flushCategory = [&]() {
+            if (hasCategory) {
+                categories.push_back({
+                    {"item_category", currentCategory},
+                    {"user_item_list", std::move(items)},
+                });
+                items = nlohmann::json::array();
+            }
+        };
+
+        int rc = SQLITE_ROW;
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+            const int category = sqlite3_column_int(stmt, 3);
+            if (!hasCategory || category != currentCategory) {
+                flushCategory();
+                currentCategory = category;
+                hasCategory = true;
+            }
+            const auto* id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            const auto* resource = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+            items.push_back({
+                {"user_item_id", id ? id : ""},
+                {"item_id", sqlite3_column_int64(stmt, 1)},
+                {"item_type", sqlite3_column_int(stmt, 2)},
+                {"rarity", sqlite3_column_int(stmt, 4)},
+                {"item_num", sqlite3_column_int64(stmt, 5)},
+                {"resource_file_name", resource ? resource : ""},
+            });
+        }
+        if (rc != SQLITE_DONE) {
+            Log::ErrorFmt("[HttpMockBackend] sqlite item list step failed: %s", sqlite3_errmsg(db));
+            sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+        flushCategory();
+        sqlite3_finalize(stmt);
+
+        nlohmann::json result;
+        result["item_category_list"] = std::move(categories);
+        return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetCharacterInfoByIdLocked(std::string_view characterId) {
@@ -3458,6 +3566,11 @@ namespace LinkuraLocal::HttpMock {
         return impl_->GetCardDetailByDCardIdLocked(dCardDatasId);
     }
 
+    std::optional<MockStoredResponse> HttpMockBackend::GetCardListResponse() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetCardListResponseLocked();
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::LookupCardDetailFromPayload(std::string_view payloadJson) {
         const auto dCardDatasId = ExtractPayloadStringField(payloadJson, "d_card_datas_id");
         if (dCardDatasId.empty()) {
@@ -3501,6 +3614,11 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GetItemDetailByDItemId(std::string_view dItemDatasId) {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetItemDetailByDItemIdLocked(dItemDatasId);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetItemListResponse() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetItemListResponseLocked();
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::LookupItemDetailFromPayload(std::string_view payloadJson) {
