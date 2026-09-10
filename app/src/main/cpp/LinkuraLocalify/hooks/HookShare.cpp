@@ -587,6 +587,63 @@ namespace LinkuraLocal::HookShare {
     std::unordered_set<int64_t> advDataIdExistsCache;
     std::unordered_set<int64_t> advDataIdNotExistsCache;
 
+    static bool IsConnectionLocationField(std::string_view fieldName) {
+        std::string normalized;
+        normalized.reserve(fieldName.size());
+        for (const auto ch : fieldName) {
+            normalized.push_back(static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(ch))));
+        }
+        return normalized.find("path") != std::string::npos
+                || normalized.find("database") != std::string::npos
+                || normalized.find("connectionstring") != std::string::npos;
+    }
+
+    // Home's LauncherBanners query comes from the original client's Master
+    // SQLite connection, not from an OpenAPI route.  Record the actual
+    // connection type and any string path fields before attempting a data
+    // deployment; guessing a SQLite schema or an Android file location would
+    // make a preservation pack non-reproducible.
+    static void LogMasterConnectionLocation(std::string_view masterName, void* connection) {
+        if (!connection) {
+            Log::WarnFmt("[MasterData] %.*s constructed with null connection",
+                         static_cast<int>(masterName.size()), masterName.data());
+            return;
+        }
+
+        const auto* connectionClass = Il2cppUtils::get_class_from_instance(connection);
+        if (!connectionClass || !connectionClass->name) {
+            Log::WarnFmt("[MasterData] %.*s connection runtime class is unavailable",
+                         static_cast<int>(masterName.size()), masterName.data());
+            return;
+        }
+
+        Log::InfoFmt("[MasterData] %.*s connection=%s.%s",
+                     static_cast<int>(masterName.size()), masterName.data(),
+                     connectionClass->namespaze ? connectionClass->namespaze : "",
+                     connectionClass->name);
+
+        void* iterator = nullptr;
+        Il2cppUtils::FieldInfo* field = nullptr;
+        while ((field = UnityResolve::Invoke<Il2cppUtils::FieldInfo*>(
+                "il2cpp_class_get_fields", connectionClass, &iterator))) {
+            if (!field->name || field->offset <= 0 || !IsConnectionLocationField(field->name)) {
+                continue;
+            }
+            const auto* typeName = field->type
+                    ? UnityResolve::Invoke<const char*>("il2cpp_type_get_name", field->type)
+                    : nullptr;
+            if (!typeName || std::string_view(typeName) != "System.String") {
+                continue;
+            }
+            auto* value = Il2cppUtils::ClassGetFieldValue<Il2cppUtils::Il2CppString*>(
+                    connection, field);
+            Log::InfoFmt("[MasterData] %.*s connection.%s=%s",
+                         static_cast<int>(masterName.size()), masterName.data(), field->name,
+                         value ? value->ToString().c_str() : "<null>");
+        }
+    }
+
     DEFINE_HOOK(void, Silverflame_SFL_AdvSeriesMaster_ctor, (void* self, void* conn)) {
         Log::DebugFmt("Silverflame_SFL_AdvSeriesMaster_ctor HOOKED, instance=%p", self);
         advSeriesMasterInstance = self;
@@ -608,6 +665,11 @@ namespace LinkuraLocal::HookShare {
         advDataIdExistsCache.clear();
         advDataIdNotExistsCache.clear();
         return Silverflame_SFL_AdvDatasMaster_ctor_Orig(self, conn);
+    }
+
+    DEFINE_HOOK(void, Silverflame_SFL_LauncherBannersMaster_ctor, (void* self, void* conn)) {
+        LogMasterConnectionLocation("LauncherBannersMaster", conn);
+        return Silverflame_SFL_LauncherBannersMaster_ctor_Orig(self, conn);
     }
 
     DEFINE_HOOK(void*, Silverflame_SFL_AdvDatasMaster_Fetch, (void* self, int64_t id)) {
@@ -1452,6 +1514,9 @@ namespace LinkuraLocal::HookShare {
         ADD_HOOK(Silverflame_SFL_AdvSeriesMaster_Fetch, Il2cppUtils::GetMethodPointer("Core.dll", "Silverflame.SFL", "AdvSeriesMaster", "Fetch"));
         ADD_HOOK(Silverflame_SFL_AdvDatasMaster_ctor, Il2cppUtils::GetMethodPointer("Core.dll", "Silverflame.SFL", "AdvDatasMaster", ".ctor"));
         ADD_HOOK(Silverflame_SFL_AdvDatasMaster_Fetch, Il2cppUtils::GetMethodPointer("Core.dll", "Silverflame.SFL", "AdvDatasMaster", "Fetch"));
+        ADD_HOOK(Silverflame_SFL_LauncherBannersMaster_ctor,
+                 Il2cppUtils::GetMethodPointer("Core.dll", "Silverflame.SFL",
+                                                "LauncherBannersMaster", ".ctor"));
 #pragma endregion
     }
 }
