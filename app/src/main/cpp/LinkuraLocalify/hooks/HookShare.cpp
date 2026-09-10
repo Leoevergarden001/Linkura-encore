@@ -11,6 +11,88 @@
 
 namespace LinkuraLocal::HookShare {
     namespace {
+        static bool EnsureOfflineIdentityForLogin(const std::string& path) {
+            if (path != "/v1/user/login") return true;
+
+            // A clean 5.1.0 install can reach user/login before account/connect and
+            // therefore sends empty player_id/device_specific_id forever.  Returning
+            // an existing-user login response is not sufficient: the title flow reads
+            // Core.Instance.Identity again before it advances to Home.  Seed only the
+            // missing values in the game's own IdentityStorage so subsequent launches
+            // follow the normal persisted-identity path.
+            static std::mutex identityMutex;
+            static bool identityReady = false;
+            std::lock_guard<std::mutex> lock(identityMutex);
+            if (identityReady) return true;
+
+            UnityResolve::ThreadAttach();
+
+            static auto* getCoreInstance = Il2cppUtils::GetMethodIl2cpp(
+                    "Assembly-CSharp.dll", "", "Core", "get_Instance", 0);
+            static auto* getIdentity = Il2cppUtils::GetMethodIl2cpp(
+                    "Assembly-CSharp.dll", "", "Core", "get_Identity", 0);
+            static auto* getPlayerId = Il2cppUtils::GetMethodIl2cpp(
+                    "Assembly-CSharp.dll", "", "IdentityStorage", "get_PlayerId", 0);
+            static auto* getDeviceSpecificId = Il2cppUtils::GetMethodIl2cpp(
+                    "Assembly-CSharp.dll", "", "IdentityStorage", "get_DeviceSpecificId", 0);
+            static auto* saveIdentity = Il2cppUtils::GetMethodIl2cpp(
+                    "Assembly-CSharp.dll", "", "IdentityStorage", "SaveIdentity", 2);
+
+            if (!getCoreInstance || !getIdentity || !getPlayerId
+                || !getDeviceSpecificId || !saveIdentity) {
+                Log::Error("[OfflineIdentity] unable to resolve 5.1.0 identity methods");
+                return false;
+            }
+
+            using StaticGetter = void*(*)(Il2cppUtils::MethodInfo*);
+            using InstanceGetter = void*(*)(void*, Il2cppUtils::MethodInfo*);
+            using StringGetter = Il2cppUtils::Il2CppString*(*)(void*, Il2cppUtils::MethodInfo*);
+            using SaveIdentity = void(*)(void*, Il2cppUtils::Il2CppString*,
+                                         Il2cppUtils::Il2CppString*, Il2cppUtils::MethodInfo*);
+
+            auto* core = reinterpret_cast<StaticGetter>(getCoreInstance->methodPointer)(getCoreInstance);
+            if (!core) {
+                Log::Warn("[OfflineIdentity] Core.Instance is not ready; will retry");
+                return false;
+            }
+            auto* identity = reinterpret_cast<InstanceGetter>(getIdentity->methodPointer)(core, getIdentity);
+            if (!identity) {
+                Log::Warn("[OfflineIdentity] Core.Identity is not ready; will retry");
+                return false;
+            }
+
+            auto* currentPlayerId = reinterpret_cast<StringGetter>(getPlayerId->methodPointer)(identity, getPlayerId);
+            auto* currentDeviceId = reinterpret_cast<StringGetter>(getDeviceSpecificId->methodPointer)(
+                    identity, getDeviceSpecificId);
+            const bool missingPlayerId = !currentPlayerId || currentPlayerId->ToString().empty();
+            const bool missingDeviceId = !currentDeviceId || currentDeviceId->ToString().empty();
+
+            if (missingPlayerId || missingDeviceId) {
+                auto* playerId = missingPlayerId
+                        ? Il2cppUtils::Il2CppString::New("000000000")
+                        : currentPlayerId;
+                auto* deviceId = missingDeviceId
+                        ? Il2cppUtils::Il2CppString::New("ffffffff-ffff-ffff-ffff-ffffffffffff")
+                        : currentDeviceId;
+                reinterpret_cast<SaveIdentity>(saveIdentity->methodPointer)(
+                        identity, playerId, deviceId, saveIdentity);
+                Log::InfoFmt("[OfflineIdentity] seeded missing identity player_id=%s device_specific_id=%s",
+                             missingPlayerId ? "yes" : "no", missingDeviceId ? "yes" : "no");
+            } else {
+                Log::Info("[OfflineIdentity] preserved existing game identity");
+            }
+
+            currentPlayerId = reinterpret_cast<StringGetter>(getPlayerId->methodPointer)(identity, getPlayerId);
+            currentDeviceId = reinterpret_cast<StringGetter>(getDeviceSpecificId->methodPointer)(
+                    identity, getDeviceSpecificId);
+            identityReady = currentPlayerId && !currentPlayerId->ToString().empty()
+                    && currentDeviceId && !currentDeviceId->ToString().empty();
+            if (!identityReady) {
+                Log::Warn("[OfflineIdentity] identity remained empty after SaveIdentity; will retry");
+            }
+            return identityReady;
+        }
+
         static void DumpRestResponseHeadersIfPossible(void* response) {
             if (!response) return;
 
@@ -657,6 +739,7 @@ namespace LinkuraLocal::HookShare {
         Log::VerboseFmt("[ApiClient_CallApiAsync] path: %s\nrequest: %s", strPath.c_str(), strBody.c_str());
 
         if (Config::enableOfflineApiMock && path) {
+            EnsureOfflineIdentityForLogin(strPath);
             auto task = LinkuraLocal::HttpMock::CreateMockTaskForApiPath(strPath, strBody);
             if (!task) {
                 Log::InfoFmt("[HttpMock] noop/unmatched for path=%s, returning nullptr", strPath.c_str());
