@@ -75,6 +75,7 @@ class ConfigUpdateManager private constructor() {
                 if (config.hideLiveStreamCharacterItems != null) hideLiveStreamCharacterItems = config.hideLiveStreamCharacterItems
                 if (config.enableOfflineApiMock != null) enableOfflineApiMock = config.enableOfflineApiMock
                 if (config.dumpHttpMockJson != null) dumpHttpMockJson = config.dumpHttpMockJson
+                if (config.dumpSqlCipherKey != null) dumpSqlCipherKey = config.dumpSqlCipherKey
             }.build()
 
             serviceInstance?.sendMessage(MessageType.CONFIG_UPDATE, configUpdate)

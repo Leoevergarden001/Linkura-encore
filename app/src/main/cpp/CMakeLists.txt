@@ -84,6 +84,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         LinkuraLocalify/hooks/HookLiveRender.cpp
         LinkuraLocalify/hooks/HookCamera.cpp
         LinkuraLocalify/hooks/HookShare.cpp
+        LinkuraLocalify/hooks/HookSqlCipher.cpp
         LinkuraLocalify/hooks/HookStory.cpp
         LinkuraLocalify/hooks/HookTranslation.cpp
         # Generated protobuf files

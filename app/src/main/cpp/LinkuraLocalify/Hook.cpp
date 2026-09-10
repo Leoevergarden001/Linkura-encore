@@ -56,6 +56,7 @@ namespace LinkuraLocal::HookMain {
         // problem here
         auto hmodule = xdl_open(hookInstaller->m_il2cppLibraryPath.c_str(), RTLD_LAZY);
         UnityResolve::Init(hmodule, UnityResolve::Mode::Il2Cpp, Config::lazyInit);
+        HookSqlCipher::InstallManaged(hookInstaller);
 //        UnityResolve::Init(xdl_open(hookInstaller->m_il2cppLibraryPath.c_str(), RTLD_LAZY),
 //            UnityResolve::Mode::Il2Cpp, Config::lazyInit);
 
@@ -135,6 +136,9 @@ namespace LinkuraLocal::Hook {
     void Install() {
         const auto hookInstaller = Plugin::GetInstance().GetHookInstaller();
 #ifndef GKMS_WINDOWS
+        // Install before il2cpp_init so the first master-data connection and
+        // its SQLCipher key operation can be observed when diagnostics are enabled.
+        HookSqlCipher::Install(hookInstaller);
         ADD_HOOK(HookMain::il2cpp_init,
                  Plugin::GetInstance().GetHookInstaller()->LookupSymbol("il2cpp_init"));
 #else

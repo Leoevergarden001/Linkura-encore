@@ -113,6 +113,7 @@ message ConfigUpdate {
   optional bool memorize_free_camera_pos = 47;
   optional bool enable_offline_api_mock = 48;
   optional bool dump_http_mock_json = 49;
+  optional bool dump_sql_cipher_key = 50;
 }
 
 // Overlay control actions

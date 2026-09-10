@@ -63,6 +63,7 @@ namespace LinkuraLocal::Config {
     // Offline API mock defaults (disabled by default).
     bool enableOfflineApiMock = false;
     bool dumpHttpMockJson = false;
+    bool dumpSqlCipherKey = false;
     std::string apiServerUrl;
     std::string customResVersion;
     
@@ -137,6 +138,7 @@ namespace LinkuraLocal::Config {
             GetConfigItem(localeCode);
             GetConfigItem(enableOfflineApiMock);
             GetConfigItem(dumpHttpMockJson);
+            GetConfigItem(dumpSqlCipherKey);
             GetConfigItem(apiServerUrl);
             GetConfigItem(customResVersion);
             if (localeCode != "ja-JP") {
@@ -229,6 +231,7 @@ namespace LinkuraLocal::Config {
                 if (configUpdate.has_story_replace_content()) storyReplaceContent = configUpdate.story_replace_content();
                 if (configUpdate.has_enable_offline_api_mock()) enableOfflineApiMock = configUpdate.enable_offline_api_mock();
                 if (configUpdate.has_dump_http_mock_json()) dumpHttpMockJson = configUpdate.dump_http_mock_json();
+                if (configUpdate.has_dump_sql_cipher_key()) dumpSqlCipherKey = configUpdate.dump_sql_cipher_key();
             }
         } catch (const std::exception& e) {
             Log::ErrorFmt("UpdateConfig error: %s", e.what());

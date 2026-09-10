@@ -72,6 +72,7 @@ interface ConfigListener {
     fun onCustomResVersionChanged(value: String)
     fun onEnableOfflineApiMockChanged(value: Boolean)
     fun onDumpHttpMockJsonChanged(value: Boolean)
+    fun onDumpSqlCipherKeyChanged(value: Boolean)
 
     fun onPUseRemoteAssetsChanged(value: Boolean)
     fun onPCleanLocalAssetsChanged(value: Boolean)
@@ -473,6 +474,12 @@ interface ConfigUpdateListener: ConfigListener, IHasConfigItems {
 
     override fun onDumpHttpMockJsonChanged(value: Boolean) {
         config.dumpHttpMockJson = value
+        saveConfig()
+        sendConfigUpdate(config)
+    }
+
+    override fun onDumpSqlCipherKeyChanged(value: Boolean) {
+        config.dumpSqlCipherKey = value
         saveConfig()
         sendConfigUpdate(config)
     }

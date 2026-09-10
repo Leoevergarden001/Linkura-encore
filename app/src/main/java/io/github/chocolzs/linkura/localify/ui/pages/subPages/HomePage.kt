@@ -175,6 +175,13 @@ fun HomePage(modifier: Modifier = Modifier,
                             ) { v ->
                                 context?.onDumpHttpMockJsonChanged(v)
                             }
+                            GakuSwitch(
+                                modifier,
+                                stringResource(R.string.dump_sql_cipher_key),
+                                checked = config.value.dumpSqlCipherKey
+                            ) { v ->
+                                context?.onDumpSqlCipherKeyChanged(v)
+                            }
                             val resetTitle = stringResource(R.string.reset_mock_database_confirm_title)
                             val resetContent = stringResource(R.string.reset_mock_database_confirm_content)
                             val rebuildTitle = stringResource(R.string.rebuild_mock_database_confirm_title)

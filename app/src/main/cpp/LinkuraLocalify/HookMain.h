@@ -97,6 +97,10 @@ namespace LinkuraLocal::HookShare {
         }
     }
 }
+namespace LinkuraLocal::HookSqlCipher {
+    void Install(HookInstaller* hookInstaller);
+    void InstallManaged(HookInstaller* hookInstaller);
+}
 namespace LinkuraLocal::HookTranslation {
     void Install(HookInstaller *hookInstaller);
 }

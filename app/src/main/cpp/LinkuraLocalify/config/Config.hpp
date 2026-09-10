@@ -69,6 +69,9 @@ namespace LinkuraLocal::Config {
     // to return a locally constructed RestSharp response without sending HTTP requests.
     extern bool enableOfflineApiMock;
     extern bool dumpHttpMockJson;
+    // Opt-in diagnostic. Logs the SQLCipher key bytes used by the target app.
+    // Treat captured output as sensitive preservation material.
+    extern bool dumpSqlCipherKey;
 
     // API server redirect. When non-empty, all game API calls are forwarded to this base URL
     // instead of the original server. Takes effect even when enableOfflineApiMock is false.
