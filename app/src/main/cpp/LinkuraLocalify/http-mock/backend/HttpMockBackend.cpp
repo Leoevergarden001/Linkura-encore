@@ -131,6 +131,7 @@ namespace LinkuraLocal::HttpMock {
         }
 
         bool EnsureReadyLocked();
+        bool EnsureQuestSessionSchemaLocked();
         bool ResetLocked();
         bool RebuildLocked();
         std::optional<MockStoredResponse> GetArchiveDetailByIdLocked(std::string_view archivesId);
@@ -350,6 +351,10 @@ namespace LinkuraLocal::HttpMock {
             persistentStorageAvailable = false;
             return false;
         }
+        if (!EnsureQuestSessionSchemaLocked()) {
+            persistentStorageAvailable = false;
+            return false;
+        }
 
         {
             bool hasColumn = false;
@@ -407,6 +412,53 @@ namespace LinkuraLocal::HttpMock {
             return false;
         }
 
+        return true;
+    }
+
+    bool HttpMockBackend::Impl::EnsureQuestSessionSchemaLocked() {
+        if (!db) {
+            return false;
+        }
+
+        bool tableExists = false;
+        bool supportsRecovered = false;
+        sqlite3_stmt* stmt = nullptr;
+        constexpr const char* inspectSql =
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'quest_runtime_session';";
+        if (sqlite3_prepare_v2(db, inspectSql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            Log::ErrorFmt("[HttpMockBackend] quest session schema inspection failed: %s", sqlite3_errmsg(db));
+            if (stmt) sqlite3_finalize(stmt);
+            return false;
+        }
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            tableExists = true;
+            const auto* rawSql = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            supportsRecovered = rawSql && std::string_view(rawSql).find("RECOVERED") != std::string_view::npos;
+        }
+        sqlite3_finalize(stmt);
+        if (!tableExists || supportsRecovered) {
+            return true;
+        }
+
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) {
+            return false;
+        }
+        const bool migrated =
+            ExecSql(db, "ALTER TABLE quest_runtime_session RENAME TO quest_runtime_session_legacy;") &&
+            ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SchemaScripts, "schema") &&
+            ExecSql(db,
+                    "INSERT INTO quest_runtime_session "
+                    "(singleton_id, session_id, quest_live_type, stage_id, music_id, is_challenge_mode, "
+                    "state, start_payload_json, finish_payload_json, start_time, updated_at) "
+                    "SELECT singleton_id, session_id, quest_live_type, stage_id, music_id, is_challenge_mode, "
+                    "CASE WHEN state = 'PLAYING' THEN 'RECOVERED' ELSE state END, "
+                    "start_payload_json, finish_payload_json, start_time, updated_at "
+                    "FROM quest_runtime_session_legacy;") &&
+            ExecSql(db, "DROP TABLE quest_runtime_session_legacy;");
+        if (!migrated || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return false;
+        }
         return true;
     }
 
