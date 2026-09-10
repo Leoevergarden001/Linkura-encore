@@ -722,6 +722,37 @@ namespace LinkuraLocal::HookShare {
     // 5.1.0 title/login diagnostics.  These hooks are deliberately read-only:
     // they let us distinguish a response/deserialization problem from a title
     // state-machine continuation problem without changing game behavior.
+    Il2cppUtils::FieldInfo* titleStartButtonStateField = nullptr;
+    Il2cppUtils::FieldInfo* titleStartButtonControllerField = nullptr;
+    Il2cppUtils::FieldInfo* titleControllerLoginResponseField = nullptr;
+
+    template <typename T>
+    static bool ReadTitleField(void* instance, Il2cppUtils::FieldInfo* field, T& value) {
+        if (!instance || !field || field->offset < 0 || field->offset > 0x1000) return false;
+        value = *reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(instance) + field->offset);
+        return true;
+    }
+
+    static void LogTitleStateMachineFields(void* stateMachine, const char* phase, unsigned sequence) {
+        int32_t state = 0;
+        void* controller = nullptr;
+        void* loginResponse = nullptr;
+        const bool hasState = ReadTitleField(stateMachine, titleStartButtonStateField, state);
+        const bool hasController = ReadTitleField(stateMachine, titleStartButtonControllerField, controller);
+        const bool hasLoginResponse = ReadTitleField(
+                controller, titleControllerLoginResponseField, loginResponse);
+        Log::InfoFmt(
+                "[LoginFlow] title state %s #%u state=%s%d stateMachine=%p controller=%p loginRes=%s%p",
+                phase,
+                sequence,
+                hasState ? "" : "?",
+                state,
+                stateMachine,
+                hasController ? controller : nullptr,
+                hasLoginResponse ? "" : "?",
+                hasLoginResponse ? loginResponse : nullptr);
+    }
+
     DEFINE_HOOK(void, TitleSceneController_SetPlayerId, (void* self,
             Il2cppUtils::Il2CppString* playerId, void* method_info)) {
         const auto value = playerId ? playerId->ToString() : "<null>";
@@ -737,9 +768,11 @@ namespace LinkuraLocal::HookShare {
         if (current < 128) {
             Log::InfoFmt("[LoginFlow] TitleSceneController.<OnClickStartButton>d__6.MoveNext enter #%u self=%p",
                          current + 1, self);
+            LogTitleStateMachineFields(self, "enter", current + 1);
         }
         TitleSceneController_OnClickStartButton_MoveNext_Orig(self, method_info);
         if (current < 128) {
+            LogTitleStateMachineFields(self, "return", current + 1);
             Log::InfoFmt("[LoginFlow] TitleSceneController.<OnClickStartButton>d__6.MoveNext return #%u self=%p",
                          current + 1, self);
         }
@@ -1147,6 +1180,20 @@ namespace LinkuraLocal::HookShare {
         if (titleSceneControllerClass) {
             auto startButtonStateMachine = Il2cppUtils::find_nested_class_from_name(
                     titleSceneControllerClass, "<OnClickStartButton>d__6");
+            titleControllerLoginResponseField = Il2cppUtils::il2cpp_class_get_field_from_name(
+                    titleSceneControllerClass, "loginRes");
+            titleStartButtonStateField = Il2cppUtils::il2cpp_class_get_field_from_name(
+                    startButtonStateMachine, "<>1__state");
+            titleStartButtonControllerField = Il2cppUtils::il2cpp_class_get_field_from_name(
+                    startButtonStateMachine, "<>4__this");
+            Log::InfoFmt(
+                    "[LoginFlow] title fields state=%p(offset=%d) controller=%p(offset=%d) loginRes=%p(offset=%d)",
+                    titleStartButtonStateField,
+                    titleStartButtonStateField ? titleStartButtonStateField->offset : -1,
+                    titleStartButtonControllerField,
+                    titleStartButtonControllerField ? titleStartButtonControllerField->offset : -1,
+                    titleControllerLoginResponseField,
+                    titleControllerLoginResponseField ? titleControllerLoginResponseField->offset : -1);
             auto moveNext = Il2cppUtils::GetMethodIl2cpp(startButtonStateMachine, "MoveNext", 0);
             if (moveNext) {
                 ADD_HOOK(TitleSceneController_OnClickStartButton_MoveNext, moveNext->methodPointer);
