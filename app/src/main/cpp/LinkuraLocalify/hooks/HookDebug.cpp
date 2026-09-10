@@ -6,6 +6,7 @@
 #include <vector>
 #include <future>
 #include <atomic>
+#include <string_view>
 namespace LinkuraLocal::HookDebug {
     using Il2cppString = UnityResolve::UnityType::String;
 
@@ -285,6 +286,12 @@ namespace LinkuraLocal::HookDebug {
         Log::InfoFmt("[LoginFlow] SceneChanger.AddSceneAsync return scene=%s result=%p",
                      name.c_str(), result);
         return result;
+    }
+
+    DEFINE_HOOK(void, TitleSceneController_InitializeSceneAsync_MoveNext, (void* self, void* method)) {
+        Log::InfoFmt("[LoginFlow] TitleSceneController.<InitializeSceneAsync>d__*.MoveNext enter self=%p", self);
+        TitleSceneController_InitializeSceneAsync_MoveNext_Orig(self, method);
+        Log::InfoFmt("[LoginFlow] TitleSceneController.<InitializeSceneAsync>d__*.MoveNext return self=%p", self);
     }
 
     // lag
@@ -802,6 +809,31 @@ namespace LinkuraLocal::HookDebug {
         ADD_HOOK(ItemManipulator_OnInstantiate, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix.Character.Item", "ItemManipulator", "OnInstantiate"));
         ADD_HOOK(ScenePropManipulator_OnInstantiate, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix.Operator", "ScenePropManipulator", "OnInstantiate"));
         ADD_HOOK(SceneManager_GetSceneByName, Il2cppUtils::GetMethodPointer("UnityEngine.CoreModule.dll", "UnityEngine.SceneManagement", "SceneManager", "GetSceneByName"));
+        auto sceneChangerMethod = Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "", "SceneChanger", "AddSceneAsync");
+        if (!sceneChangerMethod) {
+            sceneChangerMethod = Il2cppUtils::GetMethodPointer(
+                    "Assembly-CSharp.dll", "Tecotec", "SceneChanger", "AddSceneAsync");
+        }
+        ADD_HOOK(SceneChanger_AddSceneAsync, sceneChangerMethod);
+
+        auto titleSceneControllerClass = Il2cppUtils::GetClassIl2cpp(
+                "Assembly-CSharp.dll", "Tecotec", "TitleSceneController");
+        if (titleSceneControllerClass) {
+            auto initializeStateMachine = Il2cppUtils::find_nested_class(
+                    titleSceneControllerClass, [](void* nestedClass) {
+                        const auto name = static_cast<Il2cppUtils::Il2CppClassHead*>(nestedClass)->name;
+                        return name && std::string_view(name).starts_with("<InitializeSceneAsync>d__");
+                    });
+            auto initializeMoveNext = Il2cppUtils::GetMethodIl2cpp(
+                    initializeStateMachine, "MoveNext", 0);
+            if (initializeMoveNext) {
+                ADD_HOOK(TitleSceneController_InitializeSceneAsync_MoveNext,
+                         initializeMoveNext->methodPointer);
+            } else {
+                Log::Warn("[LoginFlow] unable to resolve TitleSceneController.InitializeSceneAsync.MoveNext");
+            }
+        }
 
         ADD_HOOK(TimelineCommandReceiver_Awake, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "TimelineCommandReceiver", "Awake"));
 
