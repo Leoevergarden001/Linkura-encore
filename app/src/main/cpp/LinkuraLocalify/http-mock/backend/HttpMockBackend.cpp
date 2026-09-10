@@ -1974,6 +1974,7 @@ namespace LinkuraLocal::HttpMock {
         const auto* startPayload = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
         const auto* finishPayload = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
         const auto* startTime = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+        const bool recovered = state && std::string_view(state) == "PLAYING";
         const auto start = nlohmann::json::parse(startPayload ? startPayload : "{}", nullptr, false);
         if (!start.is_object()) {
             Log::Error("[HttpMockBackend] quest session start payload is invalid");
@@ -1999,6 +2000,11 @@ namespace LinkuraLocal::HttpMock {
             }
         }
         sqlite3_finalize(stmt);
+        if (recovered && !ExecSql(db,
+                                  "UPDATE quest_runtime_session SET state = 'RECOVERED', "
+                                  "updated_at = CURRENT_TIMESTAMP WHERE singleton_id = 1;")) {
+            return false;
+        }
         return true;
     }
 

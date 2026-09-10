@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS rhythm_runtime_session (
     session_id TEXT NOT NULL,
     music_id INTEGER NOT NULL,
     difficulty INTEGER NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('PLAYING', 'FINISHED', 'RETIRED')),
+    state TEXT NOT NULL CHECK (state IN ('PLAYING', 'FINISHED', 'RETIRED', 'RECOVERED')),
     start_payload_json TEXT NOT NULL CHECK (json_valid(start_payload_json)),
     finish_payload_json TEXT CHECK (
         finish_payload_json IS NULL OR json_valid(finish_payload_json)
