@@ -4,6 +4,7 @@
 #include "http-mock/HttpMock.hpp"
 #include <re2/re2.h>
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <mutex>
 #include <string_view>
@@ -718,6 +719,32 @@ namespace LinkuraLocal::HookShare {
 
     uintptr_t ActivityRecordGetTopWithHttpInfoAsync_MoveNext_Addr = 0;
 
+    // 5.1.0 title/login diagnostics.  These hooks are deliberately read-only:
+    // they let us distinguish a response/deserialization problem from a title
+    // state-machine continuation problem without changing game behavior.
+    DEFINE_HOOK(void, TitleSceneController_SetPlayerId, (void* self,
+            Il2cppUtils::Il2CppString* playerId, void* method_info)) {
+        const auto value = playerId ? playerId->ToString() : "<null>";
+        Log::InfoFmt("[LoginFlow] TitleSceneController.SetPlayerId self=%p player_id=%s",
+                     self, value.c_str());
+        TitleSceneController_SetPlayerId_Orig(self, playerId, method_info);
+    }
+
+    DEFINE_HOOK(void, TitleSceneController_OnClickStartButton_MoveNext, (void* self,
+            void* method_info)) {
+        static std::atomic<unsigned> sequence{0};
+        const auto current = sequence.fetch_add(1, std::memory_order_relaxed);
+        if (current < 128) {
+            Log::InfoFmt("[LoginFlow] TitleSceneController.<OnClickStartButton>d__6.MoveNext enter #%u self=%p",
+                         current + 1, self);
+        }
+        TitleSceneController_OnClickStartButton_MoveNext_Orig(self, method_info);
+        if (current < 128) {
+            Log::InfoFmt("[LoginFlow] TitleSceneController.<OnClickStartButton>d__6.MoveNext return #%u self=%p",
+                         current + 1, self);
+        }
+    }
+
     // http request log
     DEFINE_HOOK(void*, ApiClient_CallApiAsync, (void* self,
             Il2cppUtils::Il2CppString* path, void* method,
@@ -1109,6 +1136,26 @@ namespace LinkuraLocal::HookShare {
         ADD_HOOK(ApiClient_CallApiAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Client","ApiClient", "CallApiAsync"));
         ADD_HOOK(ApiClient_Deserialize, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Client","ApiClient", "Deserialize"));
         ADD_HOOK(RestResponseBase_get_Headers, Il2cppUtils::GetMethodPointer("RestSharp.dll", "RestSharp", "RestResponseBase", "get_Headers"));
+
+        // The 5.1.0 title flow awaits an async login continuation.  SetPlayerId
+        // is a void setter, and MoveNext is the generated async-state-machine
+        // method, so both hooks have ABI-stable signatures for diagnostics.
+        ADD_HOOK(TitleSceneController_SetPlayerId, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "SetPlayerId"));
+        auto titleSceneControllerClass = Il2cppUtils::GetClassIl2cpp(
+                "Assembly-CSharp.dll", "Tecotec", "TitleSceneController");
+        if (titleSceneControllerClass) {
+            auto startButtonStateMachine = Il2cppUtils::find_nested_class_from_name(
+                    titleSceneControllerClass, "<OnClickStartButton>d__6");
+            auto moveNext = Il2cppUtils::GetMethodIl2cpp(startButtonStateMachine, "MoveNext", 0);
+            if (moveNext) {
+                ADD_HOOK(TitleSceneController_OnClickStartButton_MoveNext, moveNext->methodPointer);
+            } else {
+                Log::Warn("[LoginFlow] unable to resolve TitleSceneController.<OnClickStartButton>d__6.MoveNext");
+            }
+        } else {
+            Log::Warn("[LoginFlow] unable to resolve 5.1.0 TitleSceneController");
+        }
 #pragma region ArchiveApi
         auto ArchiveApi_klass = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi");
         auto method = (Il2cppUtils::MethodInfo*) nullptr;
