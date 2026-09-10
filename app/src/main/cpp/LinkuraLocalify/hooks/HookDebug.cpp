@@ -294,6 +294,18 @@ namespace LinkuraLocal::HookDebug {
         Log::InfoFmt("[LoginFlow] TitleSceneController.<InitializeSceneAsync>d__*.MoveNext return self=%p", self);
     }
 
+    DEFINE_HOOK(void, TitleSceneController_OnClickFirstScreen, (void* self, void* method)) {
+        Log::InfoFmt("[LoginFlow] TitleSceneController.OnClickFirstScreen enter self=%p", self);
+        TitleSceneController_OnClickFirstScreen_Orig(self, method);
+        Log::InfoFmt("[LoginFlow] TitleSceneController.OnClickFirstScreen return self=%p", self);
+    }
+
+    DEFINE_HOOK(void, TitleSceneController_OnClickMenuButton, (void* self, void* method)) {
+        Log::InfoFmt("[LoginFlow] TitleSceneController.OnClickMenuButton enter self=%p", self);
+        TitleSceneController_OnClickMenuButton_Orig(self, method);
+        Log::InfoFmt("[LoginFlow] TitleSceneController.OnClickMenuButton return self=%p", self);
+    }
+
     // lag
     DEFINE_HOOK(void*, LiveSceneController_PrepareChangeSceneAsync, (Il2cppUtils::Il2CppObject* self,void* token, void* method)) {
         Log::DebugFmt("LiveSceneController_PrepareChangeSceneAsync HOOKED");
@@ -834,6 +846,10 @@ namespace LinkuraLocal::HookDebug {
                 Log::Warn("[LoginFlow] unable to resolve TitleSceneController.InitializeSceneAsync.MoveNext");
             }
         }
+        ADD_HOOK(TitleSceneController_OnClickFirstScreen, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "OnClickFirstScreen"));
+        ADD_HOOK(TitleSceneController_OnClickMenuButton, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "OnClickMenuButton"));
 
         ADD_HOOK(TimelineCommandReceiver_Awake, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "TimelineCommandReceiver", "Awake"));
 
@@ -844,8 +860,6 @@ namespace LinkuraLocal::HookDebug {
 //        ADD_HOOK(LiveSceneControllerLogic_FindAssetPaths, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "LiveSceneControllerLogic", "FindAssetPaths"));
 //        ADD_HOOK(LiveSceneControllerLogic_LoadLocationAssets, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "LiveSceneControllerLogic", "LoadLocationAssets"));
 //        ADD_HOOK(LiveSceneControllerLogic_ctor, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "LiveSceneControllerLogic", ".ctor"));
-        ADD_HOOK(SceneChanger_AddSceneAsync, Il2cppUtils::GetMethodPointer(
-                "Assembly-CSharp.dll", "", "SceneChanger", "AddSceneAsync"));
         //        ADD_HOOK(LiveSceneController_PrepareChangeSceneAsync, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "LiveSceneController", "PrepareChangeSceneAsync"));
 
 //        Il2cppUtils::MethodInfo* method = nullptr;
