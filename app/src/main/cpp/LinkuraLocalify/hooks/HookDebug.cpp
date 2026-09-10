@@ -278,8 +278,13 @@ namespace LinkuraLocal::HookDebug {
     }
 
     DEFINE_HOOK(void*, SceneChanger_AddSceneAsync, (Il2cppUtils::Il2CppObject* self, Il2cppString* sceneName, bool ignoreEditorSceneManager, void* method)) {
-        Log::DebugFmt("SceneChanger_AddSceneAsync HOOKED");
-        return SceneChanger_AddSceneAsync_Orig(self, sceneName, ignoreEditorSceneManager, method);
+        const auto name = sceneName ? sceneName->ToString() : "<null>";
+        Log::InfoFmt("[LoginFlow] SceneChanger.AddSceneAsync enter scene=%s ignoreEditor=%s self=%p",
+                     name.c_str(), ignoreEditorSceneManager ? "true" : "false", self);
+        auto result = SceneChanger_AddSceneAsync_Orig(self, sceneName, ignoreEditorSceneManager, method);
+        Log::InfoFmt("[LoginFlow] SceneChanger.AddSceneAsync return scene=%s result=%p",
+                     name.c_str(), result);
+        return result;
     }
 
     // lag
@@ -807,7 +812,8 @@ namespace LinkuraLocal::HookDebug {
 //        ADD_HOOK(LiveSceneControllerLogic_FindAssetPaths, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "LiveSceneControllerLogic", "FindAssetPaths"));
 //        ADD_HOOK(LiveSceneControllerLogic_LoadLocationAssets, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "LiveSceneControllerLogic", "LoadLocationAssets"));
 //        ADD_HOOK(LiveSceneControllerLogic_ctor, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "LiveSceneControllerLogic", ".ctor"));
-//        ADD_HOOK(SceneChanger_AddSceneAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "", "SceneChanger", "AddSceneAsync"));
+        ADD_HOOK(SceneChanger_AddSceneAsync, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "", "SceneChanger", "AddSceneAsync"));
         //        ADD_HOOK(LiveSceneController_PrepareChangeSceneAsync, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "LiveSceneController", "PrepareChangeSceneAsync"));
 
 //        Il2cppUtils::MethodInfo* method = nullptr;
