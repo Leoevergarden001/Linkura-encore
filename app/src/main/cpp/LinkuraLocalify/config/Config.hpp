@@ -72,6 +72,16 @@ namespace LinkuraLocal::Config {
     // Opt-in diagnostic. Logs the SQLCipher key bytes used by the target app.
     // Treat captured output as sensitive preservation material.
     extern bool dumpSqlCipherKey;
+    // Opt-in non-secret MasterData importer telemetry. This records database
+    // paths, key fingerprints, importer method metadata, and import SQL, but
+    // never records SQLCipher key material.
+    extern bool traceMasterImport;
+
+    // Preservation-only clock override. Unix seconds are used instead of a
+    // locale-dependent timestamp string so a Pack can reproduce a historical
+    // content window on every device. Disabled by default.
+    extern bool enableVirtualClock;
+    extern int64_t virtualClockUnixTime;
 
     // API server redirect. When non-empty, all game API calls are forwarded to this base URL
     // instead of the original server. Takes effect even when enableOfflineApiMock is false.

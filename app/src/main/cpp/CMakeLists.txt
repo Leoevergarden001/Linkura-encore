@@ -87,6 +87,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         LinkuraLocalify/hooks/HookSqlCipher.cpp
         LinkuraLocalify/hooks/HookStory.cpp
         LinkuraLocalify/hooks/HookTranslation.cpp
+        LinkuraLocalify/hooks/HookVirtualClock.cpp
         # Generated protobuf files
         build/linkura_messages.pb.cc
         )

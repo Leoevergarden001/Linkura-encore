@@ -23,6 +23,7 @@ namespace LinkuraLocal::HttpMock {
         bool Rebuild();
         static bool ResetAtFilesDir(const std::string& filesDir);
         static bool RebuildAtFilesDir(const std::string& filesDir);
+        std::optional<MockStoredResponse> GetHomeResponse();
         std::optional<MockStoredResponse> GetArchiveDetailById(std::string_view archivesId);
         std::optional<MockStoredResponse> LookupArchiveDetailFromPayload(std::string_view payloadJson,
                                                                          std::string_view fallbackArchiveId = {});
@@ -35,6 +36,10 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetItemDetailByDItemId(std::string_view dItemDatasId);
         std::optional<MockStoredResponse> GetItemListResponse();
         std::optional<MockStoredResponse> LookupItemDetailFromPayload(std::string_view payloadJson);
+
+        std::optional<MockStoredResponse> GetCollectionMusicListResponse();
+        std::optional<MockStoredResponse> GetCollectionStickerListResponse();
+        std::optional<MockStoredResponse> GetCollectionGallaryListResponse();
 
         std::optional<MockStoredResponse> GetDeckListResponse();
         std::optional<MockStoredResponse> ModifyDeckList(std::string_view payloadJson);

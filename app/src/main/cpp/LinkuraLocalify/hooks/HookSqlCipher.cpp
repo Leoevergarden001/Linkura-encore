@@ -7,7 +7,9 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <filesystem>
+#include <iomanip>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 
@@ -22,6 +24,10 @@ namespace LinkuraLocal::HookSqlCipher {
         void* sqlCipherHandle = nullptr;
         void* systemSqliteHandle = nullptr;
         Il2cppUtils::FieldInfo* connectionDatabasePathField = nullptr;
+
+        bool ShouldTraceMasterImport() {
+            return Config::traceMasterImport || Config::dumpSqlCipherKey;
+        }
 
         std::string CallerLocation(void* caller) {
             Dl_info info{};
@@ -72,24 +78,50 @@ namespace LinkuraLocal::HookSqlCipher {
             return result;
         }
 
+        std::string KeyFingerprint(const void* key, int keyBytes) {
+            if (!key) return "<null>";
+            size_t length = keyBytes < 0
+                ? std::strlen(static_cast<const char*>(key))
+                : static_cast<size_t>(keyBytes);
+            constexpr size_t kMaxFingerprintBytes = 4096;
+            length = std::min(length, kMaxFingerprintBytes);
+            // FNV-1a is only an equality/provenance marker, not a key verifier.
+            // Its use here avoids putting sensitive raw key bytes in logcat.
+            uint64_t value = 14695981039346656037ULL;
+            const auto* bytes = static_cast<const unsigned char*>(key);
+            for (size_t i = 0; i < length; ++i) {
+                value ^= bytes[i];
+                value *= 1099511628211ULL;
+            }
+            std::ostringstream result;
+            result << std::hex << std::setfill('0') << std::setw(16) << value;
+            return result.str();
+        }
+
         void LogKey(SqliteHandle* db, const char* databaseName, const void* key, int keyBytes) {
-            if (!Config::dumpSqlCipherKey) return;
+            if (!ShouldTraceMasterImport()) return;
 
             const auto path = DatabasePath(db);
-            const auto keyHex = HexEncode(key, keyBytes);
             const auto actualLength = keyBytes < 0 && key
                     ? static_cast<int>(std::strlen(static_cast<const char*>(key)))
                     : keyBytes;
-            Log::WarnFmt(
-                    "[SqlCipherProbe] db=%p path=%s name=%s key_bytes=%d key_hex=%s",
-                    db, path.c_str(), databaseName ? databaseName : "main",
-                    actualLength, keyHex.c_str());
+            if (Config::dumpSqlCipherKey) {
+                Log::WarnFmt(
+                        "[SqlCipherProbe] db=%p path=%s name=%s key_bytes=%d key_hex=%s",
+                        db, path.c_str(), databaseName ? databaseName : "main",
+                        actualLength, HexEncode(key, keyBytes).c_str());
+            } else {
+                Log::InfoFmt(
+                        "[MasterImportTrace] db=%p path=%s name=%s key_bytes=%d key_fingerprint=%s",
+                        db, path.c_str(), databaseName ? databaseName : "main",
+                        actualLength, KeyFingerprint(key, keyBytes).c_str());
+            }
         }
 
         DEFINE_HOOK(int, sqlite3_open, (const char* filename, SqliteHandle** ppDb)) {
             const auto result = sqlite3_open_Orig(filename, ppDb);
             if (result == 0 && ppDb) RememberDatabasePath(*ppDb, filename);
-            if (Config::dumpSqlCipherKey) {
+            if (ShouldTraceMasterImport()) {
                 Log::InfoFmt("[SqlCipherProbe] sqlite3_open path=%s db=%p result=%d",
                              filename ? filename : "<null>", ppDb ? *ppDb : nullptr, result);
             }
@@ -100,7 +132,7 @@ namespace LinkuraLocal::HookSqlCipher {
                     (const char* filename, SqliteHandle** ppDb, int flags, const char* vfs)) {
             const auto result = sqlite3_open_v2_Orig(filename, ppDb, flags, vfs);
             if (result == 0 && ppDb) RememberDatabasePath(*ppDb, filename);
-            if (Config::dumpSqlCipherKey) {
+            if (ShouldTraceMasterImport()) {
                 Log::InfoFmt(
                         "[SqlCipherProbe] sqlite3_open_v2 path=%s db=%p flags=0x%x vfs=%s result=%d",
                         filename ? filename : "<null>", ppDb ? *ppDb : nullptr, flags,
@@ -123,7 +155,7 @@ namespace LinkuraLocal::HookSqlCipher {
         DEFINE_HOOK(int, system_sqlite3_open, (const char* filename, SqliteHandle** ppDb)) {
             const auto result = system_sqlite3_open_Orig(filename, ppDb);
             if (result == 0 && ppDb) RememberDatabasePath(*ppDb, filename);
-            if (Config::dumpSqlCipherKey) {
+            if (ShouldTraceMasterImport()) {
                 const auto caller = CallerLocation(__builtin_return_address(0));
                 Log::InfoFmt(
                         "[SqliteProbe] provider=system api=sqlite3_open path=%s db=%p result=%d caller=%s",
@@ -137,7 +169,7 @@ namespace LinkuraLocal::HookSqlCipher {
                     (const char* filename, SqliteHandle** ppDb, int flags, const char* vfs)) {
             const auto result = system_sqlite3_open_v2_Orig(filename, ppDb, flags, vfs);
             if (result == 0 && ppDb) RememberDatabasePath(*ppDb, filename);
-            if (Config::dumpSqlCipherKey) {
+            if (ShouldTraceMasterImport()) {
                 const auto caller = CallerLocation(__builtin_return_address(0));
                 Log::InfoFmt(
                         "[SqliteProbe] provider=system api=sqlite3_open_v2 path=%s db=%p flags=0x%x vfs=%s result=%d caller=%s",
@@ -150,7 +182,7 @@ namespace LinkuraLocal::HookSqlCipher {
         DEFINE_HOOK(int, system_sqlite3_prepare_v2,
                     (SqliteHandle* db, const char* sql, int byteCount, void** statement,
                      const char** tail)) {
-            if (Config::dumpSqlCipherKey && sql) {
+            if (ShouldTraceMasterImport() && sql) {
                 const std::string_view query(sql, byteCount < 0 ? std::strlen(sql)
                                                                : static_cast<size_t>(byteCount));
                 if (query.find("LauncherBanners") != std::string_view::npos
@@ -178,12 +210,17 @@ namespace LinkuraLocal::HookSqlCipher {
 
         void LogManagedKey(const char* source, void* connection,
                            const void* key, int keyBytes) {
-            if (!Config::dumpSqlCipherKey) return;
-            const auto keyHex = HexEncode(key, keyBytes);
+            if (!ShouldTraceMasterImport()) return;
             const auto path = ManagedConnectionPath(connection);
-            Log::WarnFmt(
-                    "[SqlCipherProbe] managed_source=%s connection=%p path=%s key_bytes=%d key_hex=%s",
-                    source, connection, path.c_str(), keyBytes, keyHex.c_str());
+            if (Config::dumpSqlCipherKey) {
+                Log::WarnFmt(
+                        "[SqlCipherProbe] managed_source=%s connection=%p path=%s key_bytes=%d key_hex=%s",
+                        source, connection, path.c_str(), keyBytes, HexEncode(key, keyBytes).c_str());
+            } else {
+                Log::InfoFmt(
+                        "[MasterImportTrace] managed_source=%s connection=%p path=%s key_bytes=%d key_fingerprint=%s",
+                        source, connection, path.c_str(), keyBytes, KeyFingerprint(key, keyBytes).c_str());
+            }
         }
 
         bool IsMasterDatabaseConnection(void* connection) {
@@ -218,7 +255,7 @@ namespace LinkuraLocal::HookSqlCipher {
 
         DEFINE_HOOK(void, SQLiteConnection_ConnectionStringCtor,
                     (void* self, void* connectionString)) {
-            if (Config::dumpSqlCipherKey) {
+            if (ShouldTraceMasterImport()) {
                 Log::InfoFmt("[SqlCipherProbe] SQLiteConnection(.ctor connectionString=%p)",
                              connectionString);
             }
@@ -228,7 +265,7 @@ namespace LinkuraLocal::HookSqlCipher {
         DEFINE_HOOK(void*, SQLiteConnection_CreateCommand,
                     (void* self, Il2cppUtils::Il2CppString* commandText,
                      UnityResolve::UnityType::Array<void*>* parameters)) {
-            if (Config::dumpSqlCipherKey && commandText && IsMasterDatabaseConnection(self)) {
+            if (ShouldTraceMasterImport() && commandText && IsMasterDatabaseConnection(self)) {
                 const auto query = commandText->ToString();
                 Log::InfoFmt(
                         "[MasterDataQuery] path=%s parameters=%zu sql=%s",
@@ -237,6 +274,19 @@ namespace LinkuraLocal::HookSqlCipher {
                         query.c_str());
             }
             return SQLiteConnection_CreateCommand_Orig(self, commandText, parameters);
+        }
+
+        DEFINE_HOOK(int, SQLiteConnection_Execute,
+                    (void* self, Il2cppUtils::Il2CppString* commandText,
+                     UnityResolve::UnityType::Array<void*>* parameters)) {
+            if (ShouldTraceMasterImport() && commandText && IsMasterDatabaseConnection(self)) {
+                const auto query = commandText->ToString();
+                Log::InfoFmt(
+                        "[MasterImportTrace] managed_execute path=%s parameters=%zu sql=%s",
+                        ManagedConnectionPath(self).c_str(),
+                        parameters ? parameters->max_length : 0, query.c_str());
+            }
+            return SQLiteConnection_Execute_Orig(self, commandText, parameters);
         }
 
         bool MethodHasArguments(const UnityResolve::Method* method,
@@ -252,7 +302,7 @@ namespace LinkuraLocal::HookSqlCipher {
         }
 
         void DumpManagedClass(UnityResolve::Class* klass, const char* label) {
-            if (!Config::dumpSqlCipherKey || !klass) return;
+            if (!ShouldTraceMasterImport() || !klass) return;
             for (const auto* method : klass->methods) {
                 if (!method) continue;
                 std::string args = "(";
@@ -347,6 +397,26 @@ namespace LinkuraLocal::HookSqlCipher {
             } else if (method->name == "CreateCommand"
                     && MethodHasArguments(method, {"System.String", "System.Object[]"})) {
                 ADD_HOOK(SQLiteConnection_CreateCommand, method->function);
+            } else if (method->name == "Execute"
+                    && MethodHasArguments(method, {"System.String", "System.Object[]"})) {
+                ADD_HOOK(SQLiteConnection_Execute, method->function);
+            }
+        }
+
+        // These dumps are deliberately gated by traceMasterImport.  They give a
+        // fresh-install trace the real 5.1 method names/signatures before we
+        // bind version-specific entry hooks; guessing an IL2CPP ABI here would
+        // be less safe than observing it first.
+        if (ShouldTraceMasterImport()) {
+            for (auto* candidate : UnityResolve::assembly) {
+                if (!candidate) continue;
+                for (const auto* name : {"MasterdataImporter", "MasterdataDBFactory",
+                                         "MasterdataDB", "MasterdataManager"}) {
+                    if (auto* klass = candidate->Get(name, "Silverflame.SFL")) {
+                        const std::string label = candidate->name + ":Silverflame.SFL." + name;
+                        DumpManagedClass(klass, label.c_str());
+                    }
+                }
             }
         }
     }

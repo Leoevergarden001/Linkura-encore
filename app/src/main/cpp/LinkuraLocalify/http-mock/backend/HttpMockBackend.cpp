@@ -13,6 +13,7 @@
 #include <random>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "sqlite3.h"
@@ -131,14 +132,21 @@ namespace LinkuraLocal::HttpMock {
         }
 
         bool EnsureReadyLocked();
+        bool EnsureMuseumCatalogLocked();
         bool EnsureQuestSessionSchemaLocked();
         bool ResetLocked();
         bool RebuildLocked();
         std::optional<MockStoredResponse> GetArchiveDetailByIdLocked(std::string_view archivesId);
+        std::optional<MockStoredResponse> GetHomeResponseLocked();
         std::optional<MockStoredResponse> GetCardDetailByDCardIdLocked(std::string_view dCardDatasId);
         std::optional<MockStoredResponse> GetCardListResponseLocked();
         std::optional<MockStoredResponse> GetItemDetailByDItemIdLocked(std::string_view dItemDatasId);
         std::optional<MockStoredResponse> GetItemListResponseLocked();
+        std::optional<MockStoredResponse> GetCollectionListResponseLocked(
+            std::string_view tableName,
+            std::string_view idColumn,
+            std::string_view responseListKey
+        );
         std::optional<MockStoredResponse> GetCharacterInfoByIdLocked(std::string_view characterId);
         std::optional<MockStoredResponse> GetDeckListResponseLocked();
         std::optional<MockStoredResponse> ModifyDeckListLocked(std::string_view payloadJson);
@@ -314,6 +322,60 @@ namespace LinkuraLocal::HttpMock {
             sqlite3_finalize(stmt);
             return hasRows;
         }
+
+        static std::optional<int64_t> ScalarCount(sqlite3* db, const char* sql) {
+            sqlite3_stmt* stmt = nullptr;
+            if (!db || sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+                if (stmt) sqlite3_finalize(stmt);
+                return std::nullopt;
+            }
+            const int rc = sqlite3_step(stmt);
+            const auto value = rc == SQLITE_ROW
+                ? std::optional<int64_t>{sqlite3_column_int64(stmt, 0)}
+                : std::nullopt;
+            sqlite3_finalize(stmt);
+            return value;
+        }
+
+        static bool InsertCollectionSeed(sqlite3* db,
+                                         const nlohmann::json& source,
+                                         std::string_view listKey,
+                                         std::string_view idKey,
+                                         const char* sql) {
+            const auto list = source.find(std::string(listKey));
+            if (list == source.end() || !list->is_array()) {
+                Log::ErrorFmt("[HttpMockBackend] invalid built-in collection seed: %.*s",
+                              static_cast<int>(listKey.size()), listKey.data());
+                return false;
+            }
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+                if (stmt) sqlite3_finalize(stmt);
+                Log::ErrorFmt("[HttpMockBackend] collection seed prepare failed: %s", sqlite3_errmsg(db));
+                return false;
+            }
+            for (const auto& entry : *list) {
+                if (!entry.is_object() || !entry.contains(std::string(idKey)) ||
+                    !entry[std::string(idKey)].is_number_integer()) {
+                    sqlite3_finalize(stmt);
+                    Log::ErrorFmt("[HttpMockBackend] collection seed entry lacks integer id: %.*s",
+                                  static_cast<int>(idKey.size()), idKey.data());
+                    return false;
+                }
+                sqlite3_reset(stmt);
+                sqlite3_clear_bindings(stmt);
+                const auto id = entry[std::string(idKey)].get<int64_t>();
+                const auto json = entry.dump();
+                if (sqlite3_bind_int64(stmt, 1, id) != SQLITE_OK ||
+                    !BindText(stmt, 2, json) || sqlite3_step(stmt) != SQLITE_DONE) {
+                    sqlite3_finalize(stmt);
+                    Log::ErrorFmt("[HttpMockBackend] collection seed insert failed: %s", sqlite3_errmsg(db));
+                    return false;
+                }
+            }
+            sqlite3_finalize(stmt);
+            return true;
+        }
     }
 
     bool HttpMockBackend::Impl::EnsureReadyLocked() {
@@ -381,6 +443,10 @@ namespace LinkuraLocal::HttpMock {
             Log::InfoFmt("[HttpMockBackend] pending reset command found, re-seeding");
             ExecSql(db, "DELETE FROM archive_detail;");
             ExecSql(db, "DELETE FROM card_detail;");
+            ExecSql(db, "DELETE FROM museum_card_ownership;");
+            ExecSql(db, "DELETE FROM collection_music;");
+            ExecSql(db, "DELETE FROM collection_sticker;");
+            ExecSql(db, "DELETE FROM collection_gallary;");
             ExecSql(db, "DELETE FROM character_info;");
             ExecSql(db, "DELETE FROM item;");
             ExecSql(db, "DELETE FROM deck;");
@@ -412,6 +478,47 @@ namespace LinkuraLocal::HttpMock {
             return false;
         }
 
+        if (!EnsureMuseumCatalogLocked()) {
+            persistentStorageAvailable = false;
+            return false;
+        }
+
+        return true;
+    }
+
+    bool HttpMockBackend::Impl::EnsureMuseumCatalogLocked() {
+        if (!db) return false;
+
+        // The imported card catalog remains immutable. Ownership is a player
+        // concern and Museum mode initially grants one copy of every catalogued
+        // card, preserving the old complete-collection behaviour without
+        // conflating it with card metadata.
+        if (!ExecSql(db,
+                     "INSERT OR IGNORE INTO museum_card_ownership "
+                     "(d_card_datas_id, acquired_at, acquisition_source) "
+                     "SELECT d_card_datas_id, '2023-04-15T00:00:00Z', 'MUSEUM' "
+                     "FROM card_detail;")) {
+            return false;
+        }
+
+        if (!TableHasAnyRows(db, "collection_music") &&
+            !InsertCollectionSeed(db, OfflineApiMockBuiltIn::CollectionGetMusicListJsonObj(),
+                                  "music_info_list", "musics_id",
+                                  "INSERT OR IGNORE INTO collection_music(musics_id, response_json) VALUES (?, ?);")) {
+            return false;
+        }
+        if (!TableHasAnyRows(db, "collection_sticker") &&
+            !InsertCollectionSeed(db, OfflineApiMockBuiltIn::CollectionGetStickerListJsonObj(),
+                                  "sticker_info_list", "stickers_id",
+                                  "INSERT OR IGNORE INTO collection_sticker(stickers_id, response_json) VALUES (?, ?);")) {
+            return false;
+        }
+        if (!TableHasAnyRows(db, "collection_gallary") &&
+            !InsertCollectionSeed(db, OfflineApiMockBuiltIn::CollectionGetGallaryListJsonObj(),
+                                  "gallary_info_list", "comics_id",
+                                  "INSERT OR IGNORE INTO collection_gallary(comics_id, response_json) VALUES (?, ?);")) {
+            return false;
+        }
         return true;
     }
 
@@ -467,11 +574,12 @@ namespace LinkuraLocal::HttpMock {
             return false;
         }
 
-        if (!ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
+        if (!ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM museum_card_ownership;") || !ExecSql(db, "DELETE FROM collection_music;") || !ExecSql(db, "DELETE FROM collection_sticker;") || !ExecSql(db, "DELETE FROM collection_gallary;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
             return false;
         }
 
-        return ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SeedScripts, "seed");
+        return ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SeedScripts, "seed") &&
+               EnsureMuseumCatalogLocked();
     }
 
     bool HttpMockBackend::Impl::RebuildLocked() {
@@ -542,9 +650,11 @@ namespace LinkuraLocal::HttpMock {
 
         sqlite3_stmt* stmt = nullptr;
         constexpr const char* sql =
-            "SELECT response_json "
+            "SELECT card_detail.response_json "
             "FROM card_detail "
-            "WHERE d_card_datas_id = ?;";
+            "INNER JOIN museum_card_ownership "
+            "ON museum_card_ownership.d_card_datas_id = card_detail.d_card_datas_id "
+            "WHERE card_detail.d_card_datas_id = ?;";
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
             Log::ErrorFmt("[HttpMockBackend] sqlite prepare failed for card_detail query: %s", sqlite3_errmsg(db));
             if (stmt) sqlite3_finalize(stmt);
@@ -580,7 +690,10 @@ namespace LinkuraLocal::HttpMock {
 
         sqlite3_stmt* stmt = nullptr;
         constexpr const char* sql =
-            "SELECT response_json FROM card_detail ORDER BY d_card_datas_id;";
+            "SELECT card_detail.response_json FROM card_detail "
+            "INNER JOIN museum_card_ownership "
+            "ON museum_card_ownership.d_card_datas_id = card_detail.d_card_datas_id "
+            "ORDER BY card_detail.card_datas_id;";
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
             Log::ErrorFmt("[HttpMockBackend] sqlite prepare failed for card list: %s", sqlite3_errmsg(db));
             if (stmt) sqlite3_finalize(stmt);
@@ -609,6 +722,88 @@ namespace LinkuraLocal::HttpMock {
 
         nlohmann::json result;
         result["user_card_data_list"] = std::move(cards);
+        return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetHomeResponseLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+
+        // Keep only the DTO shape/default compatibility values in the checked-in
+        // JSON. Every count below is derived from the same persistent catalog and
+        // player ownership tables used by the detail/list routes.
+        nlohmann::json result = OfflineApiMockBuiltIn::HomeGetHomeJsonObj();
+        if (!result.is_object()) return std::nullopt;
+        auto profile = result.value("profile_info", nlohmann::json::object());
+        if (!profile.is_object()) profile = nlohmann::json::object();
+
+        const auto cardCount = ScalarCount(db, "SELECT COUNT(*) FROM museum_card_ownership;");
+        const auto musicCount = ScalarCount(db, "SELECT COUNT(*) FROM collection_music;");
+        const auto stickerCount = ScalarCount(db, "SELECT COUNT(*) FROM collection_sticker;");
+        const auto gallaryCount = ScalarCount(db, "SELECT COUNT(*) FROM collection_gallary;");
+        const auto stageCount = ScalarCount(db, "SELECT COUNT(*) FROM quest_stage;");
+        if (!cardCount || !musicCount || !stickerCount || !gallaryCount || !stageCount) {
+            Log::Error("[HttpMockBackend] home state count query failed");
+            return std::nullopt;
+        }
+        profile["card_num"] = *cardCount;
+        profile["music_num"] = *musicCount;
+        profile["music_max_num"] = *musicCount;
+        profile["sticker_num"] = *stickerCount;
+        // `gallary_num` is absent in older DTOs but accepted by 5.1.0 and makes
+        // the offline profile self-describing for later Collection screens.
+        profile["gallary_num"] = *gallaryCount;
+        profile["standard_live_max_num"] = *stageCount;
+        result["profile_info"] = std::move(profile);
+
+        // No plan source has been fabricated.  The empty value is now a real
+        // query result for the currently imported 5.1 Master subset rather than
+        // a contradictory hard-coded profile assertion.
+        result["plan_list"] = nlohmann::json::array();
+        result["has_daily_ticket"] = false;
+        result["has_grand_prix_playable_count"] = false;
+        if (auto badge = result.find("highlighted_badge_info");
+            badge != result.end() && badge->is_object()) {
+            (*badge)["has_daily_ticket"] = false;
+            (*badge)["has_grand_prix_playable_count"] = false;
+            (*badge)["is_not_received_common_mission_reward"] = false;
+            (*badge)["is_not_read_sticker_exchange_new_arrival"] = false;
+        }
+        return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetCollectionListResponseLocked(
+            std::string_view tableName,
+            std::string_view idColumn,
+            std::string_view responseListKey) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+
+        // Callers pass only compile-time table/column names, never request data.
+        const std::string sql = "SELECT response_json FROM " + std::string(tableName) +
+                                " ORDER BY " + std::string(idColumn) + ";";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            Log::ErrorFmt("[HttpMockBackend] collection list prepare failed: %s", sqlite3_errmsg(db));
+            return std::nullopt;
+        }
+        nlohmann::json values = nlohmann::json::array();
+        int rc = SQLITE_ROW;
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+            const auto* raw = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            auto parsed = nlohmann::json::parse(raw ? raw : "{}", nullptr, false);
+            if (!parsed.is_object()) {
+                sqlite3_finalize(stmt);
+                Log::Error("[HttpMockBackend] invalid collection catalog JSON");
+                return std::nullopt;
+            }
+            values.push_back(std::move(parsed));
+        }
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE) return std::nullopt;
+        nlohmann::json result;
+        result[std::string(responseListKey)] = std::move(values);
         return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
     }
 
@@ -803,12 +998,30 @@ namespace LinkuraLocal::HttpMock {
         nlohmann::json result;
         result["deck_list"] = std::move(deckList);
 
-        const auto& cardListObj = OfflineApiMockBuiltIn::UserCardGetListJsonObj();
-        if (cardListObj.contains("user_card_data_list")) {
-            result["user_card_data_list"] = cardListObj["user_card_data_list"];
-        } else {
-            result["user_card_data_list"] = nlohmann::json::array();
+        sqlite3_stmt* cardsStmt = nullptr;
+        constexpr const char* cardsSql =
+            "SELECT card_detail.response_json FROM card_detail "
+            "INNER JOIN museum_card_ownership "
+            "ON museum_card_ownership.d_card_datas_id = card_detail.d_card_datas_id "
+            "ORDER BY card_detail.card_datas_id;";
+        if (sqlite3_prepare_v2(db, cardsSql, -1, &cardsStmt, nullptr) != SQLITE_OK || !cardsStmt) {
+            if (cardsStmt) sqlite3_finalize(cardsStmt);
+            return std::nullopt;
         }
+        nlohmann::json userCards = nlohmann::json::array();
+        int cardRc = SQLITE_ROW;
+        while ((cardRc = sqlite3_step(cardsStmt)) == SQLITE_ROW) {
+            const auto* raw = reinterpret_cast<const char*>(sqlite3_column_text(cardsStmt, 0));
+            auto parsed = nlohmann::json::parse(raw ? raw : "{}", nullptr, false);
+            if (!parsed.is_object() || !parsed.contains("user_card_data")) {
+                sqlite3_finalize(cardsStmt);
+                return std::nullopt;
+            }
+            userCards.push_back(std::move(parsed["user_card_data"]));
+        }
+        sqlite3_finalize(cardsStmt);
+        if (cardRc != SQLITE_DONE) return std::nullopt;
+        result["user_card_data_list"] = std::move(userCards);
         result["rental_deck_list"] = nlohmann::json::array();
         result["rental_card_data_list"] = nlohmann::json::array();
 
@@ -840,26 +1053,77 @@ namespace LinkuraLocal::HttpMock {
             "INSERT OR REPLACE INTO deck (d_deck_datas_id, deck_name, deck_no, generations_id, ace_card, deck_cards_json) "
             "VALUES (?, ?, ?, ?, ?, ?);";
 
+        auto failValidation = [](std::string_view reason) -> std::optional<MockStoredResponse> {
+            nlohmann::json failure;
+            failure["result"] = false;
+            failure["error"] = std::string(reason);
+            return MockStoredResponse{failure.dump(), {}, 200, "Rejected offline deck update"};
+        };
+
+        auto ownsCard = [this](std::string_view cardId) -> bool {
+            sqlite3_stmt* ownership = nullptr;
+            constexpr const char* ownershipSql =
+                "SELECT 1 FROM museum_card_ownership WHERE d_card_datas_id = ? LIMIT 1;";
+            if (sqlite3_prepare_v2(db, ownershipSql, -1, &ownership, nullptr) != SQLITE_OK || !ownership) {
+                if (ownership) sqlite3_finalize(ownership);
+                return false;
+            }
+            const bool owned = BindText(ownership, 1, cardId) && sqlite3_step(ownership) == SQLITE_ROW;
+            sqlite3_finalize(ownership);
+            return owned;
+        };
+
         for (auto& deckEntry : payload["modify_deck_list"]) {
+            if (!deckEntry.is_object()) {
+                ExecSql(db, "ROLLBACK;");
+                return failValidation("deck entry must be an object");
+            }
             std::string deckId = deckEntry.value("d_deck_datas_id", std::string{});
             if (deckId.empty()) {
                 deckId = GenerateUuid4();
             }
 
             nlohmann::json cardsList = nlohmann::json::array();
+            std::unordered_set<std::string> uniqueCards;
+            std::unordered_set<std::string> deckCardIds;
             if (deckEntry.contains("deck_cards_list") && deckEntry["deck_cards_list"].is_array()) {
                 cardsList = deckEntry["deck_cards_list"];
                 for (auto& card : cardsList) {
+                    if (!card.is_object()) {
+                        ExecSql(db, "ROLLBACK;");
+                        return failValidation("deck card must be an object");
+                    }
+                    const std::string ownedCardId = card.value("d_card_datas_id", std::string{});
+                    if (ownedCardId.empty() || !ownsCard(ownedCardId)) {
+                        ExecSql(db, "ROLLBACK;");
+                        return failValidation("deck contains a card that is not owned by the Museum player");
+                    }
+                    if (!uniqueCards.insert(ownedCardId).second) {
+                        ExecSql(db, "ROLLBACK;");
+                        return failValidation("deck contains the same card more than once");
+                    }
                     std::string cardId = card.value("d_deck_cards_id", std::string{});
                     if (cardId.empty()) {
-                        card["d_deck_cards_id"] = GenerateUuid4();
+                        cardId = GenerateUuid4();
+                        card["d_deck_cards_id"] = cardId;
+                    }
+                    if (!deckCardIds.insert(cardId).second) {
+                        ExecSql(db, "ROLLBACK;");
+                        return failValidation("deck contains duplicate deck-card identifiers");
                     }
                 }
+            } else if (deckEntry.contains("deck_cards_list")) {
+                ExecSql(db, "ROLLBACK;");
+                return failValidation("deck_cards_list must be an array");
             }
 
             const std::string deckName = deckEntry.value("deck_name", std::string{});
             const int deckNo = deckEntry.value("deck_no", 0);
             const int genId = deckEntry.value("generations_id", 0);
+            if (deckNo < 0) {
+                ExecSql(db, "ROLLBACK;");
+                return failValidation("deck_no must not be negative");
+            }
             std::string aceCard;
             if (deckEntry.contains("ace_card")) {
                 aceCard = deckEntry.value("ace_card", std::string{});
@@ -874,6 +1138,10 @@ namespace LinkuraLocal::HttpMock {
                     }
                     sqlite3_finalize(aceStmt);
                 }
+            }
+            if (!aceCard.empty() && !uniqueCards.contains(aceCard) && !deckCardIds.contains(aceCard)) {
+                ExecSql(db, "ROLLBACK;");
+                return failValidation("ace_card must refer to a card in the deck");
             }
             const std::string cardsJsonStr = cardsList.dump();
 
@@ -3799,6 +4067,11 @@ namespace LinkuraLocal::HttpMock {
         return ExtractJsonStringField(payloadJson, fieldName);
     }
 
+    std::optional<MockStoredResponse> HttpMockBackend::GetHomeResponse() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetHomeResponseLocked();
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::GetCardDetailByDCardId(std::string_view dCardDatasId) {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetCardDetailByDCardIdLocked(dCardDatasId);
@@ -3865,6 +4138,27 @@ namespace LinkuraLocal::HttpMock {
             return std::nullopt;
         }
         return GetItemDetailByDItemId(dItemDatasId);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetCollectionMusicListResponse() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetCollectionListResponseLocked(
+            "collection_music", "musics_id", "music_info_list"
+        );
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetCollectionStickerListResponse() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetCollectionListResponseLocked(
+            "collection_sticker", "stickers_id", "sticker_info_list"
+        );
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetCollectionGallaryListResponse() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetCollectionListResponseLocked(
+            "collection_gallary", "comics_id", "gallary_info_list"
+        );
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GetCharacterInfoById(std::string_view characterId) {

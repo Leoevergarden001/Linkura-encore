@@ -104,3 +104,6 @@ namespace LinkuraLocal::HookSqlCipher {
 namespace LinkuraLocal::HookTranslation {
     void Install(HookInstaller *hookInstaller);
 }
+namespace LinkuraLocal::HookVirtualClock {
+    void Install(HookInstaller* hookInstaller);
+}

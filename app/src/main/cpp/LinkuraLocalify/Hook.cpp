@@ -81,6 +81,7 @@ namespace LinkuraLocal::HookMain {
         HookShare::Install(hookInstaller);
         HookStory::Install(hookInstaller);
         HookTranslation::Install(hookInstaller);
+        HookVirtualClock::Install(hookInstaller);
     }
     // 77 2640 5000
 

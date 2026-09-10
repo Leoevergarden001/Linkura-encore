@@ -49,6 +49,38 @@ namespace LinkuraLocal::HttpMock {
             };
         }
 
+        static std::optional<MockResponse> ToBackendResponse(
+                std::optional<MockStoredResponse> record) {
+            if (!record.has_value()) return std::nullopt;
+            if (record->headersText.empty()) {
+                record->headersText = std::string(OfflineApiMockBuiltIn::DefaultHeadersView);
+            }
+            return MockResponse{
+                std::move(record->body), std::move(record->headersText),
+                record->statusCode, std::move(record->statusDescription),
+            };
+        }
+
+        static std::optional<MockResponse> HandleHomeGetHome(const MockRequestContext&,
+                                                              HttpMockBackend& backend) {
+            return ToBackendResponse(backend.GetHomeResponse());
+        }
+
+        static std::optional<MockResponse> HandleCollectionMusicList(const MockRequestContext&,
+                                                                       HttpMockBackend& backend) {
+            return ToBackendResponse(backend.GetCollectionMusicListResponse());
+        }
+
+        static std::optional<MockResponse> HandleCollectionStickerList(const MockRequestContext&,
+                                                                         HttpMockBackend& backend) {
+            return ToBackendResponse(backend.GetCollectionStickerListResponse());
+        }
+
+        static std::optional<MockResponse> HandleCollectionGallaryList(const MockRequestContext&,
+                                                                         HttpMockBackend& backend) {
+            return ToBackendResponse(backend.GetCollectionGallaryListResponse());
+        }
+
         static std::optional<MockResponse> HandleArchiveDetail(const MockRequestContext& request,
                                                                HttpMockBackend& backend) {
             const auto fallbackArchiveId = HookShare::Shareable::currentArchiveId;
@@ -539,7 +571,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterStaticJson(routes, "/v1/user/push/devices", "null");
             RegisterBackend(routes, "/v1/user/login", HandleUserLogin);
             RegisterStaticJson(routes, "/v1/home/get_login_bonus", OfflineApiMockBuiltIn::HomeGetLoginBonusJsonView);
-            RegisterStaticJson(routes, "/v1/home/get_home", OfflineApiMockBuiltIn::HomeGetHomeJsonView);
+            RegisterBackend(routes, "/v1/home/get_home", HandleHomeGetHome);
             RegisterStaticJson(routes, "/v1/home/get_custom_setting", OfflineApiMockBuiltIn::GetCustomSettingJsonView);
             RegisterStaticJson(routes, "/v1/webview/school_idol_connect_post/get_theme_list", OfflineApiMockBuiltIn::WebviewSchoolIdolConnectPostGetThemeListJsonView);
             RegisterStaticJson(routes, "/v1/follow/live_chat_group_list", OfflineApiMockBuiltIn::FollowLiveChatGroupListJsonView);
@@ -592,9 +624,9 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/user/deck/get_list", HandleDeckGetList);
             RegisterBackend(routes, "/v1/user/deck/modify_deck_list", HandleDeckModifyDeckList);
             RegisterStaticJson(routes, "/v1/user/deck/notify_auto_deck", "null");
-            RegisterStaticJson(routes, "/v1/collection/get_music_list", OfflineApiMockBuiltIn::CollectionGetMusicListJsonView);
-            RegisterStaticJson(routes, "/v1/collection/get_sticker_list", OfflineApiMockBuiltIn::CollectionGetStickerListJsonView);
-            RegisterStaticJson(routes, "/v1/collection/get_gallary_list", OfflineApiMockBuiltIn::CollectionGetGallaryListJsonView);
+            RegisterBackend(routes, "/v1/collection/get_music_list", HandleCollectionMusicList);
+            RegisterBackend(routes, "/v1/collection/get_sticker_list", HandleCollectionStickerList);
+            RegisterBackend(routes, "/v1/collection/get_gallary_list", HandleCollectionGallaryList);
 
             RegisterStaticJson(routes, "/v1/step_up_beginner_mission/get_list", OfflineApiMockBuiltIn::StepUpBeginnerMissionGetListJsonView);
 

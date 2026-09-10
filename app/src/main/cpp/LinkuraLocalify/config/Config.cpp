@@ -64,6 +64,9 @@ namespace LinkuraLocal::Config {
     bool enableOfflineApiMock = false;
     bool dumpHttpMockJson = false;
     bool dumpSqlCipherKey = false;
+    bool traceMasterImport = false;
+    bool enableVirtualClock = false;
+    int64_t virtualClockUnixTime = 0;
     std::string apiServerUrl;
     std::string customResVersion;
     
@@ -139,6 +142,9 @@ namespace LinkuraLocal::Config {
             GetConfigItem(enableOfflineApiMock);
             GetConfigItem(dumpHttpMockJson);
             GetConfigItem(dumpSqlCipherKey);
+            GetConfigItem(traceMasterImport);
+            GetConfigItem(enableVirtualClock);
+            GetConfigItem(virtualClockUnixTime);
             GetConfigItem(apiServerUrl);
             GetConfigItem(customResVersion);
             if (localeCode != "ja-JP") {
