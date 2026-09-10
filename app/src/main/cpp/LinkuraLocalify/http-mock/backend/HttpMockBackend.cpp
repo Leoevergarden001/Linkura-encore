@@ -189,6 +189,8 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> QuestSetFinishLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> QuestGetResultLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> QuestSkipLocked(std::string_view payloadJson);
+        bool LoadQuestSessionLocked();
+        bool PersistQuestSessionLocked(std::string_view state);
 
         std::optional<MockStoredResponse> DailyQuestStageListLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> DailyQuestStageDataLocked(std::string_view payloadJson);
@@ -380,6 +382,7 @@ namespace LinkuraLocal::HttpMock {
             ExecSql(db, "DELETE FROM rhythm_music_score;");
             ExecSql(db, "DELETE FROM rhythm_game_deck;");
             ExecSql(db, "DELETE FROM rhythm_runtime_session;");
+            ExecSql(db, "DELETE FROM quest_runtime_session;");
             ExecSql(db, "DELETE FROM quest_stage;");
             ExecSql(db, "DELETE FROM daily_quest_stage;");
             ExecSql(db, "DELETE FROM dream_quest_stage;");
@@ -412,7 +415,7 @@ namespace LinkuraLocal::HttpMock {
             return false;
         }
 
-        if (!ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
+        if (!ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
             return false;
         }
 
@@ -1939,13 +1942,154 @@ namespace LinkuraLocal::HttpMock {
         return response;
     }
 
+    bool HttpMockBackend::Impl::LoadQuestSessionLocked() {
+        if (!db) {
+            return false;
+        }
+
+        sqlite3_stmt* stmt = nullptr;
+        constexpr const char* sql =
+            "SELECT session_id, quest_live_type, stage_id, music_id, is_challenge_mode, "
+            "state, start_payload_json, finish_payload_json, start_time "
+            "FROM quest_runtime_session WHERE singleton_id = 1;";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            Log::ErrorFmt("[HttpMockBackend] quest session lookup failed: %s", sqlite3_errmsg(db));
+            if (stmt) sqlite3_finalize(stmt);
+            return false;
+        }
+
+        const int rc = sqlite3_step(stmt);
+        if (rc == SQLITE_DONE) {
+            sqlite3_finalize(stmt);
+            return true;
+        }
+        if (rc != SQLITE_ROW) {
+            Log::ErrorFmt("[HttpMockBackend] quest session read failed: %s", sqlite3_errmsg(db));
+            sqlite3_finalize(stmt);
+            return false;
+        }
+
+        const auto* sessionId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        const auto* state = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+        const auto* startPayload = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+        const auto* finishPayload = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+        const auto* startTime = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+        const auto start = nlohmann::json::parse(startPayload ? startPayload : "{}", nullptr, false);
+        if (!start.is_object()) {
+            Log::Error("[HttpMockBackend] quest session start payload is invalid");
+            sqlite3_finalize(stmt);
+            return false;
+        }
+
+        currentQuestLive = {};
+        currentQuestLive.questLiveId = sessionId ? sessionId : "";
+        currentQuestLive.questLiveType = sqlite3_column_int(stmt, 1);
+        currentQuestLive.stageId = sqlite3_column_int(stmt, 2);
+        currentQuestLive.musicId = sqlite3_column_int(stmt, 3);
+        currentQuestLive.isChallengeMode = sqlite3_column_int(stmt, 4) != 0;
+        currentQuestLive.deckData = start.value("deck_data", nlohmann::json::object());
+        currentQuestLive.characterBonus = start.value("character_bonus", nlohmann::json::object());
+        currentQuestLive.startTime = startTime ? startTime : "";
+        currentQuestLive.finished = state && std::string_view(state) == "FINISHED";
+        if (currentQuestLive.finished && finishPayload) {
+            const auto finish = nlohmann::json::parse(finishPayload, nullptr, false);
+            if (finish.is_object()) {
+                currentQuestLive.score = finish.value("score", int64_t(0));
+                currentQuestLive.playReport = finish.value("play_report", std::string{});
+            }
+        }
+        sqlite3_finalize(stmt);
+        return true;
+    }
+
+    bool HttpMockBackend::Impl::PersistQuestSessionLocked(std::string_view state) {
+        if (!db || currentQuestLive.questLiveId.empty() || currentQuestLive.startTime.empty()) {
+            return false;
+        }
+        if (state != "PLAYING" && state != "FINISHED") {
+            return false;
+        }
+
+        const nlohmann::json startPayload = {
+            {"quest_live_id", currentQuestLive.questLiveId},
+            {"quest_live_type", currentQuestLive.questLiveType},
+            {"stage_id", currentQuestLive.stageId},
+            {"music_id", currentQuestLive.musicId},
+            {"is_challenge_mode", currentQuestLive.isChallengeMode},
+            {"deck_data", currentQuestLive.deckData},
+            {"character_bonus", currentQuestLive.characterBonus},
+        };
+        const nlohmann::json finishPayload = {
+            {"score", currentQuestLive.score},
+            {"play_report", currentQuestLive.playReport},
+        };
+
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) {
+            return false;
+        }
+        sqlite3_stmt* stmt = nullptr;
+        constexpr const char* sql =
+            "INSERT OR REPLACE INTO quest_runtime_session "
+            "(singleton_id, session_id, quest_live_type, stage_id, music_id, is_challenge_mode, "
+            "state, start_payload_json, finish_payload_json, start_time, updated_at) "
+            "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            Log::ErrorFmt("[HttpMockBackend] quest session persist prepare failed: %s", sqlite3_errmsg(db));
+            if (stmt) sqlite3_finalize(stmt);
+            ExecSql(db, "ROLLBACK;");
+            return false;
+        }
+
+        const bool bound =
+            BindText(stmt, 1, currentQuestLive.questLiveId) &&
+            sqlite3_bind_int(stmt, 2, currentQuestLive.questLiveType) == SQLITE_OK &&
+            sqlite3_bind_int(stmt, 3, currentQuestLive.stageId) == SQLITE_OK &&
+            sqlite3_bind_int(stmt, 4, currentQuestLive.musicId) == SQLITE_OK &&
+            sqlite3_bind_int(stmt, 5, currentQuestLive.isChallengeMode ? 1 : 0) == SQLITE_OK &&
+            BindText(stmt, 6, state) &&
+            BindText(stmt, 7, startPayload.dump()) &&
+            (state == "FINISHED"
+                 ? BindText(stmt, 8, finishPayload.dump())
+                 : sqlite3_bind_null(stmt, 8) == SQLITE_OK) &&
+            BindText(stmt, 9, currentQuestLive.startTime);
+        if (!bound || sqlite3_step(stmt) != SQLITE_DONE) {
+            Log::ErrorFmt("[HttpMockBackend] quest session persist failed: %s", sqlite3_errmsg(db));
+            sqlite3_finalize(stmt);
+            ExecSql(db, "ROLLBACK;");
+            return false;
+        }
+        sqlite3_finalize(stmt);
+        if (!ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return false;
+        }
+        return true;
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::Impl::QuestSetStartLocked(std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) {
+            return std::nullopt;
+        }
+        if (!db || payloadJson.empty()) {
+            return std::nullopt;
+        }
+        if (currentQuestLive.questLiveId.empty() && !LoadQuestSessionLocked()) {
+            return std::nullopt;
+        }
+
         auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
         if (payload.is_object()) {
             const std::string liveId = payload.value("quest_live_id", std::string{});
             if (!liveId.empty()) {
                 currentQuestLive.questLiveId = liveId;
             }
+        }
+        if (!currentQuestLive.startTime.empty() && !currentQuestLive.finished) {
+            nlohmann::json replay;
+            replay["quest_start_time"] = currentQuestLive.startTime;
+            MockStoredResponse response;
+            response.body = replay.dump();
+            return response;
         }
 
         std::time_t now = std::time(nullptr);
@@ -1959,6 +2103,11 @@ namespace LinkuraLocal::HttpMock {
         std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S+09:00", &tmLocal);
         currentQuestLive.startTime = buf;
         currentQuestLive.finished = false;
+        currentQuestLive.score = 0;
+        currentQuestLive.playReport.clear();
+        if (!PersistQuestSessionLocked("PLAYING")) {
+            return std::nullopt;
+        }
 
         nlohmann::json result;
         result["quest_start_time"] = currentQuestLive.startTime;
@@ -1971,6 +2120,9 @@ namespace LinkuraLocal::HttpMock {
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::QuestGetLiveInfoLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) {
+            return std::nullopt;
+        }
+        if (currentQuestLive.questLiveId.empty() && !LoadQuestSessionLocked()) {
             return std::nullopt;
         }
 
@@ -2032,11 +2184,33 @@ namespace LinkuraLocal::HttpMock {
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::QuestSetFinishLocked(std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) {
+            return std::nullopt;
+        }
+        if (!db || payloadJson.empty()) {
+            return std::nullopt;
+        }
+        if (currentQuestLive.questLiveId.empty() && !LoadQuestSessionLocked()) {
+            return std::nullopt;
+        }
+        if (currentQuestLive.finished) {
+            nlohmann::json replay;
+            replay["quest_live_type"] = currentQuestLive.questLiveType;
+            replay["quest_result"] = true;
+            replay["return_resource"] = 0;
+            replay["applied_campaign_types"] = nlohmann::json::array();
+            MockStoredResponse response;
+            response.body = replay.dump();
+            return response;
+        }
         auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
         if (payload.is_object()) {
             currentQuestLive.score = payload.value("score", int64_t(0));
             currentQuestLive.playReport = payload.value("play_report", std::string{});
             currentQuestLive.finished = true;
+        }
+        if (!PersistQuestSessionLocked("FINISHED")) {
+            return std::nullopt;
         }
 
         nlohmann::json result;
@@ -2052,6 +2226,9 @@ namespace LinkuraLocal::HttpMock {
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::QuestGetResultLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) {
+            return std::nullopt;
+        }
+        if (currentQuestLive.questLiveId.empty() && !LoadQuestSessionLocked()) {
             return std::nullopt;
         }
 
@@ -3474,6 +3651,7 @@ namespace LinkuraLocal::HttpMock {
                   ExecSql(db, "DELETE FROM rhythm_music_score;") &&
                   ExecSql(db, "DELETE FROM rhythm_game_deck;") &&
                   ExecSql(db, "DELETE FROM rhythm_runtime_session;") &&
+                  ExecSql(db, "DELETE FROM quest_runtime_session;") &&
                   ExecSql(db, "DELETE FROM quest_stage;") &&
                   ExecSql(db, "DELETE FROM daily_quest_stage;") &&
                   ExecSql(db, "DELETE FROM dream_quest_stage;") &&
