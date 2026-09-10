@@ -28,15 +28,15 @@ namespace LinkuraLocal::HookShare {
             UnityResolve::ThreadAttach();
 
             static auto* getCoreInstance = Il2cppUtils::GetMethodIl2cpp(
-                    "Assembly-CSharp.dll", "", "Core", "get_Instance", 0);
+                    "Core.dll", "", "Core", "get_Instance", 0);
             static auto* getIdentity = Il2cppUtils::GetMethodIl2cpp(
-                    "Assembly-CSharp.dll", "", "Core", "get_Identity", 0);
+                    "Core.dll", "", "Core", "get_Identity", 0);
             static auto* getPlayerId = Il2cppUtils::GetMethodIl2cpp(
-                    "Assembly-CSharp.dll", "", "IdentityStorage", "get_PlayerId", 0);
+                    "Core.dll", "", "IdentityStorage", "get_PlayerId", 0);
             static auto* getDeviceSpecificId = Il2cppUtils::GetMethodIl2cpp(
-                    "Assembly-CSharp.dll", "", "IdentityStorage", "get_DeviceSpecificId", 0);
+                    "Core.dll", "", "IdentityStorage", "get_DeviceSpecificId", 0);
             static auto* saveIdentity = Il2cppUtils::GetMethodIl2cpp(
-                    "Assembly-CSharp.dll", "", "IdentityStorage", "SaveIdentity", 2);
+                    "Core.dll", "", "IdentityStorage", "SaveIdentity", 2);
 
             if (!getCoreInstance || !getIdentity || !getPlayerId
                 || !getDeviceSpecificId || !saveIdentity) {
