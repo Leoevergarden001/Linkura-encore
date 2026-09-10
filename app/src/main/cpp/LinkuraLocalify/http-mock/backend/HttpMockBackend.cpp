@@ -2262,11 +2262,13 @@ namespace LinkuraLocal::HttpMock {
             return response;
         }
         auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
-        if (payload.is_object()) {
-            currentQuestLive.score = payload.value("score", int64_t(0));
-            currentQuestLive.playReport = payload.value("play_report", std::string{});
-            currentQuestLive.finished = true;
+        if (!payload.is_object()) {
+            Log::Warn("[HttpMockBackend] quest finish payload is not a JSON object");
+            return std::nullopt;
         }
+        currentQuestLive.score = payload.value("score", int64_t(0));
+        currentQuestLive.playReport = payload.value("play_report", std::string{});
+        currentQuestLive.finished = true;
         if (!PersistQuestSessionLocked("FINISHED")) {
             return std::nullopt;
         }

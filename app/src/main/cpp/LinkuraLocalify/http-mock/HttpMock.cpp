@@ -142,6 +142,40 @@ namespace LinkuraLocal::HttpMock {
             return p;
         }
 
+        static void DumpMissingMockTrace(const std::string& apiPath,
+                                         const std::string& requestBodyJson) {
+            const auto dumpDir = GetMockRootDir().parent_path() / "mock_dump";
+            std::error_code dumpEc;
+            std::filesystem::create_directories(dumpDir, dumpEc);
+            if (dumpEc) return;
+
+            auto sanitized = SanitizeApiPathToRelative(apiPath);
+            for (auto& ch : sanitized) {
+                if (ch == '/') ch = '_';
+            }
+            const auto filePath = dumpDir / (sanitized + ".missing.json");
+            nlohmann::json dumpObj;
+            dumpObj["schemaVersion"] = 1;
+            dumpObj["path"] = apiPath;
+            dumpObj["status"] = 599;
+            dumpObj["capturedAt"] = FormatIso8601NowUtc();
+            dumpObj["responseSource"] = "MISSING_ROUTE";
+            if (!requestBodyJson.empty()) {
+                auto request = nlohmann::json::parse(requestBodyJson, nullptr, false);
+                dumpObj["request"] = request.is_discarded()
+                    ? nlohmann::json(requestBodyJson)
+                    : request;
+            } else {
+                dumpObj["request"] = nullptr;
+            }
+            dumpObj["response"] = { {"error", "MISSING_ROUTE"} };
+
+            std::ofstream dumpOfs(filePath, std::ios::trunc);
+            if (dumpOfs.is_open()) {
+                dumpOfs << dumpObj.dump(2);
+            }
+        }
+
         static std::vector<std::pair<std::string, std::string>> ParseHeadersText(std::string text) {
             std::vector<std::pair<std::string, std::string>> out;
             size_t start = 0;
@@ -682,6 +716,9 @@ namespace LinkuraLocal::HttpMock {
             } else {
                 Log::WarnFmt("[HttpMock] no mock file or registered route for path=%s, returning nullptr",
                              apiPath.c_str());
+                if (Config::dumpHttpMockJson) {
+                    DumpMissingMockTrace(apiPath, requestBodyJson);
+                }
                 return nullptr;
             }
         } else {
