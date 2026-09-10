@@ -306,6 +306,26 @@ namespace LinkuraLocal::HookDebug {
         Log::InfoFmt("[LoginFlow] TitleSceneController.OnClickMenuButton return self=%p", self);
     }
 
+    DEFINE_HOOK(void*, SceneManager_LoadSceneAsync_Name, (Il2cppString* sceneName, void* method)) {
+        const auto name = sceneName ? sceneName->ToString() : "<null>";
+        Log::InfoFmt("[LoginFlow] SceneManager.LoadSceneAsync(name) enter scene=%s", name.c_str());
+        auto result = SceneManager_LoadSceneAsync_Name_Orig(sceneName, method);
+        Log::InfoFmt("[LoginFlow] SceneManager.LoadSceneAsync(name) return scene=%s result=%p",
+                     name.c_str(), result);
+        return result;
+    }
+
+    DEFINE_HOOK(void*, SceneManager_LoadSceneAsync_NameMode, (Il2cppString* sceneName,
+            int mode, void* method)) {
+        const auto name = sceneName ? sceneName->ToString() : "<null>";
+        Log::InfoFmt("[LoginFlow] SceneManager.LoadSceneAsync(name,mode) enter scene=%s mode=%d",
+                     name.c_str(), mode);
+        auto result = SceneManager_LoadSceneAsync_NameMode_Orig(sceneName, mode, method);
+        Log::InfoFmt("[LoginFlow] SceneManager.LoadSceneAsync(name,mode) return scene=%s result=%p",
+                     name.c_str(), result);
+        return result;
+    }
+
     // lag
     DEFINE_HOOK(void*, LiveSceneController_PrepareChangeSceneAsync, (Il2cppUtils::Il2CppObject* self,void* token, void* method)) {
         Log::DebugFmt("LiveSceneController_PrepareChangeSceneAsync HOOKED");
@@ -850,6 +870,19 @@ namespace LinkuraLocal::HookDebug {
                 "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "OnClickFirstScreen"));
         ADD_HOOK(TitleSceneController_OnClickMenuButton, Il2cppUtils::GetMethodPointer(
                 "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "OnClickMenuButton"));
+
+        auto loadSceneAsyncName = Il2cppUtils::GetMethodIl2cpp(
+                "UnityEngine.CoreModule.dll", "UnityEngine.SceneManagement", "SceneManager",
+                "LoadSceneAsync", 1);
+        if (loadSceneAsyncName) {
+            ADD_HOOK(SceneManager_LoadSceneAsync_Name, loadSceneAsyncName->methodPointer);
+        }
+        auto loadSceneAsyncNameMode = Il2cppUtils::GetMethodIl2cpp(
+                "UnityEngine.CoreModule.dll", "UnityEngine.SceneManagement", "SceneManager",
+                "LoadSceneAsync", 2);
+        if (loadSceneAsyncNameMode) {
+            ADD_HOOK(SceneManager_LoadSceneAsync_NameMode, loadSceneAsyncNameMode->methodPointer);
+        }
 
         ADD_HOOK(TimelineCommandReceiver_Awake, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "TimelineCommandReceiver", "Awake"));
 
