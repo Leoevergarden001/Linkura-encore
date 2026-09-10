@@ -727,28 +727,45 @@ namespace LinkuraLocal::HookShare {
     Il2cppUtils::FieldInfo* titleControllerLoginResponseField = nullptr;
 
     template <typename T>
-    static bool ReadTitleField(void* instance, Il2cppUtils::FieldInfo* field, T& value) {
-        if (!instance || !field || field->offset < 0 || field->offset > 0x1000) return false;
-        value = *reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(instance) + field->offset);
+    static bool ReadTitleFieldAt(void* instance, Il2cppUtils::FieldInfo* field,
+                                 int32_t extraOffset, T& value) {
+        if (!instance || !field) return false;
+        const auto offset = static_cast<int64_t>(field->offset) + extraOffset;
+        if (offset < 0 || offset > 0x1000) return false;
+        value = *reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(instance) + offset);
         return true;
     }
 
     static void LogTitleStateMachineFields(void* stateMachine, const char* phase, unsigned sequence) {
-        int32_t state = 0;
-        void* controller = nullptr;
+        int32_t boxedState = 0;
+        int32_t unboxedState = 0;
+        void* boxedController = nullptr;
+        void* unboxedController = nullptr;
         void* loginResponse = nullptr;
-        const bool hasState = ReadTitleField(stateMachine, titleStartButtonStateField, state);
-        const bool hasController = ReadTitleField(stateMachine, titleStartButtonControllerField, controller);
-        const bool hasLoginResponse = ReadTitleField(
-                controller, titleControllerLoginResponseField, loginResponse);
+        const bool hasBoxedState = ReadTitleFieldAt(
+                stateMachine, titleStartButtonStateField, 0, boxedState);
+        const bool hasUnboxedState = ReadTitleFieldAt(
+                stateMachine, titleStartButtonStateField, -16, unboxedState);
+        const bool hasBoxedController = ReadTitleFieldAt(
+                stateMachine, titleStartButtonControllerField, 0, boxedController);
+        const bool hasUnboxedController = ReadTitleFieldAt(
+                stateMachine, titleStartButtonControllerField, -16, unboxedController);
+        const auto controller = hasUnboxedController ? unboxedController : boxedController;
+        const bool hasLoginResponse = ReadTitleFieldAt(
+                controller, titleControllerLoginResponseField, 0, loginResponse);
         Log::InfoFmt(
-                "[LoginFlow] title state %s #%u state=%s%d stateMachine=%p controller=%p loginRes=%s%p",
+                "[LoginFlow] title state %s #%u boxedState=%s%d unboxedState=%s%d "
+                "boxedController=%s%p unboxedController=%s%p loginRes=%s%p",
                 phase,
                 sequence,
-                hasState ? "" : "?",
-                state,
-                stateMachine,
-                hasController ? controller : nullptr,
+                hasBoxedState ? "" : "?",
+                boxedState,
+                hasUnboxedState ? "" : "?",
+                unboxedState,
+                hasBoxedController ? "" : "?",
+                boxedController,
+                hasUnboxedController ? "" : "?",
+                unboxedController,
                 hasLoginResponse ? "" : "?",
                 hasLoginResponse ? loginResponse : nullptr);
     }
