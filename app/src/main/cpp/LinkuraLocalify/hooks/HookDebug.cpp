@@ -896,6 +896,38 @@ namespace LinkuraLocal::HookDebug {
         ADD_HOOK(TitleSceneController_OnClickMenuButton, Il2cppUtils::GetMethodPointer(
                 "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "OnClickMenuButton"));
 
+        const auto dumpRelevantMethods = [](UnityResolve::Class* klass, const char* label) {
+            if (!klass) return;
+            for (auto* method : klass->methods) {
+                if (!method) continue;
+                const auto& name = method->name;
+                const bool relevant = name.find("Login") != std::string::npos
+                        || name.find("Home") != std::string::npos
+                        || name.find("Scene") != std::string::npos
+                        || name.find("Start") != std::string::npos
+                        || name.find("Enter") != std::string::npos
+                        || name.find("Load") != std::string::npos
+                        || name.find("Click") != std::string::npos;
+                if (!relevant) continue;
+                std::string args = "(";
+                for (size_t index = 0; index < method->args.size(); ++index) {
+                    if (index) args += ",";
+                    const auto* argument = method->args[index];
+                    args += argument && argument->pType ? argument->pType->name : "?";
+                }
+                args += ")";
+                const auto returnType = method->return_type ? method->return_type->name : "?";
+                Log::InfoFmt("[LoginFlow] %s method=%s args=%s return=%s ptr=%p",
+                             label, name.c_str(), args.c_str(), returnType.c_str(), method->function);
+            }
+        };
+        auto assemblyCSharp = UnityResolve::Get("Assembly-CSharp.dll");
+        if (assemblyCSharp) {
+            dumpRelevantMethods(assemblyCSharp->Get("TitleSceneController", "Tecotec"),
+                                "TitleSceneController");
+            dumpRelevantMethods(assemblyCSharp->Get("SceneChanger", "Tecotec"), "SceneChanger");
+        }
+
         auto sceneManagerAssembly = UnityResolve::Get("UnityEngine.CoreModule.dll");
         auto sceneManagerClass = sceneManagerAssembly
                 ? sceneManagerAssembly->Get("SceneManager", "UnityEngine.SceneManagement")
