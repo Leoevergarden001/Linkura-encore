@@ -599,8 +599,16 @@ class LinkuraHookMain : IXposedHookLoadPackage, IXposedHookZygoteInit  {
                     alreadyInitialized = true
                     LogExporter.addLogEntry(TAG, "I", "Hook initialization completed successfully")
                     
-                    // Setup AIDL client for duplex communication
-                    setupAidlClient(app.applicationContext)
+                    // The bridge is optional.  In LSPatch installs this code
+                    // runs under the game's UID, where Android may hide the
+                    // standalone Localify package.  Avoid an endless main
+                    // thread retry loop unless the user explicitly enables
+                    // the overlay bridge.
+                    if (linkuraConfig?.enableAidlBridge == true) {
+                        setupAidlClient(app.applicationContext)
+                    } else {
+                        Log.i(TAG, "AIDL bridge disabled; offline runtime remains local")
+                    }
                 }
             })
 

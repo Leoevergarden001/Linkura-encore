@@ -67,6 +67,15 @@ data class LinkuraConfig (
     // In-game overlay toolbar settings
     var enableInGameOverlayToolbar: Boolean = true,
 
+    /**
+     * Enables the optional cross-process AIDL bridge used by the external
+     * overlay tooling.  The injected process is subject to Android package
+     * visibility rules, so this bridge is not available in every LSPatch
+     * installation.  Keep it opt-in: the native offline runtime, its local
+     * configuration, and HTTP mock do not depend on it.
+     */
+    var enableAidlBridge: Boolean = false,
+
     var localeCode: String = "ja-JP",
 
     // Offline API mock (native hook)
