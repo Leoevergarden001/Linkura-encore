@@ -901,22 +901,43 @@ namespace LinkuraLocal::HookDebug {
                 ? sceneManagerAssembly->Get("SceneManager", "UnityEngine.SceneManagement")
                 : nullptr;
         if (sceneManagerClass) {
-            auto loadSceneAsyncNameMode = sceneManagerClass->Get<UnityResolve::Method>(
+            const auto findSceneMethod = [&](const char* methodName,
+                                             std::initializer_list<const char*> expectedTypes)
+                    -> UnityResolve::Method* {
+                for (auto* candidate : sceneManagerClass->methods) {
+                    if (!candidate || candidate->name != methodName ||
+                            candidate->args.size() != expectedTypes.size()) {
+                        continue;
+                    }
+                    auto expected = expectedTypes.begin();
+                    bool matches = true;
+                    for (auto* argument : candidate->args) {
+                        if (!argument || !argument->pType ||
+                                argument->pType->name != *expected++) {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if (matches) return candidate;
+                }
+                return nullptr;
+            };
+
+            auto loadSceneAsyncNameMode = findSceneMethod(
                     "LoadSceneAsync", {"System.String", "UnityEngine.SceneManagement.LoadSceneMode"});
             ADD_HOOK(SceneManager_LoadSceneAsync_NameMode,
                      loadSceneAsyncNameMode ? loadSceneAsyncNameMode->function : nullptr);
 
-            auto loadSceneName = sceneManagerClass->Get<UnityResolve::Method>(
-                    "LoadScene", {"System.String"});
+            auto loadSceneName = findSceneMethod("LoadScene", {"System.String"});
             ADD_HOOK(SceneManager_LoadScene_Name,
                      loadSceneName ? loadSceneName->function : nullptr);
 
-            auto loadSceneNameMode = sceneManagerClass->Get<UnityResolve::Method>(
+            auto loadSceneNameMode = findSceneMethod(
                     "LoadScene", {"System.String", "UnityEngine.SceneManagement.LoadSceneMode"});
             ADD_HOOK(SceneManager_LoadScene_NameMode,
                      loadSceneNameMode ? loadSceneNameMode->function : nullptr);
 
-            auto loadSceneIndexMode = sceneManagerClass->Get<UnityResolve::Method>(
+            auto loadSceneIndexMode = findSceneMethod(
                     "LoadScene", {"System.Int32", "UnityEngine.SceneManagement.LoadSceneMode"});
             ADD_HOOK(SceneManager_LoadScene_IndexMode,
                      loadSceneIndexMode ? loadSceneIndexMode->function : nullptr);
