@@ -186,6 +186,12 @@ namespace LinkuraLocal::HookSqlCipher {
                     source, connection, path.c_str(), keyBytes, keyHex.c_str());
         }
 
+        bool IsMasterDatabaseConnection(void* connection) {
+            constexpr std::string_view masterDirectory = "/files/M/";
+            const auto path = ManagedConnectionPath(connection);
+            return path.find(masterDirectory) != std::string::npos;
+        }
+
         DEFINE_HOOK(void, SQLiteConnection_SetKeyString,
                     (void* self, Il2cppUtils::Il2CppString* key)) {
             if (key) {
@@ -217,6 +223,20 @@ namespace LinkuraLocal::HookSqlCipher {
                              connectionString);
             }
             SQLiteConnection_ConnectionStringCtor_Orig(self, connectionString);
+        }
+
+        DEFINE_HOOK(void*, SQLiteConnection_CreateCommand,
+                    (void* self, Il2cppUtils::Il2CppString* commandText,
+                     UnityResolve::UnityType::Array<void*>* parameters)) {
+            if (Config::dumpSqlCipherKey && commandText && IsMasterDatabaseConnection(self)) {
+                const auto query = commandText->ToString();
+                Log::InfoFmt(
+                        "[MasterDataQuery] path=%s parameters=%zu sql=%s",
+                        ManagedConnectionPath(self).c_str(),
+                        parameters ? parameters->max_length : 0,
+                        query.c_str());
+            }
+            return SQLiteConnection_CreateCommand_Orig(self, commandText, parameters);
         }
 
         bool MethodHasArguments(const UnityResolve::Method* method,
@@ -324,6 +344,9 @@ namespace LinkuraLocal::HookSqlCipher {
             } else if (method->name == ".ctor"
                     && MethodHasArguments(method, {"SQLite.SQLiteConnectionString"})) {
                 ADD_HOOK(SQLiteConnection_ConnectionStringCtor, method->function);
+            } else if (method->name == "CreateCommand"
+                    && MethodHasArguments(method, {"System.String", "System.Object[]"})) {
+                ADD_HOOK(SQLiteConnection_CreateCommand, method->function);
             }
         }
     }
