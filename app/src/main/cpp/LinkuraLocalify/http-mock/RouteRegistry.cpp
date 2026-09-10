@@ -34,12 +34,13 @@ namespace LinkuraLocal::HttpMock {
             routes.emplace(std::string(path), std::move(handler));
         }
 
-        static std::optional<MockResponse> HandleUserLogin(const MockRequestContext& request,
+        static std::optional<MockResponse> HandleUserLogin(const MockRequestContext&,
                                                              HttpMockBackend&) {
-            const auto playerId = HttpMockBackend::ExtractPayloadStringField(request.payloadJson, "player_id");
-            const auto& jsonBody = playerId.empty()
-                ? OfflineApiMockBuiltIn::UserLoginNewJsonView
-                : OfflineApiMockBuiltIn::UserLoginJsonView;
+            // A clean 5.1.0 install sends an empty player_id. In preservation mode
+            // that still identifies the single local save; treating it as a new
+            // online account sends the client into the LinkLike ID flow and makes
+            // an offline cold start impossible.
+            const auto& jsonBody = OfflineApiMockBuiltIn::UserLoginJsonView;
             return MockResponse{
                 std::string(jsonBody),
                 std::string(OfflineApiMockBuiltIn::UserLoginHeadersView),
