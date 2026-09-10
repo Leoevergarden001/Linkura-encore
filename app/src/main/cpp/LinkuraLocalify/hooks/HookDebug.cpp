@@ -306,6 +306,12 @@ namespace LinkuraLocal::HookDebug {
         Log::InfoFmt("[LoginFlow] TitleSceneController.OnClickMenuButton return self=%p", self);
     }
 
+    DEFINE_HOOK(void, TitleSceneController_OnClickStartButton, (void* self, void* method)) {
+        Log::InfoFmt("[LoginFlow] TitleSceneController.OnClickStartButton enter self=%p", self);
+        TitleSceneController_OnClickStartButton_Orig(self, method);
+        Log::InfoFmt("[LoginFlow] TitleSceneController.OnClickStartButton return self=%p", self);
+    }
+
     DEFINE_HOOK(void*, SceneManager_LoadSceneAsync_Name, (Il2cppString* sceneName, void* method)) {
         const auto name = sceneName ? sceneName->ToString() : "<null>";
         Log::InfoFmt("[LoginFlow] SceneManager.LoadSceneAsync(name) enter scene=%s", name.c_str());
@@ -895,6 +901,8 @@ namespace LinkuraLocal::HookDebug {
                 "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "OnClickFirstScreen"));
         ADD_HOOK(TitleSceneController_OnClickMenuButton, Il2cppUtils::GetMethodPointer(
                 "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "OnClickMenuButton"));
+        ADD_HOOK(TitleSceneController_OnClickStartButton, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "OnClickStartButton"));
 
         const auto dumpRelevantMethods = [](UnityResolve::Class* klass, const char* label) {
             if (!klass) return;
@@ -925,6 +933,7 @@ namespace LinkuraLocal::HookDebug {
         if (assemblyCSharp) {
             dumpRelevantMethods(assemblyCSharp->Get("TitleSceneController", "Tecotec"),
                                 "TitleSceneController");
+            dumpRelevantMethods(assemblyCSharp->Get("SceneChanger", ""), "SceneChanger");
             dumpRelevantMethods(assemblyCSharp->Get("SceneChanger", "Tecotec"), "SceneChanger");
         }
 
