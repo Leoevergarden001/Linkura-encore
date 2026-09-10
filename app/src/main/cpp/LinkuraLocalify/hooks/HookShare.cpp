@@ -768,6 +768,20 @@ namespace LinkuraLocal::HookShare {
                 unboxedController,
                 hasLoginResponse ? "" : "?",
                 hasLoginResponse ? loginResponse : nullptr);
+
+        // The response object is populated at state=4.  Serialize it once per
+        // object so we can see the exact branch-driving flags without changing
+        // the title flow or depending on generated model getter ABIs.
+        static void* lastLoginResponse = nullptr;
+        if (loginResponse && loginResponse != lastLoginResponse) {
+            lastLoginResponse = loginResponse;
+            auto* json = Il2cppUtils::ToJsonStr(loginResponse);
+            if (json) {
+                Log::InfoFmt("[LoginFlow] loginRes json=%s", json->ToString().c_str());
+            } else {
+                Log::WarnFmt("[LoginFlow] loginRes serialization returned null object=%p", loginResponse);
+            }
+        }
     }
 
     DEFINE_HOOK(void, TitleSceneController_SetPlayerId, (void* self,
