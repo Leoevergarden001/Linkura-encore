@@ -75,6 +75,11 @@ namespace LinkuraLocal::Config {
     // Example: "https://api.myserver.example.com"
     extern std::string apiServerUrl;
 
+    // Optional exact x-res-version returned by the offline API mock.  It must
+    // come from a captured matching Manifest/archive; an empty value preserves
+    // the existing current/latest version fallback.
+    extern std::string customResVersion;
+
     extern std::unordered_map<std::string, nlohmann::json> archiveConfigMap;
     extern VersionCompatibility::Version currentClientVersion;
     extern std::string currentResVersion;
@@ -102,4 +107,5 @@ namespace LinkuraLocal::Config {
     bool isLegacyMrsVersion();
     bool isFirstYearVersion();
     bool isLatestVersion();
+    std::string GetOfflineResourceVersion();
 }

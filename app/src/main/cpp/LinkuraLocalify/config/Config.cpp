@@ -64,6 +64,7 @@ namespace LinkuraLocal::Config {
     bool enableOfflineApiMock = false;
     bool dumpHttpMockJson = false;
     std::string apiServerUrl;
+    std::string customResVersion;
     
     // Archive configuration mapping: archives_id -> item data
     std::unordered_map<std::string, nlohmann::json> archiveConfigMap;
@@ -137,6 +138,7 @@ namespace LinkuraLocal::Config {
             GetConfigItem(enableOfflineApiMock);
             GetConfigItem(dumpHttpMockJson);
             GetConfigItem(apiServerUrl);
+            GetConfigItem(customResVersion);
             if (localeCode != "ja-JP") {
                 enableLocale = true;
             }
@@ -320,5 +322,11 @@ namespace LinkuraLocal::Config {
 
     bool isLatestVersion() {
         return currentResVersion == latestResVersion;
+    }
+
+    std::string GetOfflineResourceVersion() {
+        if (!customResVersion.empty()) return customResVersion;
+        if (!latestResVersion.empty()) return latestResVersion;
+        return currentResVersion;
     }
 }

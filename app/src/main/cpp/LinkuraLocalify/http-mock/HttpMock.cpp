@@ -214,7 +214,7 @@ namespace LinkuraLocal::HttpMock {
 
         static void ApplyStandardHeaders(std::vector<std::pair<std::string, std::string>>& headers) {
             const auto dateStr = FormatHttpDateNowGmt();
-            const auto resVer = !Config::latestResVersion.empty() ? Config::latestResVersion : Config::currentResVersion;
+            const auto resVer = Config::GetOfflineResourceVersion();
 
             UpsertHeader(headers, "content-type", "application/json; charset=UTF-8");
             UpsertHeader(headers, "x-res-version", resVer.empty() ? std::string("unknown") : resVer);
@@ -786,7 +786,7 @@ namespace LinkuraLocal::HttpMock {
         // Expand placeholders inside header files.
         {
             const auto dateStr = FormatHttpDateNowGmt();
-            const auto resVer = !Config::latestResVersion.empty() ? Config::latestResVersion : Config::currentResVersion;
+            const auto resVer = Config::GetOfflineResourceVersion();
             ReplaceAllInPlace(headersText, "${DATE_GMT}", dateStr);
             ReplaceAllInPlace(headersText, "${RES_VERSION}", resVer.empty() ? std::string("unknown") : resVer);
         }
