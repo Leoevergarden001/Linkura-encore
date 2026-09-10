@@ -719,12 +719,14 @@ namespace LinkuraLocal::HookShare {
 
     uintptr_t ActivityRecordGetTopWithHttpInfoAsync_MoveNext_Addr = 0;
 
-    // 5.1.0 title/login diagnostics.  These hooks are deliberately read-only:
-    // they let us distinguish a response/deserialization problem from a title
-    // state-machine continuation problem without changing game behavior.
+    // The offline title continuation needs the generated state-machine state,
+    // the first closure, and the result flag captured by that closure.
     Il2cppUtils::FieldInfo* titleStartButtonStateField = nullptr;
     Il2cppUtils::FieldInfo* titleStartButtonControllerField = nullptr;
+    Il2cppUtils::FieldInfo* titleStartButtonClosure0Field = nullptr;
     Il2cppUtils::FieldInfo* titleControllerLoginResponseField = nullptr;
+    Il2cppUtils::FieldInfo* titleIsUseUserSuccessField = nullptr;
+    std::atomic<bool> pendingOfflineHomeTransition{false};
 
     template <typename T>
     static bool ReadTitleFieldAt(void* instance, Il2cppUtils::FieldInfo* field,
@@ -796,17 +798,67 @@ namespace LinkuraLocal::HookShare {
             void* method_info)) {
         static std::atomic<unsigned> sequence{0};
         const auto current = sequence.fetch_add(1, std::memory_order_relaxed);
+        int32_t stateBefore = 0;
+        void* finishClosure = nullptr;
+        bool loginSucceeded = false;
+        ReadTitleFieldAt(self, titleStartButtonStateField, -16, stateBefore);
+        ReadTitleFieldAt(self, titleStartButtonClosure0Field, -16, finishClosure);
+        ReadTitleFieldAt(finishClosure, titleIsUseUserSuccessField, 0, loginSucceeded);
+        if (stateBefore == -1) {
+            pendingOfflineHomeTransition.store(false, std::memory_order_release);
+        }
         if (current < 128) {
             Log::InfoFmt("[LoginFlow] TitleSceneController.<OnClickStartButton>d__6.MoveNext enter #%u self=%p",
                          current + 1, self);
             LogTitleStateMachineFields(self, "enter", current + 1);
         }
         TitleSceneController_OnClickStartButton_MoveNext_Orig(self, method_info);
+        int32_t stateAfter = 0;
+        ReadTitleFieldAt(self, titleStartButtonStateField, -16, stateAfter);
+
+        // Linkura 5.1.0 gates its final title transition behind an online
+        // resource-initialization UniTask<bool>.  In preservation mode the
+        // request login succeeds against the local route, but that online-only
+        // resource step returns false and silently drops the client's own
+        // completion callback.  Reuse that exact callback after the state
+        // machine has otherwise completed; it performs the normal SceneChanger
+        // transition and therefore preserves all client-side scene selection.
+        if (Config::enableOfflineApiMock
+                && stateBefore == 9
+                && stateAfter == -2
+                && finishClosure
+                && loginSucceeded) {
+            if (!pendingOfflineHomeTransition.exchange(
+                    true, std::memory_order_acq_rel)) {
+                Log::Warn("[LoginFlow] offline resource bootstrap did not finish; "
+                          "deferred the preserved Home transition");
+            }
+        }
         if (current < 128) {
             LogTitleStateMachineFields(self, "return", current + 1);
             Log::InfoFmt("[LoginFlow] TitleSceneController.<OnClickStartButton>d__6.MoveNext return #%u self=%p",
                          current + 1, self);
         }
+    }
+
+    DEFINE_HOOK(void, TitleSceneController_AlterUpdateScene,
+            (void* self, void* method_info)) {
+        TitleSceneController_AlterUpdateScene_Orig(self, method_info);
+
+        // Scene changes must not be started while the async login MoveNext is
+        // still unwinding.  AlterUpdateScene is the title controller's normal
+        // main-thread frame callback, so it provides a safe next-frame point.
+        if (!pendingOfflineHomeTransition.exchange(
+                false, std::memory_order_acq_rel)) return;
+
+        // In 5.1.0 the preserved completion callback performs several retired
+        // online-service operations before its final ChangeScene call.  Those
+        // operations no longer complete offline.  The callback's own final
+        // branch selects scene 3 when is_login_bonus_receive=true, which is
+        // exactly the response served by the preservation login route.  Scene
+        // 35 is the login-bonus scene and would immediately redirect when its
+        // offline list is empty.
+        HookDebug::ChangeSceneForOfflineLogin(3);
     }
 
     // http request log
@@ -1211,12 +1263,20 @@ namespace LinkuraLocal::HookShare {
         if (titleSceneControllerClass) {
             auto startButtonStateMachine = Il2cppUtils::find_nested_class_from_name(
                     titleSceneControllerClass, "<OnClickStartButton>d__6");
+            auto startButtonClosure0 = Il2cppUtils::find_nested_class_from_name(
+                    titleSceneControllerClass, "<>c__DisplayClass6_0");
+            auto* titleSceneControllerBaseClass = UnityResolve::Invoke<void*>(
+                    "il2cpp_class_get_parent", titleSceneControllerClass);
             titleControllerLoginResponseField = Il2cppUtils::il2cpp_class_get_field_from_name(
                     titleSceneControllerClass, "loginRes");
             titleStartButtonStateField = Il2cppUtils::il2cpp_class_get_field_from_name(
                     startButtonStateMachine, "<>1__state");
             titleStartButtonControllerField = Il2cppUtils::il2cpp_class_get_field_from_name(
                     startButtonStateMachine, "<>4__this");
+            titleStartButtonClosure0Field = Il2cppUtils::il2cpp_class_get_field_from_name(
+                    startButtonStateMachine, "<>8__1");
+            titleIsUseUserSuccessField = Il2cppUtils::il2cpp_class_get_field_from_name(
+                    startButtonClosure0, "isUsetUserSuccess");
             Log::InfoFmt(
                     "[LoginFlow] title fields state=%p(offset=%d) controller=%p(offset=%d) loginRes=%p(offset=%d)",
                     titleStartButtonStateField,
@@ -1231,6 +1291,14 @@ namespace LinkuraLocal::HookShare {
             } else {
                 Log::Warn("[LoginFlow] unable to resolve TitleSceneController.<OnClickStartButton>d__6.MoveNext");
             }
+            auto* alterUpdateScene = titleSceneControllerBaseClass
+                    ? Il2cppUtils::GetMethodIl2cpp(
+                            titleSceneControllerBaseClass, "AlterUpdateScene", 0)
+                    : nullptr;
+            ADD_HOOK(TitleSceneController_AlterUpdateScene,
+                     alterUpdateScene
+                        ? reinterpret_cast<void*>(alterUpdateScene->methodPointer)
+                        : nullptr);
         } else {
             Log::Warn("[LoginFlow] unable to resolve 5.1.0 TitleSceneController");
         }

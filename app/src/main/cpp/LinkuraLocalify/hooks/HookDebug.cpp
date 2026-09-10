@@ -6,9 +6,77 @@
 #include <vector>
 #include <future>
 #include <atomic>
+#include <cstdint>
+#include <cstring>
 #include <string_view>
 namespace LinkuraLocal::HookDebug {
     using Il2cppString = UnityResolve::UnityType::String;
+
+    namespace {
+        void* preservedSceneChanger = nullptr;
+        Il2cppUtils::MethodInfo* sceneChangerChangeSceneMethod = nullptr;
+        Il2cppUtils::FieldInfo* sceneChangerStateField = nullptr;
+        std::atomic<bool> pendingOfflineLoadingCoverRelease{false};
+
+        std::vector<void*> FindAllObjects(UnityResolve::Class* klass) {
+            if (!klass) return {};
+
+            auto objects = klass->FindObjectsByType<void*>();
+            if (!objects.empty()) return objects;
+
+            auto* coreModule = UnityResolve::Get("UnityEngine.CoreModule.dll");
+            auto* resourcesClass = coreModule
+                    ? coreModule->Get("Resources", "UnityEngine")
+                    : nullptr;
+            auto* findAll = resourcesClass
+                    ? resourcesClass->Get<UnityResolve::Method>(
+                            "FindObjectsOfTypeAll", {"System.Type"})
+                    : nullptr;
+            if (findAll) {
+                auto* all = findAll->Invoke<UnityResolve::UnityType::Array<void*>*>(
+                        klass->GetType());
+                if (all) objects = all->ToVector();
+            }
+            return objects;
+        }
+
+        void ReleaseOfflineLoadingCover() {
+            auto* assemblyCSharp = UnityResolve::Get("Assembly-CSharp.dll");
+            auto* canvasFadeManagerClass = assemblyCSharp
+                    ? assemblyCSharp->Get("CanvasFadeManager", "*")
+                    : nullptr;
+            if (!canvasFadeManagerClass) {
+                Log::Warn("[HomeFlow] CanvasFadeManager is unavailable; cannot release loading cover");
+                return;
+            }
+
+            auto* setForceAllFadeOut = canvasFadeManagerClass->Get<UnityResolve::Method>(
+                    "SetForceAllFadeOut", {});
+            if (!setForceAllFadeOut) {
+                Log::Warn("[HomeFlow] CanvasFadeManager.SetForceAllFadeOut is unavailable");
+                return;
+            }
+
+            auto managers = FindAllObjects(canvasFadeManagerClass);
+            size_t released = 0;
+            for (auto* manager : managers) {
+                if (!manager || !Il2cppUtils::IsNativeObjectAlive(manager)) continue;
+                setForceAllFadeOut->Invoke<void>(manager);
+                ++released;
+            }
+            Log::InfoFmt("[HomeFlow] released offline loading cover managers=%zu", released);
+        }
+
+        int ReadAsyncState(void* stateMachine, Il2cppUtils::FieldInfo* field) {
+            if (!stateMachine || !field) return INT32_MIN;
+            int value = INT32_MIN;
+            std::memcpy(&value,
+                        reinterpret_cast<const char*>(stateMachine) + field->offset - 16,
+                        sizeof(value));
+            return value;
+        }
+
+    }
 
     DEFINE_HOOK(void, Internal_LogException, (void* ex, void* obj)) {
         Internal_LogException_Orig(ex, obj);
@@ -286,6 +354,62 @@ namespace LinkuraLocal::HookDebug {
         Log::InfoFmt("[LoginFlow] SceneChanger.AddSceneAsync return scene=%s result=%p",
                      name.c_str(), result);
         return result;
+    }
+
+    DEFINE_HOOK(void, SceneChanger_ChangeScene, (void* self, int sceneId,
+            void* beforeSceneParam, void* afterSceneParam,
+            bool flag1, bool flag2, bool flag3, void* method)) {
+        preservedSceneChanger = self;
+        SceneChanger_ChangeScene_Orig(self, sceneId, beforeSceneParam, afterSceneParam,
+                                      flag1, flag2, flag3, method);
+    }
+
+    bool ChangeSceneForOfflineLogin(int sceneId) {
+        if (!preservedSceneChanger || !SceneChanger_ChangeScene_Orig
+                || !sceneChangerChangeSceneMethod) {
+            Log::Error("[LoginFlow] preserved SceneChanger is unavailable");
+            return false;
+        }
+
+        // The stock title completion callback refreshes the persistent footer
+        // after the resource bootstrap and closes any menu before changing
+        // scene.  The retired bootstrap never reaches that callback offline,
+        // so reproduce these two local-only operations before the preserved
+        // SceneChanger transition.
+        if (auto* commonFooterClass = Il2cppUtils::GetClass(
+                    "Assembly-CSharp.dll", "Tecotec", "CommonFooter")) {
+            auto footers = FindAllObjects(commonFooterClass);
+            auto* initAfterMasterLoad = commonFooterClass->Get<UnityResolve::Method>(
+                    "InitAfterMasterLoad", {});
+            auto* closeMenu = commonFooterClass->Get<UnityResolve::Method>(
+                    "CloseMenu", {});
+            for (auto* footer : footers) {
+                if (!footer || !Il2cppUtils::IsNativeObjectAlive(footer)) continue;
+                if (initAfterMasterLoad) {
+                    initAfterMasterLoad->Invoke<void>(footer);
+                }
+                if (closeMenu) {
+                    closeMenu->Invoke<void>(footer);
+                }
+            }
+        } else {
+            Log::Warn("[LoginFlow] CommonFooter unavailable during offline login");
+        }
+
+        pendingOfflineLoadingCoverRelease.store(true, std::memory_order_release);
+        SceneChanger_ChangeScene_Orig(preservedSceneChanger, sceneId,
+                                      nullptr, nullptr, false, false, false,
+                                      sceneChangerChangeSceneMethod);
+        return true;
+    }
+
+    DEFINE_HOOK(void, SceneChanger_ChangeSceneSequenceAsync_MoveNext, (void* self, void* method)) {
+        SceneChanger_ChangeSceneSequenceAsync_MoveNext_Orig(self, method);
+        const auto stateAfter = ReadAsyncState(self, sceneChangerStateField);
+        if (stateAfter == -2 && pendingOfflineLoadingCoverRelease.exchange(
+                false, std::memory_order_acq_rel)) {
+            ReleaseOfflineLoadingCover();
+        }
     }
 
     DEFINE_HOOK(void, TitleSceneController_InitializeSceneAsync_MoveNext, (void* self, void* method)) {
@@ -879,6 +1003,37 @@ namespace LinkuraLocal::HookDebug {
                     "Assembly-CSharp.dll", "Tecotec", "SceneChanger", "AddSceneAsync");
         }
         ADD_HOOK(SceneChanger_AddSceneAsync, sceneChangerMethod);
+
+        auto sceneChangerClass = Il2cppUtils::GetClassIl2cpp(
+                "Assembly-CSharp.dll", "", "SceneChanger");
+        if (!sceneChangerClass) {
+            sceneChangerClass = Il2cppUtils::GetClassIl2cpp(
+                    "Assembly-CSharp.dll", "Tecotec", "SceneChanger");
+        }
+        if (sceneChangerClass) {
+            auto changeScene = Il2cppUtils::GetMethodIl2cpp(sceneChangerClass, "ChangeScene", 6);
+            sceneChangerChangeSceneMethod = changeScene;
+            ADD_HOOK(SceneChanger_ChangeScene,
+                     changeScene ? reinterpret_cast<void*>(changeScene->methodPointer) : nullptr);
+            auto changeSceneStateMachine = Il2cppUtils::find_nested_class(
+                    sceneChangerClass, [](void* nestedClass) {
+                        const auto name = static_cast<Il2cppUtils::Il2CppClassHead*>(nestedClass)->name;
+                        return name && std::string_view(name).starts_with(
+                                "<ChangeSceneSequenceAsync>d__");
+                    });
+            auto changeSceneMoveNext = Il2cppUtils::GetMethodIl2cpp(
+                    changeSceneStateMachine, "MoveNext", 0);
+            sceneChangerStateField = changeSceneStateMachine
+                    ? Il2cppUtils::il2cpp_class_get_field_from_name(
+                            changeSceneStateMachine, "<>1__state")
+                    : nullptr;
+            ADD_HOOK(SceneChanger_ChangeSceneSequenceAsync_MoveNext,
+                     changeSceneMoveNext
+                             ? reinterpret_cast<void*>(changeSceneMoveNext->methodPointer)
+                             : nullptr);
+        } else {
+            Log::Error("[LoginFlow] unable to resolve SceneChanger class");
+        }
 
         auto titleSceneControllerClass = Il2cppUtils::GetClassIl2cpp(
                 "Assembly-CSharp.dll", "Tecotec", "TitleSceneController");

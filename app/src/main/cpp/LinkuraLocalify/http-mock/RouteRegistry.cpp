@@ -538,6 +538,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterStaticJson(routes, "/v1/account/connect", OfflineApiMockBuiltIn::AccountConnectJsonView);
             RegisterStaticJson(routes, "/v1/user/push/devices", "null");
             RegisterBackend(routes, "/v1/user/login", HandleUserLogin);
+            RegisterStaticJson(routes, "/v1/home/get_login_bonus", OfflineApiMockBuiltIn::HomeGetLoginBonusJsonView);
             RegisterStaticJson(routes, "/v1/home/get_home", OfflineApiMockBuiltIn::HomeGetHomeJsonView);
             RegisterStaticJson(routes, "/v1/home/get_custom_setting", OfflineApiMockBuiltIn::GetCustomSettingJsonView);
             RegisterStaticJson(routes, "/v1/webview/school_idol_connect_post/get_theme_list", OfflineApiMockBuiltIn::WebviewSchoolIdolConnectPostGetThemeListJsonView);

@@ -18,6 +18,7 @@ extern bool IsNativeObjectAlive(void* obj);
 
 namespace LinkuraLocal::HookDebug {
     void Install(HookInstaller* hookInstaller);
+    bool ChangeSceneForOfflineLogin(int sceneId);
 }
 
 #include <vector>
