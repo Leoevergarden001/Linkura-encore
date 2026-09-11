@@ -64,6 +64,10 @@
     <string name="enable_offline_api_mock">Enable Offline API Mock</string>
     <string name="dump_http_mock_json">Dump HTTP Mock JSON</string>
     <string name="dump_sql_cipher_key">Dump SQLCipher key (sensitive)</string>
+    <string name="trace_master_import">Trace Master importer (no raw keys)</string>
+    <string name="enable_virtual_clock">Enable preservation virtual clock</string>
+    <string name="virtual_clock_unix_time">Virtual time (Unix seconds)</string>
+    <string name="preservation_restart_required">Restart the game after changing importer or clock settings.</string>
     <string name="offline_api_mock_dir">Offline API Mock Dir</string>
     <string name="offline_api_mock_dir_hint">Directory name under app files `linkura-local/` (e.g. mock_api).</string>
     <string name="local_mode_hint_collapsed">Tap the header to expand.</string>

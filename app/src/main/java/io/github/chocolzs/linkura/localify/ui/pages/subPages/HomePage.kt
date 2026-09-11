@@ -182,6 +182,36 @@ fun HomePage(modifier: Modifier = Modifier,
                             ) { v ->
                                 context?.onDumpSqlCipherKeyChanged(v)
                             }
+                            GakuSwitch(
+                                modifier,
+                                stringResource(R.string.trace_master_import),
+                                checked = config.value.traceMasterImport
+                            ) { v ->
+                                context?.onTraceMasterImportChanged(v)
+                            }
+                            GakuSwitch(
+                                modifier,
+                                stringResource(R.string.enable_virtual_clock),
+                                checked = config.value.enableVirtualClock
+                            ) { v ->
+                                context?.onEnableVirtualClockChanged(v)
+                            }
+                            GakuTextInput(
+                                value = config.value.virtualClockUnixTime.toString(),
+                                onValueChange = { value ->
+                                    value.toLongOrNull()?.let {
+                                        context?.onVirtualClockUnixTimeChanged(it)
+                                    }
+                                },
+                                modifier = modifier,
+                                label = { Text(stringResource(R.string.virtual_clock_unix_time)) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            )
+                            Text(
+                                text = stringResource(R.string.preservation_restart_required),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
                             val resetTitle = stringResource(R.string.reset_mock_database_confirm_title)
                             val resetContent = stringResource(R.string.reset_mock_database_confirm_content)
                             val rebuildTitle = stringResource(R.string.rebuild_mock_database_confirm_title)

@@ -65,6 +65,10 @@
     <string name="enable_offline_api_mock">启用离线 API Mock</string>
     <string name="dump_http_mock_json">导出 HTTP Mock JSON</string>
     <string name="dump_sql_cipher_key">导出 SQLCipher 密钥（敏感）</string>
+    <string name="trace_master_import">追踪 Master 导入器（不记录原始密钥）</string>
+    <string name="enable_virtual_clock">启用 Preservation 虚拟时钟</string>
+    <string name="virtual_clock_unix_time">虚拟时间（Unix 秒）</string>
+    <string name="preservation_restart_required">修改导入器或时钟设置后请重启游戏。</string>
     <string name="offline_api_mock_dir">Mock 目录名</string>
     <string name="offline_api_mock_dir_hint">相对于应用文件目录下的 `linkura-local/`（例如 mock_api）。</string>
     <string name="local_mode_hint_collapsed">点击标题展开设置。</string>

@@ -73,6 +73,9 @@ interface ConfigListener {
     fun onEnableOfflineApiMockChanged(value: Boolean)
     fun onDumpHttpMockJsonChanged(value: Boolean)
     fun onDumpSqlCipherKeyChanged(value: Boolean)
+    fun onTraceMasterImportChanged(value: Boolean)
+    fun onEnableVirtualClockChanged(value: Boolean)
+    fun onVirtualClockUnixTimeChanged(value: Long)
 
     fun onPUseRemoteAssetsChanged(value: Boolean)
     fun onPCleanLocalAssetsChanged(value: Boolean)
@@ -482,6 +485,21 @@ interface ConfigUpdateListener: ConfigListener, IHasConfigItems {
         config.dumpSqlCipherKey = value
         saveConfig()
         sendConfigUpdate(config)
+    }
+
+    override fun onTraceMasterImportChanged(value: Boolean) {
+        config.traceMasterImport = value
+        saveConfig()
+    }
+
+    override fun onEnableVirtualClockChanged(value: Boolean) {
+        config.enableVirtualClock = value
+        saveConfig()
+    }
+
+    override fun onVirtualClockUnixTimeChanged(value: Long) {
+        config.virtualClockUnixTime = value
+        saveConfig()
     }
 
     override fun onPUsePluginBuiltInAssetsChanged(value: Boolean) {

@@ -376,6 +376,25 @@ namespace LinkuraLocal::HttpMock {
             sqlite3_finalize(stmt);
             return true;
         }
+
+        static std::optional<nlohmann::json> ComposeOwnedCardResponse(
+                const char* responseJson,
+                int styleLevel,
+                int limitBreakTimes,
+                bool isEvolveMax) {
+            auto response = nlohmann::json::parse(responseJson ? responseJson : "{}", nullptr, false);
+            if (!response.is_object()) return std::nullopt;
+            auto card = response.find("user_card_data");
+            if (card == response.end() || !card->is_object()) return std::nullopt;
+
+            // Catalog response_json provides the verified 5.1.0 DTO shape and
+            // immutable card facts. These fields are player save state and must
+            // always come from museum_card_state so list/detail/deck agree.
+            (*card)["style_level"] = styleLevel;
+            (*card)["limit_break_times"] = limitBreakTimes;
+            (*card)["is_evolve_max"] = isEvolveMax;
+            return response;
+        }
     }
 
     bool HttpMockBackend::Impl::EnsureReadyLocked() {
@@ -442,8 +461,9 @@ namespace LinkuraLocal::HttpMock {
         if (hasPendingReset) {
             Log::InfoFmt("[HttpMockBackend] pending reset command found, re-seeding");
             ExecSql(db, "DELETE FROM archive_detail;");
-            ExecSql(db, "DELETE FROM card_detail;");
+            ExecSql(db, "DELETE FROM museum_card_state;");
             ExecSql(db, "DELETE FROM museum_card_ownership;");
+            ExecSql(db, "DELETE FROM card_detail;");
             ExecSql(db, "DELETE FROM collection_music;");
             ExecSql(db, "DELETE FROM collection_sticker;");
             ExecSql(db, "DELETE FROM collection_gallary;");
@@ -507,6 +527,13 @@ namespace LinkuraLocal::HttpMock {
                      "INSERT OR IGNORE INTO museum_card_ownership "
                      "(d_card_datas_id, acquired_at, acquisition_source) "
                      "SELECT d_card_datas_id, '2023-04-15T00:00:00Z', 'MUSEUM' "
+                     "FROM card_detail;")) {
+            return rollback();
+        }
+        if (!ExecSql(db,
+                     "INSERT OR IGNORE INTO museum_card_state "
+                     "(d_card_datas_id, style_level, limit_break_times, is_evolve_max) "
+                     "SELECT d_card_datas_id, style_level, limit_break_times, is_evolve_max "
                      "FROM card_detail;")) {
             return rollback();
         }
@@ -584,7 +611,7 @@ namespace LinkuraLocal::HttpMock {
             return false;
         }
 
-        if (!ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM museum_card_ownership;") || !ExecSql(db, "DELETE FROM collection_music;") || !ExecSql(db, "DELETE FROM collection_sticker;") || !ExecSql(db, "DELETE FROM collection_gallary;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
+        if (!ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM museum_card_state;") || !ExecSql(db, "DELETE FROM museum_card_ownership;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM collection_music;") || !ExecSql(db, "DELETE FROM collection_sticker;") || !ExecSql(db, "DELETE FROM collection_gallary;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
             return false;
         }
 
@@ -660,10 +687,13 @@ namespace LinkuraLocal::HttpMock {
 
         sqlite3_stmt* stmt = nullptr;
         constexpr const char* sql =
-            "SELECT card_detail.response_json "
+            "SELECT card_detail.response_json, museum_card_state.style_level, "
+            "museum_card_state.limit_break_times, museum_card_state.is_evolve_max "
             "FROM card_detail "
             "INNER JOIN museum_card_ownership "
             "ON museum_card_ownership.d_card_datas_id = card_detail.d_card_datas_id "
+            "INNER JOIN museum_card_state "
+            "ON museum_card_state.d_card_datas_id = museum_card_ownership.d_card_datas_id "
             "WHERE card_detail.d_card_datas_id = ?;";
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
             Log::ErrorFmt("[HttpMockBackend] sqlite prepare failed for card_detail query: %s", sqlite3_errmsg(db));
@@ -684,8 +714,18 @@ namespace LinkuraLocal::HttpMock {
         }
 
         const auto* responseJson = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        auto composed = ComposeOwnedCardResponse(
+            responseJson,
+            sqlite3_column_int(stmt, 1),
+            sqlite3_column_int(stmt, 2),
+            sqlite3_column_int(stmt, 3) != 0);
+        if (!composed) {
+            Log::Error("[HttpMockBackend] invalid catalog card response while composing detail");
+            sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
         MockStoredResponse response;
-        response.body = responseJson ? responseJson : "{}";
+        response.body = composed->dump();
         sqlite3_finalize(stmt);
         return response;
     }
@@ -700,9 +740,13 @@ namespace LinkuraLocal::HttpMock {
 
         sqlite3_stmt* stmt = nullptr;
         constexpr const char* sql =
-            "SELECT card_detail.response_json FROM card_detail "
+            "SELECT card_detail.response_json, museum_card_state.style_level, "
+            "museum_card_state.limit_break_times, museum_card_state.is_evolve_max "
+            "FROM card_detail "
             "INNER JOIN museum_card_ownership "
             "ON museum_card_ownership.d_card_datas_id = card_detail.d_card_datas_id "
+            "INNER JOIN museum_card_state "
+            "ON museum_card_state.d_card_datas_id = museum_card_ownership.d_card_datas_id "
             "ORDER BY card_detail.card_datas_id;";
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
             Log::ErrorFmt("[HttpMockBackend] sqlite prepare failed for card list: %s", sqlite3_errmsg(db));
@@ -714,14 +758,17 @@ namespace LinkuraLocal::HttpMock {
         int rc = SQLITE_ROW;
         while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
             const auto* responseJson = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-            auto parsed = nlohmann::json::parse(responseJson ? responseJson : "{}", nullptr, false);
-            if (!parsed.is_object() || !parsed.contains("user_card_data") ||
-                !parsed["user_card_data"].is_object()) {
+            auto parsed = ComposeOwnedCardResponse(
+                responseJson,
+                sqlite3_column_int(stmt, 1),
+                sqlite3_column_int(stmt, 2),
+                sqlite3_column_int(stmt, 3) != 0);
+            if (!parsed) {
                 Log::ErrorFmt("[HttpMockBackend] invalid card_detail response_json while building list");
                 sqlite3_finalize(stmt);
                 return std::nullopt;
             }
-            cards.push_back(std::move(parsed["user_card_data"]));
+            cards.push_back(std::move((*parsed)["user_card_data"]));
         }
         if (rc != SQLITE_DONE) {
             Log::ErrorFmt("[HttpMockBackend] sqlite card list step failed: %s", sqlite3_errmsg(db));
@@ -1010,9 +1057,13 @@ namespace LinkuraLocal::HttpMock {
 
         sqlite3_stmt* cardsStmt = nullptr;
         constexpr const char* cardsSql =
-            "SELECT card_detail.response_json FROM card_detail "
+            "SELECT card_detail.response_json, museum_card_state.style_level, "
+            "museum_card_state.limit_break_times, museum_card_state.is_evolve_max "
+            "FROM card_detail "
             "INNER JOIN museum_card_ownership "
             "ON museum_card_ownership.d_card_datas_id = card_detail.d_card_datas_id "
+            "INNER JOIN museum_card_state "
+            "ON museum_card_state.d_card_datas_id = museum_card_ownership.d_card_datas_id "
             "ORDER BY card_detail.card_datas_id;";
         if (sqlite3_prepare_v2(db, cardsSql, -1, &cardsStmt, nullptr) != SQLITE_OK || !cardsStmt) {
             if (cardsStmt) sqlite3_finalize(cardsStmt);
@@ -1022,12 +1073,16 @@ namespace LinkuraLocal::HttpMock {
         int cardRc = SQLITE_ROW;
         while ((cardRc = sqlite3_step(cardsStmt)) == SQLITE_ROW) {
             const auto* raw = reinterpret_cast<const char*>(sqlite3_column_text(cardsStmt, 0));
-            auto parsed = nlohmann::json::parse(raw ? raw : "{}", nullptr, false);
-            if (!parsed.is_object() || !parsed.contains("user_card_data")) {
+            auto parsed = ComposeOwnedCardResponse(
+                raw,
+                sqlite3_column_int(cardsStmt, 1),
+                sqlite3_column_int(cardsStmt, 2),
+                sqlite3_column_int(cardsStmt, 3) != 0);
+            if (!parsed) {
                 sqlite3_finalize(cardsStmt);
                 return std::nullopt;
             }
-            userCards.push_back(std::move(parsed["user_card_data"]));
+            userCards.push_back(std::move((*parsed)["user_card_data"]));
         }
         sqlite3_finalize(cardsStmt);
         if (cardRc != SQLITE_DONE) return std::nullopt;
