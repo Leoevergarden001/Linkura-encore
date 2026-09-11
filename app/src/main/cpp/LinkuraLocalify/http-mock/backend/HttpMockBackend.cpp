@@ -489,6 +489,16 @@ namespace LinkuraLocal::HttpMock {
     bool HttpMockBackend::Impl::EnsureMuseumCatalogLocked() {
         if (!db) return false;
 
+        const bool needsMusic = !TableHasAnyRows(db, "collection_music");
+        const bool needsSticker = !TableHasAnyRows(db, "collection_sticker");
+        const bool needsGallary = !TableHasAnyRows(db, "collection_gallary");
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return false;
+
+        auto rollback = [this]() {
+            ExecSql(db, "ROLLBACK;");
+            return false;
+        };
+
         // The imported card catalog remains immutable. Ownership is a player
         // concern and Museum mode initially grants one copy of every catalogued
         // card, preserving the old complete-collection behaviour without
@@ -498,28 +508,28 @@ namespace LinkuraLocal::HttpMock {
                      "(d_card_datas_id, acquired_at, acquisition_source) "
                      "SELECT d_card_datas_id, '2023-04-15T00:00:00Z', 'MUSEUM' "
                      "FROM card_detail;")) {
-            return false;
+            return rollback();
         }
 
-        if (!TableHasAnyRows(db, "collection_music") &&
+        if (needsMusic &&
             !InsertCollectionSeed(db, OfflineApiMockBuiltIn::CollectionGetMusicListJsonObj(),
                                   "music_info_list", "musics_id",
                                   "INSERT OR IGNORE INTO collection_music(musics_id, response_json) VALUES (?, ?);")) {
-            return false;
+            return rollback();
         }
-        if (!TableHasAnyRows(db, "collection_sticker") &&
+        if (needsSticker &&
             !InsertCollectionSeed(db, OfflineApiMockBuiltIn::CollectionGetStickerListJsonObj(),
                                   "sticker_info_list", "stickers_id",
                                   "INSERT OR IGNORE INTO collection_sticker(stickers_id, response_json) VALUES (?, ?);")) {
-            return false;
+            return rollback();
         }
-        if (!TableHasAnyRows(db, "collection_gallary") &&
+        if (needsGallary &&
             !InsertCollectionSeed(db, OfflineApiMockBuiltIn::CollectionGetGallaryListJsonObj(),
                                   "gallary_info_list", "comics_id",
                                   "INSERT OR IGNORE INTO collection_gallary(comics_id, response_json) VALUES (?, ?);")) {
-            return false;
+            return rollback();
         }
-        return true;
+        return ExecSql(db, "COMMIT;") || rollback();
     }
 
     bool HttpMockBackend::Impl::EnsureQuestSessionSchemaLocked() {

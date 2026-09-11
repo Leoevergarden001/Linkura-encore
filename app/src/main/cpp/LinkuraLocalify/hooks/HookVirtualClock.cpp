@@ -45,7 +45,11 @@ namespace LinkuraLocal::HookVirtualClock {
         }
     }  // namespace
 
-    void Install(HookInstaller*) {
+    void Install(HookInstaller* hookInstaller) {
+        if (!hookInstaller) {
+            Log::Warn("[VirtualClock] hook installer is unavailable");
+            return;
+        }
         for (auto* assembly : UnityResolve::assembly) {
             if (!assembly) continue;
             auto* dateTime = assembly->Get("DateTime", "System");
