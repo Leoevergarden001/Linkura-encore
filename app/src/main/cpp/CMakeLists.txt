@@ -124,6 +124,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${OFFLINE_API_BUILTIN_
 file(GLOB_RECURSE HTTP_MOCK_SQL_BUILTIN_FILES CONFIGURE_DEPENDS
     "${HTTP_MOCK_SQL_BUILTIN_DIR}/schema/*.sql"
     "${HTTP_MOCK_SQL_BUILTIN_DIR}/seed/*.sql"
+    "${HTTP_MOCK_SQL_BUILTIN_DIR}/player-state/*.sql"
+    "${HTTP_MOCK_SQL_BUILTIN_DIR}/queries/*.sql"
 )
 
 add_custom_command(

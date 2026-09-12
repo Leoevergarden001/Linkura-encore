@@ -128,6 +128,29 @@ echo "Done. Review changes with: git diff --stat"
 
 ## 注意事项
 
+### Runtime player state
+
+`card_detail` / `item` / `collection_*` are imported catalog/bootstrap snapshots.
+Runtime quantities and ownership live in `museum_card_state`,
+`museum_item_inventory`, and `museum_*_ownership`; list/detail/Home responses
+compose these sources instead of trusting stale player fields in catalog JSON.
+
+`player-state/001_museum_bootstrap.sql` runs inside the catalog transaction and
+initializes each domain once, tracked by `museum_bootstrap_state`. Normal restart
+does not regrant removed ownership or overwrite saved quantities/progression.
+An explicit mock DB reset clears these markers and the corresponding state.
+The first migration preserves existing Card state while initializing the new
+Museum inventory/collection domains. It does not import a real account save or
+claim that the corresponding art/audio assets exist.
+
+The SQL under `queries/` is shared by Android and host regression tests. Run from
+the repository root:
+
+```bash
+python3 -W error::ResourceWarning -m unittest discover \
+  -s app/src/main/cpp/LinkuraLocalify/http-mock/backend/tools/tests -v
+```
+
 - `data/` 中的 `.json` 和 `.yaml` 文件被 `.gitignore` 排除
 - `archive_archive_details.json` 没有自动生成脚本，需要手动放入 `data/`
 - `item` 表的 `d_item_datas_id` 与 `builtin/user_items_get_list.json` 中的 `user_item_id` 使用相同 UUID 生成逻辑，保证一一对应

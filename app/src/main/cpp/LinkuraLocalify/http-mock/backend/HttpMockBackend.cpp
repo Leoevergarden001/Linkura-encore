@@ -143,8 +143,7 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetItemDetailByDItemIdLocked(std::string_view dItemDatasId);
         std::optional<MockStoredResponse> GetItemListResponseLocked();
         std::optional<MockStoredResponse> GetCollectionListResponseLocked(
-            std::string_view tableName,
-            std::string_view idColumn,
+            std::string_view querySql,
             std::string_view responseListKey
         );
         std::optional<MockStoredResponse> GetCharacterInfoByIdLocked(std::string_view characterId);
@@ -323,20 +322,6 @@ namespace LinkuraLocal::HttpMock {
             return hasRows;
         }
 
-        static std::optional<int64_t> ScalarCount(sqlite3* db, const char* sql) {
-            sqlite3_stmt* stmt = nullptr;
-            if (!db || sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
-                if (stmt) sqlite3_finalize(stmt);
-                return std::nullopt;
-            }
-            const int rc = sqlite3_step(stmt);
-            const auto value = rc == SQLITE_ROW
-                ? std::optional<int64_t>{sqlite3_column_int64(stmt, 0)}
-                : std::nullopt;
-            sqlite3_finalize(stmt);
-            return value;
-        }
-
         static bool InsertCollectionSeed(sqlite3* db,
                                          const nlohmann::json& source,
                                          std::string_view listKey,
@@ -461,8 +446,7 @@ namespace LinkuraLocal::HttpMock {
         if (hasPendingReset) {
             Log::InfoFmt("[HttpMockBackend] pending reset command found, re-seeding");
             ExecSql(db, "DELETE FROM archive_detail;");
-            ExecSql(db, "DELETE FROM museum_card_state;");
-            ExecSql(db, "DELETE FROM museum_card_ownership;");
+            ExecSql(db, HttpMockBackendBuiltInSql::QueriesResetMuseumStateSqlView.data());
             ExecSql(db, "DELETE FROM card_detail;");
             ExecSql(db, "DELETE FROM collection_music;");
             ExecSql(db, "DELETE FROM collection_sticker;");
@@ -519,25 +503,6 @@ namespace LinkuraLocal::HttpMock {
             return false;
         };
 
-        // The imported card catalog remains immutable. Ownership is a player
-        // concern and Museum mode initially grants one copy of every catalogued
-        // card, preserving the old complete-collection behaviour without
-        // conflating it with card metadata.
-        if (!ExecSql(db,
-                     "INSERT OR IGNORE INTO museum_card_ownership "
-                     "(d_card_datas_id, acquired_at, acquisition_source) "
-                     "SELECT d_card_datas_id, '2023-04-15T00:00:00Z', 'MUSEUM' "
-                     "FROM card_detail;")) {
-            return rollback();
-        }
-        if (!ExecSql(db,
-                     "INSERT OR IGNORE INTO museum_card_state "
-                     "(d_card_datas_id, style_level, limit_break_times, is_evolve_max) "
-                     "SELECT d_card_datas_id, style_level, limit_break_times, is_evolve_max "
-                     "FROM card_detail;")) {
-            return rollback();
-        }
-
         if (needsMusic &&
             !InsertCollectionSeed(db, OfflineApiMockBuiltIn::CollectionGetMusicListJsonObj(),
                                   "music_info_list", "musics_id",
@@ -554,6 +519,9 @@ namespace LinkuraLocal::HttpMock {
             !InsertCollectionSeed(db, OfflineApiMockBuiltIn::CollectionGetGallaryListJsonObj(),
                                   "gallary_info_list", "comics_id",
                                   "INSERT OR IGNORE INTO collection_gallary(comics_id, response_json) VALUES (?, ?);")) {
+            return rollback();
+        }
+        if (!ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::PlayerStateScripts, "player-state")) {
             return rollback();
         }
         return ExecSql(db, "COMMIT;") || rollback();
@@ -611,7 +579,10 @@ namespace LinkuraLocal::HttpMock {
             return false;
         }
 
-        if (!ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM museum_card_state;") || !ExecSql(db, "DELETE FROM museum_card_ownership;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM collection_music;") || !ExecSql(db, "DELETE FROM collection_sticker;") || !ExecSql(db, "DELETE FROM collection_gallary;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
+        if (!ExecSql(db, HttpMockBackendBuiltInSql::QueriesResetMuseumStateSqlView.data())) {
+            return false;
+        }
+        if (!ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
             return false;
         }
 
@@ -794,23 +765,21 @@ namespace LinkuraLocal::HttpMock {
         auto profile = result.value("profile_info", nlohmann::json::object());
         if (!profile.is_object()) profile = nlohmann::json::object();
 
-        const auto cardCount = ScalarCount(db, "SELECT COUNT(*) FROM museum_card_ownership;");
-        const auto musicCount = ScalarCount(db, "SELECT COUNT(*) FROM collection_music;");
-        const auto stickerCount = ScalarCount(db, "SELECT COUNT(*) FROM collection_sticker;");
-        const auto gallaryCount = ScalarCount(db, "SELECT COUNT(*) FROM collection_gallary;");
-        const auto stageCount = ScalarCount(db, "SELECT COUNT(*) FROM quest_stage;");
-        if (!cardCount || !musicCount || !stickerCount || !gallaryCount || !stageCount) {
-            Log::Error("[HttpMockBackend] home state count query failed");
+        sqlite3_stmt* counts = nullptr;
+        if (sqlite3_prepare_v2(db, HttpMockBackendBuiltInSql::QueriesHomeCountsSqlView.data(),
+                              -1, &counts, nullptr) != SQLITE_OK || !counts) {
+            if (counts) sqlite3_finalize(counts);
+            Log::Error("[HttpMockBackend] home state count prepare failed");
             return std::nullopt;
         }
-        profile["card_num"] = *cardCount;
-        profile["music_num"] = *musicCount;
-        profile["music_max_num"] = *musicCount;
-        profile["sticker_num"] = *stickerCount;
-        // `gallary_num` is absent in older DTOs but accepted by 5.1.0 and makes
-        // the offline profile self-describing for later Collection screens.
-        profile["gallary_num"] = *gallaryCount;
-        profile["standard_live_max_num"] = *stageCount;
+        if (sqlite3_step(counts) != SQLITE_ROW) {
+            sqlite3_finalize(counts);
+            return std::nullopt;
+        }
+        for (int index = 0; index < sqlite3_column_count(counts); ++index) {
+            profile[sqlite3_column_name(counts, index)] = sqlite3_column_int64(counts, index);
+        }
+        sqlite3_finalize(counts);
         result["profile_info"] = std::move(profile);
 
         // No plan source has been fabricated.  The empty value is now a real
@@ -830,15 +799,13 @@ namespace LinkuraLocal::HttpMock {
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetCollectionListResponseLocked(
-            std::string_view tableName,
-            std::string_view idColumn,
+            std::string_view querySql,
             std::string_view responseListKey) {
         if (!initialized && !EnsureReadyLocked()) return std::nullopt;
         if (!db) return std::nullopt;
 
-        // Callers pass only compile-time table/column names, never request data.
-        const std::string sql = "SELECT response_json FROM " + std::string(tableName) +
-                                " ORDER BY " + std::string(idColumn) + ";";
+        // Callers pass only embedded SQL, never request-controlled SQL text.
+        const std::string sql(querySql);
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
             if (stmt) sqlite3_finalize(stmt);
@@ -854,6 +821,17 @@ namespace LinkuraLocal::HttpMock {
                 sqlite3_finalize(stmt);
                 Log::Error("[HttpMockBackend] invalid collection catalog JSON");
                 return std::nullopt;
+            }
+            if (responseListKey == "music_info_list") {
+                parsed["is_mastery"] = sqlite3_column_int(stmt, 1) != 0;
+                parsed["play_count"] = sqlite3_column_int64(stmt, 2);
+                const auto* latest = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+                parsed["latest_play_time"] = latest ? latest : "0001-01-01T00:00:00Z";
+            } else if (responseListKey == "sticker_info_list") {
+                parsed["is_owned"] = sqlite3_column_int(stmt, 1) != 0;
+                parsed["requirement_progress"] = sqlite3_column_int64(stmt, 2);
+                parsed["variant_requirement_progress"] = sqlite3_column_int64(stmt, 3);
+                parsed["is_available_variant"] = sqlite3_column_int(stmt, 4) != 0;
             }
             values.push_back(std::move(parsed));
         }
@@ -874,10 +852,7 @@ namespace LinkuraLocal::HttpMock {
         }
 
         sqlite3_stmt* stmt = nullptr;
-        constexpr const char* sql =
-            "SELECT response_json "
-            "FROM item "
-            "WHERE d_item_datas_id = ?;";
+        const char* sql = HttpMockBackendBuiltInSql::QueriesItemDetailSqlView.data();
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
             Log::ErrorFmt("[HttpMockBackend] sqlite prepare failed for item query: %s", sqlite3_errmsg(db));
             if (stmt) sqlite3_finalize(stmt);
@@ -897,8 +872,14 @@ namespace LinkuraLocal::HttpMock {
         }
 
         const auto* responseJson = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        auto result = nlohmann::json::parse(responseJson ? responseJson : "{}", nullptr, false);
+        if (!result.is_object()) {
+            sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+        result["item_num"] = sqlite3_column_int64(stmt, 1);
         MockStoredResponse response;
-        response.body = responseJson ? responseJson : "{}";
+        response.body = result.dump();
         sqlite3_finalize(stmt);
         return response;
     }
@@ -912,9 +893,7 @@ namespace LinkuraLocal::HttpMock {
         }
 
         sqlite3_stmt* stmt = nullptr;
-        constexpr const char* sql =
-            "SELECT d_item_datas_id, item_id, item_type, item_category, rarity, "
-            "item_num, resource_file_name FROM item ORDER BY item_category, item_id;";
+        const char* sql = HttpMockBackendBuiltInSql::QueriesItemListSqlView.data();
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
             Log::ErrorFmt("[HttpMockBackend] sqlite prepare failed for item list: %s", sqlite3_errmsg(db));
             if (stmt) sqlite3_finalize(stmt);
@@ -1680,6 +1659,23 @@ namespace LinkuraLocal::HttpMock {
                 ExecSql(db, "ROLLBACK;");
                 return std::nullopt;
             }
+        }
+
+        // Collection history is player state and must be committed with the
+        // score/session, not left at the built-in JSON's never-played defaults.
+        sqlite3_stmt* collectionUpdate = nullptr;
+        if (sqlite3_prepare_v2(db, HttpMockBackendBuiltInSql::QueriesRhythmCollectionFinishSqlView.data(),
+                              -1, &collectionUpdate, nullptr) != SQLITE_OK || !collectionUpdate) {
+            if (collectionUpdate) sqlite3_finalize(collectionUpdate);
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        const bool collectionUpdated = sqlite3_bind_int(collectionUpdate, 1, musicId) == SQLITE_OK &&
+                                       sqlite3_step(collectionUpdate) == SQLITE_DONE;
+        sqlite3_finalize(collectionUpdate);
+        if (!collectionUpdated) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
         }
 
         const int64_t totalClearAfter = totalClearBefore + 1;
@@ -4036,6 +4032,7 @@ namespace LinkuraLocal::HttpMock {
         }
 
         bool ok = ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SchemaScripts, "schema") &&
+                  ExecSql(db, HttpMockBackendBuiltInSql::QueriesResetMuseumStateSqlView.data()) &&
                   ExecSql(db, "DELETE FROM archive_detail;") &&
                   ExecSql(db, "DELETE FROM card_detail;") &&
                   ExecSql(db, "DELETE FROM character_info;") &&
@@ -4208,21 +4205,21 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GetCollectionMusicListResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetCollectionListResponseLocked(
-            "collection_music", "musics_id", "music_info_list"
+            HttpMockBackendBuiltInSql::QueriesCollectionMusicSqlView, "music_info_list"
         );
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GetCollectionStickerListResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetCollectionListResponseLocked(
-            "collection_sticker", "stickers_id", "sticker_info_list"
+            HttpMockBackendBuiltInSql::QueriesCollectionStickerSqlView, "sticker_info_list"
         );
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GetCollectionGallaryListResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetCollectionListResponseLocked(
-            "collection_gallary", "comics_id", "gallary_info_list"
+            HttpMockBackendBuiltInSql::QueriesCollectionGallarySqlView, "gallary_info_list"
         );
     }
 
