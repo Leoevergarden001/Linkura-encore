@@ -20,6 +20,8 @@ namespace LinkuraLocal::HookDebug {
         Il2cppUtils::FieldInfo* homeInitializeStateField = nullptr;
         Il2cppUtils::FieldInfo* homePrepareStateField = nullptr;
         std::atomic<bool> pendingOfflineLoadingCoverRelease{false};
+        std::atomic<bool> pendingOfflineFooterTransitionRelease{false};
+        std::atomic<uint64_t> sceneChangeGeneration{0};
 
         void LogOfflineSceneState(const char* event, void* sceneChanger) {
             if (!Config::enableOfflineApiMock || !sceneChanger) return;
@@ -28,7 +30,20 @@ namespace LinkuraLocal::HookDebug {
             if (!field || field->static_field || !field->type || field->type->name != "System.Boolean") return;
             bool transitioning = false;
             std::memcpy(&transitioning, static_cast<const char*>(sceneChanger) + field->offset, sizeof(transitioning));
-            Log::InfoFmt("[HomeFlow] %s IsInTransition=%d", event, transitioning);
+            auto* controllerField = klass->Get<UnityResolve::Field>("_currentSceneController");
+            void* controller = nullptr;
+            if (controllerField && !controllerField->static_field) {
+                std::memcpy(&controller, static_cast<const char*>(sceneChanger) + controllerField->offset,
+                            sizeof(controller));
+            }
+            const char* controllerName = "<null>";
+            if (controller) {
+                const auto* object = static_cast<const Il2cppUtils::Il2CppObject*>(controller);
+                const auto* controllerClass = static_cast<const Il2cppUtils::Il2CppClassHead*>(object->klass);
+                if (controllerClass && controllerClass->name) controllerName = controllerClass->name;
+            }
+            Log::InfoFmt("[HomeFlow] %s IsInTransition=%d controller=%s(%p)",
+                         event, transitioning, controllerName, controller);
         }
 
         std::vector<void*> FindAllObjects(UnityResolve::Class* klass) {
@@ -51,6 +66,44 @@ namespace LinkuraLocal::HookDebug {
                 if (all) objects = all->ToVector();
             }
             return objects;
+        }
+
+        std::string GetGameObjectHierarchyPath(UnityResolve::UnityType::GameObject* gameObject) {
+            if (!gameObject) return "<null>";
+            std::vector<std::string> names;
+            auto* transform = gameObject->GetTransform();
+            for (size_t depth = 0; transform && depth < 12; ++depth) {
+                auto* current = transform->GetGameObject();
+                if (current) names.emplace_back(current->GetName());
+                transform = transform->GetParent();
+            }
+            std::string path;
+            for (auto it = names.rbegin(); it != names.rend(); ++it) {
+                if (!path.empty()) path += '/';
+                path += *it;
+            }
+            return path;
+        }
+
+        void DismissOfflineTutorialOverlay() {
+            auto* canvasClass = Il2cppUtils::GetClass(
+                    "UnityEngine.UIModule.dll", "UnityEngine", "Canvas");
+            if (!canvasClass) canvasClass = Il2cppUtils::GetClass(
+                    "UnityEngine.CoreModule.dll", "UnityEngine", "Canvas");
+            if (!canvasClass) return;
+            size_t dismissed = 0;
+            for (auto* instance : FindAllObjects(canvasClass)) {
+                auto* canvas = reinterpret_cast<UnityResolve::UnityType::Component*>(instance);
+                auto* gameObject = canvas ? canvas->GetGameObject() : nullptr;
+                if (!gameObject || !gameObject->GetActiveInHierarchy()) continue;
+                const auto path = GetGameObjectHierarchyPath(gameObject);
+                if (path.find("TutorialManager(Clone)") == std::string::npos) continue;
+                Log::InfoFmt("[TutorialFlow] dismissing offline tutorial overlay path=%s",
+                             path.c_str());
+                Il2cppUtils::il2cpp_SetGameObjectActive(gameObject, false);
+                ++dismissed;
+            }
+            Log::InfoFmt("[TutorialFlow] dismissed offline tutorial overlays=%zu", dismissed);
         }
 
         void ReleaseOfflineLoadingCover() {
@@ -78,6 +131,31 @@ namespace LinkuraLocal::HookDebug {
                 ++released;
             }
             Log::InfoFmt("[HomeFlow] released offline loading cover managers=%zu", released);
+        }
+
+        void ReleaseOfflineCapturedTransitionFrame() {
+            auto* graphicClass = Il2cppUtils::GetClass(
+                    "UnityEngine.UI.dll", "UnityEngine.UI", "Graphic");
+            if (!graphicClass) return;
+            size_t released = 0;
+            for (auto* instance : FindAllObjects(graphicClass)) {
+                auto* graphic = reinterpret_cast<UnityResolve::UnityType::Component*>(instance);
+                auto* gameObject = graphic ? graphic->GetGameObject() : nullptr;
+                if (!gameObject || !gameObject->GetActiveInHierarchy()) continue;
+                const auto path = GetGameObjectHierarchyPath(gameObject);
+                if (path.find("/CanvasFade/Capture/") == std::string::npos) continue;
+                auto* transform = gameObject->GetTransform();
+                for (size_t depth = 0; transform && depth < 12; ++depth) {
+                    auto* current = transform->GetGameObject();
+                    if (current && current->GetName() == "Capture") {
+                        Il2cppUtils::il2cpp_SetGameObjectActive(current, false);
+                        ++released;
+                        break;
+                    }
+                    transform = transform->GetParent();
+                }
+            }
+            Log::InfoFmt("[RenderFlow] released captured transition frames=%zu", released);
         }
 
         int ReadAsyncState(void* stateMachine, Il2cppUtils::FieldInfo* field) {
@@ -373,6 +451,7 @@ namespace LinkuraLocal::HookDebug {
             void* beforeSceneParam, void* afterSceneParam,
             bool flag1, bool flag2, bool flag3, void* method)) {
         preservedSceneChanger = self;
+        sceneChangeGeneration.fetch_add(1, std::memory_order_relaxed);
         LogOfflineSceneState("ChangeScene entry", self);
         if (Config::enableOfflineApiMock) {
             Log::InfoFmt("[HomeFlow] ChangeScene enter sceneId=%d flags=%d,%d,%d", sceneId, flag1, flag2, flag3);
@@ -390,12 +469,11 @@ namespace LinkuraLocal::HookDebug {
         SceneChanger_set_IsInTransition_Orig(self, value, method);
     }
 
-    // The title login flow normally owns the final transition-state reset.
-    // Preservation's offline replacement begins the same Home scene change
-    // only after that retired flow has already returned, so it must perform
-    // the corresponding reset once (and only once) after the original Home
-    // state machine itself has reached its successful terminal state.
-    void CompleteOfflineHomeTransition(void* sceneChanger) {
+    // The normal online bootstrap completes the transition after the scene
+    // state machine terminates. Offline entry and footer navigation both
+    // bypass that callback, so they must perform the matching release only
+    // after the original state machine has reached its terminal state.
+    void CompleteOfflineTransition(void* sceneChanger, const char* event) {
         if (!sceneChanger || !SceneChanger_set_IsInTransition_Orig
                 || !sceneChangerSetIsInTransitionMethod) {
             Log::Warn("[HomeFlow] cannot complete offline scene transition: setter unavailable");
@@ -403,13 +481,21 @@ namespace LinkuraLocal::HookDebug {
         }
         SceneChanger_set_IsInTransition_Orig(
                 sceneChanger, false, sceneChangerSetIsInTransitionMethod);
-        LogOfflineSceneState("offline Home transition completed", sceneChanger);
+        LogOfflineSceneState(event, sceneChanger);
     }
 
     DEFINE_HOOK(void, CommonFooter_OnClickMenuButtonMoveSceneId,
                 (void* self, int sceneId, void* method)) {
+        const auto generationBefore = sceneChangeGeneration.load(std::memory_order_relaxed);
         if (Config::enableOfflineApiMock) Log::InfoFmt("[HomeFlow] menu navigation enter sceneId=%d", sceneId);
         CommonFooter_OnClickMenuButtonMoveSceneId_Orig(self, sceneId, method);
+        if (Config::enableOfflineApiMock
+                && sceneChangeGeneration.load(std::memory_order_relaxed) != generationBefore) {
+            // The footer dispatched a real scene change. Its online completion
+            // callback is not reached in offline mode, so remember to release
+            // the transition when that exact state machine terminates.
+            pendingOfflineFooterTransitionRelease.store(true, std::memory_order_release);
+        }
         if (Config::enableOfflineApiMock) Log::InfoFmt("[HomeFlow] menu navigation return sceneId=%d", sceneId);
     }
 
@@ -482,11 +568,25 @@ namespace LinkuraLocal::HookDebug {
             Log::InfoFmt("[HomeFlow] SceneChange sequence return state=%d", stateAfter);
             LogOfflineSceneState("SceneChange sequence return", preservedSceneChanger);
         }
-        if (stateAfter == -2 && pendingOfflineLoadingCoverRelease.exchange(
-                false, std::memory_order_acq_rel)) {
-            LogOfflineSceneState("offline Home sequence terminal", preservedSceneChanger);
-            CompleteOfflineHomeTransition(preservedSceneChanger);
-            ReleaseOfflineLoadingCover();
+        if (stateAfter == -2) {
+            if (pendingOfflineLoadingCoverRelease.exchange(false, std::memory_order_acq_rel)) {
+                LogOfflineSceneState("offline Home sequence terminal", preservedSceneChanger);
+                CompleteOfflineTransition(preservedSceneChanger, "offline Home transition completed");
+                ReleaseOfflineLoadingCover();
+                ReleaseOfflineCapturedTransitionFrame();
+                // The online bootstrap supplies tutorial progress and closes
+                // this global overlay.  The offline mock deliberately has no
+                // network tutorial service, so leaving it active keeps a
+                // previously rendered Home frame above every later scene.
+                DismissOfflineTutorialOverlay();
+            } else if (pendingOfflineFooterTransitionRelease.exchange(
+                    false, std::memory_order_acq_rel)) {
+                LogOfflineSceneState("offline footer sequence terminal", preservedSceneChanger);
+                DismissOfflineTutorialOverlay();
+                ReleaseOfflineCapturedTransitionFrame();
+                CompleteOfflineTransition(
+                        preservedSceneChanger, "offline footer transition completed");
+            }
         }
     }
 
@@ -1212,6 +1312,7 @@ namespace LinkuraLocal::HookDebug {
         } else {
             Log::Warn("[HomeFlow] HomeSceneController class is unavailable");
         }
+
         ADD_HOOK(TitleSceneController_OnClickFirstScreen, Il2cppUtils::GetMethodPointer(
                 "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "OnClickFirstScreen"));
         ADD_HOOK(TitleSceneController_OnClickMenuButton, Il2cppUtils::GetMethodPointer(
