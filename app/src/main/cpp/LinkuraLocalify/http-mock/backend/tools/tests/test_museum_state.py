@@ -47,6 +47,15 @@ def seed_fixture(db: sqlite3.Connection) -> None:
 
 
 class MuseumStateTests(unittest.TestCase):
+    def test_museum_tutorial_contract_is_complete_and_templates_agree(self) -> None:
+        login = json.loads((BUILTIN / "user_login.json").read_text())
+        home = json.loads((BUILTIN / "home_get_home.json").read_text())
+        template = json.loads((BACKEND / "tools/template/home_get_home.json").read_text())
+        self.assertFalse(login["is_tutorial"])
+        self.assertTrue(all(row["is_complete"] for row in login["tutorials_status_list"]))
+        self.assertTrue(home["is_finish_tutorial"])
+        self.assertEqual(home["is_finish_tutorial"], template["is_finish_tutorial"])
+
     def setUp(self) -> None:
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row

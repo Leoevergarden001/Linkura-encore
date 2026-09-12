@@ -18,6 +18,16 @@ namespace LinkuraLocal::HookDebug {
         Il2cppUtils::FieldInfo* sceneChangerStateField = nullptr;
         std::atomic<bool> pendingOfflineLoadingCoverRelease{false};
 
+        void LogOfflineSceneState(const char* event, void* sceneChanger) {
+            if (!Config::enableOfflineApiMock || !sceneChanger) return;
+            auto* klass = Il2cppUtils::GetClass("Assembly-CSharp.dll", "", "SceneChanger");
+            auto* field = klass ? klass->Get<UnityResolve::Field>("<IsInTransition>k__BackingField") : nullptr;
+            if (!field || field->static_field || !field->type || field->type->name != "System.Boolean") return;
+            bool transitioning = false;
+            std::memcpy(&transitioning, static_cast<const char*>(sceneChanger) + field->offset, sizeof(transitioning));
+            Log::InfoFmt("[HomeFlow] %s IsInTransition=%d", event, transitioning);
+        }
+
         std::vector<void*> FindAllObjects(UnityResolve::Class* klass) {
             if (!klass) return {};
 
@@ -360,8 +370,40 @@ namespace LinkuraLocal::HookDebug {
             void* beforeSceneParam, void* afterSceneParam,
             bool flag1, bool flag2, bool flag3, void* method)) {
         preservedSceneChanger = self;
+        LogOfflineSceneState("ChangeScene entry", self);
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[HomeFlow] ChangeScene enter sceneId=%d flags=%d,%d,%d", sceneId, flag1, flag2, flag3);
+        }
         SceneChanger_ChangeScene_Orig(self, sceneId, beforeSceneParam, afterSceneParam,
                                       flag1, flag2, flag3, method);
+        if (Config::enableOfflineApiMock) Log::InfoFmt("[HomeFlow] ChangeScene return sceneId=%d", sceneId);
+        LogOfflineSceneState("ChangeScene exit", self);
+    }
+
+    DEFINE_HOOK(void, CommonFooter_OnClickMenuButtonMoveSceneId,
+                (void* self, int sceneId, void* method)) {
+        if (Config::enableOfflineApiMock) Log::InfoFmt("[HomeFlow] menu navigation enter sceneId=%d", sceneId);
+        CommonFooter_OnClickMenuButtonMoveSceneId_Orig(self, sceneId, method);
+        if (Config::enableOfflineApiMock) Log::InfoFmt("[HomeFlow] menu navigation return sceneId=%d", sceneId);
+    }
+
+    DEFINE_HOOK(void, HomeCalendar_SetData, (void* self, void* plans, void* method)) {
+        if (Config::enableOfflineApiMock) Log::InfoFmt("[HomeFlow] HomeCalendar.SetData enter plans=%p", plans);
+        HomeCalendar_SetData_Orig(self, plans, method);
+        if (Config::enableOfflineApiMock) Log::Info("[HomeFlow] HomeCalendar.SetData return");
+    }
+
+    DEFINE_HOOK(void, UniTaskBuilder_SetException, (void* self, void* exception, void* method)) {
+        // Awaited UniTask faults need not pass through Unity's Debug logger.
+        // Forward unchanged; this diagnostic must not turn failures into success.
+        if (Config::enableOfflineApiMock && exception) {
+            auto* toString = Il2cppUtils::GetMethod("mscorlib.dll", "System", "Exception", "ToString");
+            if (toString) {
+                auto* message = toString->Invoke<Il2cppString*>(exception);
+                if (message) Log::LogUnityLog(ANDROID_LOG_ERROR, "[HomeFlow] UniTask fault:\n%s", message->ToString().c_str());
+            }
+        }
+        UniTaskBuilder_SetException_Orig(self, exception, method);
     }
 
     bool ChangeSceneForOfflineLogin(int sceneId) {
@@ -408,6 +450,7 @@ namespace LinkuraLocal::HookDebug {
         const auto stateAfter = ReadAsyncState(self, sceneChangerStateField);
         if (stateAfter == -2 && pendingOfflineLoadingCoverRelease.exchange(
                 false, std::memory_order_acq_rel)) {
+            LogOfflineSceneState("offline Home sequence terminal", preservedSceneChanger);
             ReleaseOfflineLoadingCover();
         }
     }
@@ -1090,6 +1133,86 @@ namespace LinkuraLocal::HookDebug {
                                 "TitleSceneController");
             dumpRelevantMethods(assemblyCSharp->Get("SceneChanger", ""), "SceneChanger");
             dumpRelevantMethods(assemblyCSharp->Get("SceneChanger", "Tecotec"), "SceneChanger");
+        }
+
+        // Read the real client's contract before binding additional hooks.
+        // Only type metadata is logged: no player values or account credentials.
+        if (Config::enableOfflineApiMock && assemblyCSharp) {
+            // lazyInit populates only explicitly requested classes. Iterating
+            // Assembly.classes here silently misses the menu and DTO classes.
+            const std::pair<const char*, const char*> contractTypes[] = {
+                    {"SceneChanger", ""}, {"Plan", "Org.OpenAPITools.Model"},
+                    {"HomeGetHomeResponse", "Org.OpenAPITools.Model"},
+                    {"CommonFooter", "Tecotec"}, {"HomeMenu", "Tecotec"},
+                    {"HomeMenuCommonIcons", "Tecotec"},
+                    {"HomeSceneController", "Tecotec"},
+                    {"HomeCalendar", "Tecotec"}, {"CalendarData", "Tecotec"}};
+            for (const auto& [name, namespaze] : contractTypes) {
+                auto* klass = assemblyCSharp->Get(name, namespaze);
+                if (!klass) {
+                    Log::InfoFmt("[ClientContract] unavailable=%s.%s", namespaze, name);
+                    continue;
+                }
+                Log::InfoFmt("[ClientContract] class=%s.%s", klass->namespaze.c_str(), klass->name.c_str());
+                for (auto* field : klass->fields) {
+                    if (!field) continue;
+                    Log::InfoFmt("[ClientContract] %s field=%s type=%s offset=%d static=%d",
+                                 klass->name.c_str(), field->name.c_str(),
+                                 field->type ? field->type->name.c_str() : "?",
+                                 field->offset, field->static_field);
+                }
+                for (auto* method : klass->methods) {
+                    if (!method) continue;
+                    std::string args;
+                    for (auto* arg : method->args) {
+                        if (!args.empty()) args += ",";
+                        args += arg && arg->pType ? arg->pType->name : "?";
+                        args += " ";
+                        args += arg ? arg->name : "?";
+                    }
+                    Log::InfoFmt("[ClientContract] %s method=%s args=(%s) return=%s",
+                                 klass->name.c_str(), method->name.c_str(), args.c_str(),
+                                 method->return_type ? method->return_type->name.c_str() : "?");
+                }
+            }
+            // Signatures confirmed from the 5.1.0 ClientContract trace. Do not
+            // use Class.Get<Method>'s name-only fallback for these ABI bindings.
+            const auto exactVoidMethod = [&](const char* className, const char* methodName,
+                                              const char* argumentType) -> void* {
+                auto* klass = assemblyCSharp->Get(className, "Tecotec");
+                if (!klass) return nullptr;
+                for (auto* candidate : klass->methods) {
+                    if (candidate && !candidate->static_function && candidate->name == methodName
+                            && candidate->return_type && candidate->return_type->name == "System.Void"
+                            && candidate->args.size() == 1 && candidate->args[0]
+                            && candidate->args[0]->pType
+                            && candidate->args[0]->pType->name == argumentType) return candidate->function;
+                }
+                return nullptr;
+            };
+            if (auto* pointer = exactVoidMethod("CommonFooter", "OnClickMenuButtonMoveSceneId", "SceneDefine.SceneId")) {
+                ADD_HOOK(CommonFooter_OnClickMenuButtonMoveSceneId, pointer);
+            }
+            if (auto* pointer = exactVoidMethod("HomeCalendar", "SetData", "System.Collections.Generic.List<Org.OpenAPITools.Model.Plan>")) {
+                ADD_HOOK(HomeCalendar_SetData, pointer);
+            }
+            auto* uniTaskAssembly = UnityResolve::Get("UniTask.dll");
+            auto* builder = uniTaskAssembly ? uniTaskAssembly->Get(
+                    "AsyncUniTaskMethodBuilder", "Cysharp.Threading.Tasks.CompilerServices") : nullptr;
+            if (builder) {
+                for (auto* candidate : builder->methods) {
+                    if (candidate && !candidate->static_function && candidate->name == "SetException"
+                            && candidate->return_type && candidate->return_type->name == "System.Void"
+                            && candidate->args.size() == 1 && candidate->args[0]
+                            && candidate->args[0]->pType
+                            && candidate->args[0]->pType->name == "System.Exception") {
+                        ADD_HOOK(UniTaskBuilder_SetException, candidate->function);
+                        break;
+                    }
+                }
+            } else {
+                Log::Info("[ClientContract] UniTask builder unavailable; fault diagnostic not bound");
+            }
         }
 
         auto sceneManagerAssembly = UnityResolve::Get("UnityEngine.CoreModule.dll");

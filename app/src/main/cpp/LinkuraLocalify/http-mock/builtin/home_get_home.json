@@ -1,7 +1,7 @@
 {
   "plan_list": [],
   "is_login_bonus": false,
-  "is_finish_tutorial": false,
+  "is_finish_tutorial": true,
   "is_first_home": false,
   "membership_update_confirm_list": [],
   "membership_pending_list": [],
