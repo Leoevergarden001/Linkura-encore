@@ -15,7 +15,10 @@ namespace LinkuraLocal::HookDebug {
     namespace {
         void* preservedSceneChanger = nullptr;
         Il2cppUtils::MethodInfo* sceneChangerChangeSceneMethod = nullptr;
+        Il2cppUtils::MethodInfo* sceneChangerSetIsInTransitionMethod = nullptr;
         Il2cppUtils::FieldInfo* sceneChangerStateField = nullptr;
+        Il2cppUtils::FieldInfo* homeInitializeStateField = nullptr;
+        Il2cppUtils::FieldInfo* homePrepareStateField = nullptr;
         std::atomic<bool> pendingOfflineLoadingCoverRelease{false};
 
         void LogOfflineSceneState(const char* event, void* sceneChanger) {
@@ -380,6 +383,29 @@ namespace LinkuraLocal::HookDebug {
         LogOfflineSceneState("ChangeScene exit", self);
     }
 
+    DEFINE_HOOK(void, SceneChanger_set_IsInTransition, (void* self, bool value, void* method)) {
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[HomeFlow] SceneChanger.set_IsInTransition value=%d", value);
+        }
+        SceneChanger_set_IsInTransition_Orig(self, value, method);
+    }
+
+    // The title login flow normally owns the final transition-state reset.
+    // Preservation's offline replacement begins the same Home scene change
+    // only after that retired flow has already returned, so it must perform
+    // the corresponding reset once (and only once) after the original Home
+    // state machine itself has reached its successful terminal state.
+    void CompleteOfflineHomeTransition(void* sceneChanger) {
+        if (!sceneChanger || !SceneChanger_set_IsInTransition_Orig
+                || !sceneChangerSetIsInTransitionMethod) {
+            Log::Warn("[HomeFlow] cannot complete offline scene transition: setter unavailable");
+            return;
+        }
+        SceneChanger_set_IsInTransition_Orig(
+                sceneChanger, false, sceneChangerSetIsInTransitionMethod);
+        LogOfflineSceneState("offline Home transition completed", sceneChanger);
+    }
+
     DEFINE_HOOK(void, CommonFooter_OnClickMenuButtonMoveSceneId,
                 (void* self, int sceneId, void* method)) {
         if (Config::enableOfflineApiMock) Log::InfoFmt("[HomeFlow] menu navigation enter sceneId=%d", sceneId);
@@ -446,12 +472,58 @@ namespace LinkuraLocal::HookDebug {
     }
 
     DEFINE_HOOK(void, SceneChanger_ChangeSceneSequenceAsync_MoveNext, (void* self, void* method)) {
+        const auto stateBefore = ReadAsyncState(self, sceneChangerStateField);
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[HomeFlow] SceneChange sequence enter state=%d", stateBefore);
+        }
         SceneChanger_ChangeSceneSequenceAsync_MoveNext_Orig(self, method);
         const auto stateAfter = ReadAsyncState(self, sceneChangerStateField);
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[HomeFlow] SceneChange sequence return state=%d", stateAfter);
+            LogOfflineSceneState("SceneChange sequence return", preservedSceneChanger);
+        }
         if (stateAfter == -2 && pendingOfflineLoadingCoverRelease.exchange(
                 false, std::memory_order_acq_rel)) {
             LogOfflineSceneState("offline Home sequence terminal", preservedSceneChanger);
+            CompleteOfflineHomeTransition(preservedSceneChanger);
             ReleaseOfflineLoadingCover();
+        }
+    }
+
+    DEFINE_HOOK(void*, SceneChanger_AddSceneViewAsync, (void* self, int sceneId,
+            void* sceneParam, bool isAdditive, void* cancellationToken, void* method)) {
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[HomeFlow] AddSceneViewAsync enter sceneId=%d additive=%d", sceneId, isAdditive);
+        }
+        auto result = SceneChanger_AddSceneViewAsync_Orig(self, sceneId, sceneParam, isAdditive,
+                                                           cancellationToken, method);
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[HomeFlow] AddSceneViewAsync return sceneId=%d task=%p", sceneId, result);
+        }
+        return result;
+    }
+
+    DEFINE_HOOK(void, HomeSceneController_InitializeSceneAsync_MoveNext, (void* self, void* method)) {
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[HomeFlow] Home.InitializeSceneAsync enter state=%d",
+                         ReadAsyncState(self, homeInitializeStateField));
+        }
+        HomeSceneController_InitializeSceneAsync_MoveNext_Orig(self, method);
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[HomeFlow] Home.InitializeSceneAsync return state=%d",
+                         ReadAsyncState(self, homeInitializeStateField));
+        }
+    }
+
+    DEFINE_HOOK(void, HomeSceneController_PrepareChangeSceneAsync_MoveNext, (void* self, void* method)) {
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[HomeFlow] Home.PrepareChangeSceneAsync enter state=%d",
+                         ReadAsyncState(self, homePrepareStateField));
+        }
+        HomeSceneController_PrepareChangeSceneAsync_MoveNext_Orig(self, method);
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[HomeFlow] Home.PrepareChangeSceneAsync return state=%d",
+                         ReadAsyncState(self, homePrepareStateField));
         }
     }
 
@@ -1058,6 +1130,11 @@ namespace LinkuraLocal::HookDebug {
             sceneChangerChangeSceneMethod = changeScene;
             ADD_HOOK(SceneChanger_ChangeScene,
                      changeScene ? reinterpret_cast<void*>(changeScene->methodPointer) : nullptr);
+            auto setIsInTransition = Il2cppUtils::GetMethodIl2cpp(
+                    sceneChangerClass, "set_IsInTransition", 1);
+            sceneChangerSetIsInTransitionMethod = setIsInTransition;
+            ADD_HOOK(SceneChanger_set_IsInTransition,
+                     setIsInTransition ? reinterpret_cast<void*>(setIsInTransition->methodPointer) : nullptr);
             auto changeSceneStateMachine = Il2cppUtils::find_nested_class(
                     sceneChangerClass, [](void* nestedClass) {
                         const auto name = static_cast<Il2cppUtils::Il2CppClassHead*>(nestedClass)->name;
@@ -1074,6 +1151,9 @@ namespace LinkuraLocal::HookDebug {
                      changeSceneMoveNext
                              ? reinterpret_cast<void*>(changeSceneMoveNext->methodPointer)
                              : nullptr);
+            auto addSceneView = Il2cppUtils::GetMethodIl2cpp(sceneChangerClass, "AddSceneViewAsync", 4);
+            ADD_HOOK(SceneChanger_AddSceneViewAsync,
+                     addSceneView ? reinterpret_cast<void*>(addSceneView->methodPointer) : nullptr);
         } else {
             Log::Error("[LoginFlow] unable to resolve SceneChanger class");
         }
@@ -1094,6 +1174,43 @@ namespace LinkuraLocal::HookDebug {
             } else {
                 Log::Warn("[LoginFlow] unable to resolve TitleSceneController.InitializeSceneAsync.MoveNext");
             }
+        }
+
+        auto homeSceneControllerClass = Il2cppUtils::GetClassIl2cpp(
+                "Assembly-CSharp.dll", "Tecotec", "HomeSceneController");
+        if (homeSceneControllerClass) {
+            const auto findHomeAsyncStateMachine = [&](std::string_view methodName) {
+                return Il2cppUtils::find_nested_class(
+                        homeSceneControllerClass, [methodName](void* nestedClass) {
+                            const auto name = static_cast<Il2cppUtils::Il2CppClassHead*>(nestedClass)->name;
+                            return name && std::string_view(name).starts_with(
+                                    std::string("<") + std::string(methodName) + ">d__");
+                        });
+            };
+            auto homeInitializeStateMachine = findHomeAsyncStateMachine("InitializeSceneAsync");
+            auto homeInitializeMoveNext = Il2cppUtils::GetMethodIl2cpp(
+                    homeInitializeStateMachine, "MoveNext", 0);
+            homeInitializeStateField = homeInitializeStateMachine
+                    ? Il2cppUtils::il2cpp_class_get_field_from_name(
+                            homeInitializeStateMachine, "<>1__state") : nullptr;
+            ADD_HOOK(HomeSceneController_InitializeSceneAsync_MoveNext,
+                     homeInitializeMoveNext ? homeInitializeMoveNext->methodPointer : 0);
+            if (!homeInitializeMoveNext || !homeInitializeStateField) {
+                Log::Warn("[HomeFlow] unable to bind Home.InitializeSceneAsync state machine");
+            }
+
+            auto homePrepareStateMachine = findHomeAsyncStateMachine("PrepareChangeSceneAsync");
+            auto homePrepareMoveNext = Il2cppUtils::GetMethodIl2cpp(homePrepareStateMachine, "MoveNext", 0);
+            homePrepareStateField = homePrepareStateMachine
+                    ? Il2cppUtils::il2cpp_class_get_field_from_name(
+                            homePrepareStateMachine, "<>1__state") : nullptr;
+            ADD_HOOK(HomeSceneController_PrepareChangeSceneAsync_MoveNext,
+                     homePrepareMoveNext ? homePrepareMoveNext->methodPointer : 0);
+            if (!homePrepareMoveNext || !homePrepareStateField) {
+                Log::Warn("[HomeFlow] unable to bind Home.PrepareChangeSceneAsync state machine");
+            }
+        } else {
+            Log::Warn("[HomeFlow] HomeSceneController class is unavailable");
         }
         ADD_HOOK(TitleSceneController_OnClickFirstScreen, Il2cppUtils::GetMethodPointer(
                 "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "OnClickFirstScreen"));
