@@ -19,6 +19,9 @@ namespace LinkuraLocal::HookDebug {
         Il2cppUtils::FieldInfo* sceneChangerStateField = nullptr;
         Il2cppUtils::FieldInfo* homeInitializeStateField = nullptr;
         Il2cppUtils::FieldInfo* homePrepareStateField = nullptr;
+        Il2cppUtils::FieldInfo* gachaExecuteStateField = nullptr;
+        thread_local bool inGachaExecute = false;
+        uintptr_t gachaIl2cppBase = 0;
         std::atomic<bool> pendingOfflineLoadingCoverRelease{false};
         std::atomic<bool> pendingOfflineFooterTransitionRelease{false};
         std::atomic<uint64_t> sceneChangeGeneration{0};
@@ -516,6 +519,86 @@ namespace LinkuraLocal::HookDebug {
             }
         }
         UniTaskBuilder_SetException_Orig(self, exception, method);
+    }
+
+    DEFINE_HOOK(void, GachaSceneController_SetPhase,
+                (void* self, int phase, void* info, void* result, void* pack, void* method)) {
+        Log::InfoFmt("[GachaFlow] SetPhase phase=%d info=%p result=%p pack=%p", phase, info, result, pack);
+        GachaSceneController_SetPhase_Orig(self, phase, info, result, pack, method);
+    }
+
+    DEFINE_HOOK(void, GachaSceneController_OnGachaAsync_MoveNext, (void* self, void* method)) {
+        Log::InfoFmt("[GachaFlow] OnGachaAsync.MoveNext enter self=%p", self);
+        GachaSceneController_OnGachaAsync_MoveNext_Orig(self, method);
+        Log::InfoFmt("[GachaFlow] OnGachaAsync.MoveNext return self=%p", self);
+    }
+
+    DEFINE_HOOK(void, GachaSceneController_OnGachaExecute_MoveNext, (void* self, void* method)) {
+        Log::InfoFmt("[GachaFlow] OnGachaExecute.MoveNext enter state=%d self=%p", ReadAsyncState(self, gachaExecuteStateField), self);
+        inGachaExecute = true;
+        GachaSceneController_OnGachaExecute_MoveNext_Orig(self, method);
+        inGachaExecute = false;
+        Log::InfoFmt("[GachaFlow] OnGachaExecute.MoveNext return state=%d self=%p", ReadAsyncState(self, gachaExecuteStateField), self);
+    }
+
+    DEFINE_HOOK(bool, GachaApiResult_get_Success, (void* self, void* method)) {
+        const bool success = GachaApiResult_get_Success_Orig(self, method);
+        if (inGachaExecute) Log::InfoFmt("[GachaFlow] API result success=%d object=%p", success, self);
+        if (!success && self) {
+            void* exception = nullptr;
+            std::memcpy(&exception, static_cast<const char*>(self) + 0x18, sizeof(exception));
+            if (exception) {
+                auto* toString = Il2cppUtils::GetMethod("mscorlib.dll", "System", "Exception", "ToString");
+                auto* message = toString ? toString->Invoke<Il2cppString*>(exception) : nullptr;
+                if (message) Log::LogUnityLog(ANDROID_LOG_ERROR, "[GachaFlow] API result fault:\n%s", message->ToString().c_str());
+            }
+        }
+        return success;
+    }
+
+    DEFINE_HOOK(void, GachaNullReferenceRaise, ()) {
+        if (inGachaExecute && gachaIl2cppBase) {
+            const auto caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+            Log::ErrorFmt("[GachaFlow] null reference callsite offset=0x%lx", static_cast<unsigned long>(caller - gachaIl2cppBase - 4));
+        }
+        GachaNullReferenceRaise_Orig();
+    }
+
+    DEFINE_HOOK(void, UniTaskVoidBuilder_SetException, (void* self, void* exception, void* method)) {
+        if (exception) {
+            auto* toString = Il2cppUtils::GetMethod("mscorlib.dll", "System", "Exception", "ToString");
+            if (toString) {
+                auto* message = toString->Invoke<Il2cppString*>(exception);
+                if (message) Log::LogUnityLog(ANDROID_LOG_ERROR, "[GachaFlow] UniTaskVoid fault:\n%s", message->ToString().c_str());
+            }
+        }
+        UniTaskVoidBuilder_SetException_Orig(self, exception, method);
+    }
+
+    DEFINE_HOOK(void, AsyncVoidBuilder_SetException, (void* self, void* exception, void* method)) {
+        if (inGachaExecute && exception) {
+            auto* toString = Il2cppUtils::GetMethod("mscorlib.dll", "System", "Exception", "ToString");
+            auto* message = toString ? toString->Invoke<Il2cppString*>(exception) : nullptr;
+            if (message) Log::LogUnityLog(ANDROID_LOG_ERROR, "[GachaFlow] AsyncVoid fault:\n%s", message->ToString().c_str());
+        }
+        AsyncVoidBuilder_SetException_Orig(self, exception, method);
+    }
+
+    DEFINE_HOOK(void, GachaSceneController_StartGachaAnimationAsync_MoveNext, (void* self, void* method)) {
+        Log::InfoFmt("[GachaFlow] StartGachaAnimationAsync.MoveNext enter self=%p", self);
+        GachaSceneController_StartGachaAnimationAsync_MoveNext_Orig(self, method);
+        Log::InfoFmt("[GachaFlow] StartGachaAnimationAsync.MoveNext return self=%p", self);
+    }
+
+    DEFINE_HOOK(void, GachaSceneController_EndGachaAnimationAsync_MoveNext, (void* self, void* method)) {
+        Log::InfoFmt("[GachaFlow] EndGachaAnimationAsync.MoveNext enter self=%p", self);
+        GachaSceneController_EndGachaAnimationAsync_MoveNext_Orig(self, method);
+        Log::InfoFmt("[GachaFlow] EndGachaAnimationAsync.MoveNext return self=%p", self);
+    }
+
+    DEFINE_HOOK(void, GachaResultNewUI_InitUI, (void* self, void* info, int execType, void* result, void* method)) {
+        Log::InfoFmt("[GachaFlow] Result.InitUI execType=%d info=%p result=%p", execType, info, result);
+        GachaResultNewUI_InitUI_Orig(self, info, execType, result, method);
     }
 
     bool ChangeSceneForOfflineLogin(int sceneId) {
@@ -1313,6 +1396,80 @@ namespace LinkuraLocal::HookDebug {
             Log::Warn("[HomeFlow] HomeSceneController class is unavailable");
         }
 
+        if (Config::enableOfflineApiMock) {
+            auto* gacha = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Tecotec", "GachaSceneController");
+            if (gacha) {
+                auto* phase = Il2cppUtils::GetMethodIl2cpp(gacha, "SetPhase", 4);
+                ADD_HOOK(GachaSceneController_SetPhase, phase ? phase->methodPointer : 0);
+                const auto findAsync = [&](std::string_view methodName) {
+                    auto* nested = Il2cppUtils::find_nested_class(gacha, [methodName](void* nestedClass) {
+                        const auto* name = static_cast<Il2cppUtils::Il2CppClassHead*>(nestedClass)->name;
+                        return name && std::string_view(name).starts_with(std::string("<") + std::string(methodName) + ">d__");
+                    });
+                    return nested ? Il2cppUtils::GetMethodIl2cpp(nested, "MoveNext", 0) : nullptr;
+                };
+                auto* onGacha = findAsync("OnGachaAsync");
+                auto* executeNested = Il2cppUtils::find_nested_class(gacha, [](void* nestedClass) {
+                    const auto* name = static_cast<Il2cppUtils::Il2CppClassHead*>(nestedClass)->name;
+                    return name && std::string_view(name).starts_with("<OnGachaExecute>d__");
+                });
+                auto* execute = executeNested ? Il2cppUtils::GetMethodIl2cpp(executeNested, "MoveNext", 0) : nullptr;
+                gachaExecuteStateField = executeNested ? Il2cppUtils::il2cpp_class_get_field_from_name(executeNested, "<>1__state") : nullptr;
+                if (execute && execute->methodPointer) {
+                    // 5.1.0: OnGachaExecute.MoveNext tests this shared API-result
+                    // getter. Verify its four instructions before binding.
+                    const uintptr_t getter = execute->methodPointer + 0x5e4e394 - 0x4bd02f8;
+                    const uint32_t expected[] = {0xf9400c08, 0xf100011f, 0x1a9f17e0, 0xd65f03c0};
+                    if (std::memcmp(reinterpret_cast<void*>(getter), expected, sizeof(expected)) == 0) {
+                        ADD_HOOK(GachaApiResult_get_Success, getter);
+                        gachaIl2cppBase = execute->methodPointer - 0x4bd02f8;
+                        const uintptr_t raiseNull = gachaIl2cppBase + 0x3de3308;
+                        const uint32_t expectedRaise[] = {0xf81f0ffe, 0x9400f110};
+                        if (std::memcmp(reinterpret_cast<void*>(raiseNull), expectedRaise, sizeof(expectedRaise)) == 0) {
+                            ADD_HOOK(GachaNullReferenceRaise, raiseNull);
+                        }
+                    } else {
+                        Log::Warn("[GachaFlow] API result getter did not match 5.1.0; diagnostic disabled");
+                    }
+                }
+                if (executeNested) {
+                    auto* metadata = Il2cppUtils::ToUnityResolveClass(executeNested);
+                    for (auto* field : metadata->fields) if (field && field->type) {
+                        Log::InfoFmt("[GachaFlow] ExecuteState field=%s type=%s offset=%d", field->name.c_str(), field->type->name.c_str(), field->offset);
+                    }
+                }
+                auto* start = findAsync("StartGachaAnimationAsync");
+                auto* end = findAsync("EndGachaAnimationAsync");
+                ADD_HOOK(GachaSceneController_OnGachaAsync_MoveNext, onGacha ? onGacha->methodPointer : 0);
+                ADD_HOOK(GachaSceneController_OnGachaExecute_MoveNext, execute ? execute->methodPointer : 0);
+                ADD_HOOK(GachaSceneController_StartGachaAnimationAsync_MoveNext, start ? start->methodPointer : 0);
+                ADD_HOOK(GachaSceneController_EndGachaAnimationAsync_MoveNext, end ? end->methodPointer : 0);
+            }
+            auto* resultUI = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Tecotec", "GachaResultNewUI");
+            auto* init = resultUI ? Il2cppUtils::GetMethodIl2cpp(resultUI, "InitUI", 3) : nullptr;
+            ADD_HOOK(GachaResultNewUI_InitUI, init ? init->methodPointer : 0);
+            auto* uniTask = UnityResolve::Get("UniTask.dll");
+            auto* voidBuilder = uniTask ? uniTask->Get("AsyncUniTaskVoidMethodBuilder", "Cysharp.Threading.Tasks.CompilerServices") : nullptr;
+            if (voidBuilder) for (auto* candidate : voidBuilder->methods) {
+                if (candidate && !candidate->static_function && candidate->name == "SetException"
+                        && candidate->args.size() == 1 && candidate->args[0] && candidate->args[0]->pType
+                        && candidate->args[0]->pType->name == "System.Exception") {
+                    ADD_HOOK(UniTaskVoidBuilder_SetException, candidate->function);
+                    break;
+                }
+            }
+            auto* corlib = UnityResolve::Get("mscorlib.dll");
+            auto* asyncVoid = corlib ? corlib->Get("AsyncVoidMethodBuilder", "System.Runtime.CompilerServices") : nullptr;
+            if (asyncVoid) for (auto* candidate : asyncVoid->methods) {
+                if (candidate && !candidate->static_function && candidate->name == "SetException"
+                        && candidate->args.size() == 1 && candidate->args[0] && candidate->args[0]->pType
+                        && candidate->args[0]->pType->name == "System.Exception") {
+                    ADD_HOOK(AsyncVoidBuilder_SetException, candidate->function);
+                    break;
+                }
+            }
+        }
+
         ADD_HOOK(TitleSceneController_OnClickFirstScreen, Il2cppUtils::GetMethodPointer(
                 "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "OnClickFirstScreen"));
         ADD_HOOK(TitleSceneController_OnClickMenuButton, Il2cppUtils::GetMethodPointer(
@@ -1364,7 +1521,11 @@ namespace LinkuraLocal::HookDebug {
                     {"CommonFooter", "Tecotec"}, {"HomeMenu", "Tecotec"},
                     {"HomeMenuCommonIcons", "Tecotec"},
                     {"HomeSceneController", "Tecotec"},
-                    {"HomeCalendar", "Tecotec"}, {"CalendarData", "Tecotec"}};
+                    {"HomeCalendar", "Tecotec"}, {"CalendarData", "Tecotec"},
+                    {"GachaSceneController", "*"}, {"GachaSceneView", "*"},
+                    {"GachaScenePresenter", "*"}, {"GachaAnimation", "*"},
+                    {"GachaResultNewUI", "*"}, {"GachaResult", "Org.OpenAPITools.Model"},
+                    {"GachaSetPurchaseResponse", "Org.OpenAPITools.Model"}};
             for (const auto& [name, namespaze] : contractTypes) {
                 auto* klass = assemblyCSharp->Get(name, namespaze);
                 if (!klass) {
