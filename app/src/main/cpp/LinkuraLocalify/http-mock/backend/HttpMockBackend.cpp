@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -27,12 +28,24 @@ namespace LinkuraLocal::HttpMock {
             int exchangePointId;
             std::vector<int> cards;
         };
-        // Featured cards from the 5.1.0 GachaSeries and CardSeries masters.
-        // The official probability tables have not been recovered.
+        // Featured cards from the 5.1.0 GachaSeries/CardSeries masters.
+        //
+        // Gacha responses carry the base CardDatas record (the final digit is
+        // 0), not the fully evolved museum-card record (final digit 4).  The
+        // original animation resolves CardCoordinates and
+        // CardGetMovieSettings by that base ID.  Returning the evolved ID can
+        // still render a detail fallback, but it leaves animation metadata
+        // null and makes consecutive draws fault before SetPhase.
+        //
+        // Two featured 94 records lack a CardGetMovieSettings record in the
+        // preserved 5.1 cache.  Museum mode uses the matching 95 record for
+        // that character instead, so every offline result has a recoverable
+        // animation path.  This is a local preservation catalog, not a claim
+        // about the retired server's original odds table.
         static const std::array<MuseumGachaSeries, 3> kMuseumGachaSeries{{
-            {1055003, 105503, {19415014, 19425014, 19434014, 19315024, 19525014}},
-            {1055002, 105502, {19215024, 19235014, 19425024, 19515014}},
-            {1055001, 105501, {19215014, 19225014, 19234014, 19315014, 19335014}},
+            {1055003, 105503, {19415010, 19425010, 19435010, 19315020, 19525010}},
+            {1055002, 105502, {19215020, 19235010, 19425020, 19515010}},
+            {1055001, 105501, {19215010, 19225010, 19235010, 19315010, 19335010}},
         }};
         static const MuseumGachaSeries* FindMuseumGachaSeries(int id) {
             for (const auto& series : kMuseumGachaSeries) if (series.id == id) return &series;
@@ -151,6 +164,8 @@ namespace LinkuraLocal::HttpMock {
 
         bool EnsureReadyLocked();
         bool EnsureMuseumCatalogLocked();
+        bool EnsureMuseumGachaCardsLocked();
+        std::vector<int> GetOwnedMuseumGachaCardsLocked(const MuseumGachaSeries& series);
         bool EnsureQuestSessionSchemaLocked();
         bool ResetLocked();
         bool RebuildLocked();
@@ -563,10 +578,121 @@ namespace LinkuraLocal::HttpMock {
                                   "INSERT OR IGNORE INTO collection_gallary(comics_id, response_json) VALUES (?, ?);")) {
             return rollback();
         }
+        if (!EnsureMuseumGachaCardsLocked()) {
+            return rollback();
+        }
         if (!ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::PlayerStateScripts, "player-state")) {
             return rollback();
         }
         return ExecSql(db, "COMMIT;") || rollback();
+    }
+
+    bool HttpMockBackend::Impl::EnsureMuseumGachaCardsLocked() {
+        if (!db) return false;
+
+        // The checked-in Museum seed contains fully developed CardDatas rows
+        // for Collection.  Gacha must instead hand the original client the
+        // base records, which have different MasterData animation bindings.
+        // Clone the verified DTO shape from the matching developed row once;
+        // only player-owned state is later written by the purchase transaction.
+        constexpr const char* sourceSql =
+            "SELECT response_json FROM card_detail WHERE card_datas_id=? LIMIT 1;";
+        constexpr const char* insertSql =
+            "INSERT OR IGNORE INTO card_detail ("
+            "d_card_datas_id,response_json,card_datas_id,card_name,style_level,max_style_level,"
+            "limit_break_times,max_limit_break_times,card_parameters,skill_list,character_id,"
+            "generations_id,series_type,card_sort_order,character_bonus,is_evolve_possible,"
+            "is_evolve_max,member_fan_level,is_limit_break,is_style_level_up,rhythm_game_skill_list"
+            ") SELECT ?,?, ?,card_name,1,max_style_level,0,max_limit_break_times,card_parameters,"
+            "skill_list,character_id,generations_id,series_type,card_sort_order,character_bonus,"
+            "1,0,member_fan_level,0,0,rhythm_game_skill_list "
+            "FROM card_detail WHERE card_datas_id=?;";
+
+        sqlite3_stmt* source = nullptr;
+        sqlite3_stmt* insert = nullptr;
+        if (sqlite3_prepare_v2(db, sourceSql, -1, &source, nullptr) != SQLITE_OK ||
+            sqlite3_prepare_v2(db, insertSql, -1, &insert, nullptr) != SQLITE_OK) {
+            if (source) sqlite3_finalize(source);
+            if (insert) sqlite3_finalize(insert);
+            Log::ErrorFmt("[HttpMockBackend] gacha base-card catalog prepare failed: %s",
+                          sqlite3_errmsg(db));
+            return false;
+        }
+
+        for (const auto& series : kMuseumGachaSeries) {
+            for (const int cardId : series.cards) {
+                const int sourceCardId = cardId + 4;
+                sqlite3_reset(source);
+                sqlite3_clear_bindings(source);
+                sqlite3_bind_int(source, 1, sourceCardId);
+                if (sqlite3_step(source) != SQLITE_ROW) {
+                    Log::ErrorFmt("[HttpMockBackend] gacha base card %d lacks Museum source %d",
+                                  cardId, sourceCardId);
+                    sqlite3_finalize(source);
+                    sqlite3_finalize(insert);
+                    return false;
+                }
+                const auto* raw = reinterpret_cast<const char*>(sqlite3_column_text(source, 0));
+                auto dto = nlohmann::json::parse(raw ? raw : "{}", nullptr, false);
+                if (!dto.is_object() || !dto.contains("user_card_data") ||
+                    !dto["user_card_data"].is_object()) {
+                    Log::ErrorFmt("[HttpMockBackend] gacha source card %d has invalid DTO", sourceCardId);
+                    sqlite3_finalize(source);
+                    sqlite3_finalize(insert);
+                    return false;
+                }
+
+                char dCardId[37]{};
+                std::snprintf(dCardId, sizeof(dCardId),
+                              "00000000-0000-0000-0000-%012d", cardId);
+                auto& card = dto["user_card_data"];
+                card["d_card_datas_id"] = dCardId;
+                card["card_datas_id"] = cardId;
+                card["style_level"] = 1;
+                card["limit_break_times"] = 0;
+                card["is_evolve_max"] = false;
+                card["is_limit_break"] = false;
+                card["is_style_level_up"] = false;
+
+                sqlite3_reset(insert);
+                sqlite3_clear_bindings(insert);
+                if (!BindText(insert, 1, dCardId) || !BindText(insert, 2, dto.dump()) ||
+                    sqlite3_bind_int(insert, 3, cardId) != SQLITE_OK ||
+                    sqlite3_bind_int(insert, 4, sourceCardId) != SQLITE_OK ||
+                    sqlite3_step(insert) != SQLITE_DONE) {
+                    Log::ErrorFmt("[HttpMockBackend] gacha base-card catalog insert failed: %s",
+                                  sqlite3_errmsg(db));
+                    sqlite3_finalize(source);
+                    sqlite3_finalize(insert);
+                    return false;
+                }
+            }
+        }
+        sqlite3_finalize(source);
+        sqlite3_finalize(insert);
+        return true;
+    }
+
+    std::vector<int> HttpMockBackend::Impl::GetOwnedMuseumGachaCardsLocked(
+            const MuseumGachaSeries& series) {
+        std::vector<int> cards;
+        if (!db) return cards;
+        sqlite3_stmt* stmt = nullptr;
+        constexpr const char* sql =
+            "SELECT 1 FROM card_detail INNER JOIN museum_card_ownership "
+            "USING(d_card_datas_id) WHERE card_datas_id=? LIMIT 1;";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            return cards;
+        }
+        for (const int cardId : series.cards) {
+            sqlite3_reset(stmt);
+            sqlite3_clear_bindings(stmt);
+            sqlite3_bind_int(stmt, 1, cardId);
+            if (sqlite3_step(stmt) == SQLITE_ROW) cards.push_back(cardId);
+        }
+        sqlite3_finalize(stmt);
+        return cards;
     }
 
     bool HttpMockBackend::Impl::EnsureQuestSessionSchemaLocked() {
@@ -920,6 +1046,7 @@ namespace LinkuraLocal::HttpMock {
             series["user_series_exec_count"] = seriesState->drawCount;
             series["is_single_enable"] = state->freeJewels + state->paidJewels >= 200;
             series["is_consective_enable"] = state->freeJewels + state->paidJewels >= 2000;
+            series["card_list"] = GetOwnedMuseumGachaCardsLocked(config);
             seriesList.push_back(std::move(series));
         }
         return MockStoredResponse{
@@ -982,6 +1109,7 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_stmt* card = nullptr;
         sqlite3_stmt* owned = nullptr;
         sqlite3_stmt* obtain = nullptr;
+        sqlite3_stmt* cardState = nullptr;
         if (sqlite3_prepare_v2(db, "SELECT d_card_datas_id FROM card_detail WHERE card_datas_id=? LIMIT 1;",
                                -1, &card, nullptr) != SQLITE_OK ||
             sqlite3_prepare_v2(db, "SELECT 1 FROM museum_card_ownership WHERE d_card_datas_id=?;",
@@ -989,10 +1117,15 @@ namespace LinkuraLocal::HttpMock {
             sqlite3_prepare_v2(db,
                 "INSERT OR IGNORE INTO museum_card_ownership "
                 "(d_card_datas_id, acquired_at, acquisition_source) VALUES (?, ?, 'GACHA');",
-                -1, &obtain, nullptr) != SQLITE_OK) {
+                -1, &obtain, nullptr) != SQLITE_OK ||
+            sqlite3_prepare_v2(db,
+                "INSERT OR IGNORE INTO museum_card_state "
+                "(d_card_datas_id, style_level, limit_break_times, is_evolve_max) VALUES (?, 1, 0, 0);",
+                -1, &cardState, nullptr) != SQLITE_OK) {
             if (card) sqlite3_finalize(card);
             if (owned) sqlite3_finalize(owned);
             if (obtain) sqlite3_finalize(obtain);
+            if (cardState) sqlite3_finalize(cardState);
             return rollback();
         }
         nlohmann::json results = nlohmann::json::array();
@@ -1014,6 +1147,10 @@ namespace LinkuraLocal::HttpMock {
             sqlite3_clear_bindings(obtain);
             valid = BindText(obtain, 1, dCardId) && BindText(obtain, 2, timeBuffer) &&
                     sqlite3_step(obtain) == SQLITE_DONE;
+            sqlite3_reset(cardState);
+            sqlite3_clear_bindings(cardState);
+            valid = valid && BindText(cardState, 1, dCardId) &&
+                    sqlite3_step(cardState) == SQLITE_DONE;
             results.push_back({
                 {"order_id", index + 1}, {"card_datas_id", cardId},
                 {"is_new", isNew}, {"coin_num", 0},
@@ -1023,6 +1160,7 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_finalize(card);
         sqlite3_finalize(owned);
         sqlite3_finalize(obtain);
+        sqlite3_finalize(cardState);
         if (!valid) return rollback();
 
         sqlite3_stmt* update = nullptr;
@@ -1120,6 +1258,7 @@ namespace LinkuraLocal::HttpMock {
                 item["user_series_exec_count"] = seriesState->drawCount;
                 item["is_single_enable"] = freeAfter + paidAfter >= 200;
                 item["is_consective_enable"] = freeAfter + paidAfter >= 2000;
+                item["card_list"] = GetOwnedMuseumGachaCardsLocked(config);
                 seriesList.push_back(std::move(item));
             }
             response["gacha_series_list"] = std::move(seriesList);
