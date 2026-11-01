@@ -4,6 +4,8 @@ DELETE FROM museum_item_inventory;
 DELETE FROM museum_music_ownership;
 DELETE FROM museum_sticker_ownership;
 DELETE FROM museum_gallary_ownership;
+DELETE FROM museum_gacha_history;
+DELETE FROM museum_gacha_state;
 DELETE FROM museum_bootstrap_state;
 DELETE FROM collection_music;
 DELETE FROM collection_sticker;

@@ -6,12 +6,14 @@
 #include "offline_api_mock_builtin.hpp"
 
 #include <algorithm>
+#include <array>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <random>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -138,6 +140,16 @@ namespace LinkuraLocal::HttpMock {
         bool RebuildLocked();
         std::optional<MockStoredResponse> GetArchiveDetailByIdLocked(std::string_view archivesId);
         std::optional<MockStoredResponse> GetHomeResponseLocked();
+        struct GachaState {
+            int64_t freeJewels = 0;
+            int64_t paidJewels = 0;
+            int64_t exchangePoint = 0;
+            int64_t drawCount = 0;
+        };
+        std::optional<GachaState> LoadGachaStateLocked();
+        std::optional<MockStoredResponse> GetGachaSeriesListResponseLocked();
+        std::optional<MockStoredResponse> GachaSetPurchaseLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> GetGachaHistoryResponseLocked();
         std::optional<MockStoredResponse> GetCardDetailByDCardIdLocked(std::string_view dCardDatasId);
         std::optional<MockStoredResponse> GetCardListResponseLocked();
         std::optional<MockStoredResponse> GetItemDetailByDItemIdLocked(std::string_view dItemDatasId);
@@ -249,6 +261,20 @@ namespace LinkuraLocal::HttpMock {
 
         static bool BindText(sqlite3_stmt* stmt, int index, std::string_view value) {
             return sqlite3_bind_text(stmt, index, value.data(), static_cast<int>(value.size()), SQLITE_TRANSIENT) == SQLITE_OK;
+        }
+
+        static std::string GachaHeaders(int64_t freeJewels, int64_t paidJewels) {
+            std::string headers(OfflineApiMockBuiltIn::DefaultHeadersView);
+            auto replace = [&headers](std::string_view original, std::string replacement) {
+                const auto pos = headers.find(original);
+                if (pos != std::string::npos) {
+                    headers.replace(pos, original.size(), replacement);
+                }
+            };
+            replace("jewel_free: 0", "jewel_free: " + std::to_string(freeJewels));
+            replace("jewel_paid_google: 999999", "jewel_paid_google: " + std::to_string(paidJewels));
+            replace("\"gacha_status\":0", "\"gacha_status\":1");
+            return headers;
         }
 
         static std::string GenerateUuid4() {
@@ -753,9 +779,58 @@ namespace LinkuraLocal::HttpMock {
         return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
     }
 
+    std::optional<HttpMockBackend::Impl::GachaState> HttpMockBackend::Impl::LoadGachaStateLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        if (!ExecSql(db,
+            "INSERT OR IGNORE INTO museum_gacha_state "
+            "(series_id, free_jewels, paid_jewels, exchange_point, draw_count) "
+            "VALUES (1055003, 0, 999999, 0, 0);")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        const bool initializedNow = sqlite3_changes(db) == 1;
+        if (initializedNow &&
+            (!ExecSql(db,
+                "UPDATE museum_item_inventory SET item_num=999999 WHERE d_item_datas_id="
+                "(SELECT d_item_datas_id FROM item WHERE item_id=1001001 LIMIT 1);") ||
+             !ExecSql(db,
+                "UPDATE museum_item_inventory SET item_num=0 WHERE d_item_datas_id="
+                "(SELECT d_item_datas_id FROM item WHERE item_id=1002001 LIMIT 1);"))) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        if (!ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT free_jewels, paid_jewels, exchange_point, draw_count "
+                "FROM museum_gacha_state WHERE series_id = 1055003;",
+                -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+        std::optional<GachaState> state;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            state = GachaState{
+                sqlite3_column_int64(stmt, 0),
+                sqlite3_column_int64(stmt, 1),
+                sqlite3_column_int64(stmt, 2),
+                sqlite3_column_int64(stmt, 3),
+            };
+        }
+        sqlite3_finalize(stmt);
+        return state;
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetHomeResponseLocked() {
         if (!initialized && !EnsureReadyLocked()) return std::nullopt;
         if (!db) return std::nullopt;
+        const auto gachaState = LoadGachaStateLocked();
+        if (!gachaState) return std::nullopt;
 
         // Keep only the DTO shape/default compatibility values in the checked-in
         // JSON. Every count below is derived from the same persistent catalog and
@@ -795,7 +870,234 @@ namespace LinkuraLocal::HttpMock {
             (*badge)["is_not_received_common_mission_reward"] = false;
             (*badge)["is_not_read_sticker_exchange_new_arrival"] = false;
         }
-        return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
+        return MockStoredResponse{
+            result.dump(), GachaHeaders(gachaState->freeJewels, gachaState->paidJewels),
+            200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetGachaSeriesListResponseLocked() {
+        const auto state = LoadGachaStateLocked();
+        if (!state) return std::nullopt;
+        auto response = OfflineApiMockBuiltIn::GachaGetSeriesListJsonObj();
+        if (!response.is_object() || !response.contains("gacha_series_list") ||
+            !response["gacha_series_list"].is_array() || response["gacha_series_list"].size() != 1) {
+            return std::nullopt;
+        }
+        auto& series = response["gacha_series_list"][0];
+        series["user_exchange_point_num"] = state->exchangePoint;
+        series["user_series_exec_count"] = state->drawCount;
+        series["is_single_enable"] = state->freeJewels + state->paidJewels >= 200;
+        series["is_consective_enable"] = state->freeJewels + state->paidJewels >= 2000;
+        return MockStoredResponse{
+            response.dump(), GachaHeaders(state->freeJewels, state->paidJewels),
+            200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GachaSetPurchaseLocked(
+            std::string_view payloadJson) {
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        if (!payload.is_object() || !payload.contains("gacha_series_id") ||
+            !payload["gacha_series_id"].is_number_integer() ||
+            payload["gacha_series_id"].get<int>() != 1055003 ||
+            !payload.contains("gacha_set_purchase_type") ||
+            !payload["gacha_set_purchase_type"].is_number_integer()) {
+            return MockStoredResponse{R"({"error":"unsupported offline gacha request"})", {},
+                                      400, "Unsupported offline gacha request"};
+        }
+        const int purchaseType = payload["gacha_set_purchase_type"].get<int>();
+        if (purchaseType != 1 && purchaseType != 2) {
+            return MockStoredResponse{R"({"error":"offline gacha supports single and ten draws"})", {},
+                                      400, "Unsupported offline gacha purchase type"};
+        }
+        const int drawCount = purchaseType == 1 ? 1 : 10;
+        const int price = drawCount * 200;
+        const auto state = LoadGachaStateLocked();
+        if (!state) return std::nullopt;
+        if (state->freeJewels + state->paidJewels < price) {
+            return MockStoredResponse{R"({"error":"insufficient local SIsCa"})",
+                                      GachaHeaders(state->freeJewels, state->paidJewels),
+                                      400, "Insufficient local SIsCa"};
+        }
+
+        // The restored Master has these five featured cards. Their original
+        // server-side probability table was not preserved; Museum mode draws
+        // uniformly from this explicit, locally available pool.
+        constexpr std::array<int, 5> cardIds{19415014, 19425014, 19434014, 19315024, 19525014};
+        static thread_local std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> choose(0, cardIds.size() - 1);
+        const auto spentFree = std::min<int64_t>(state->freeJewels, price);
+        const auto spentPaid = price - spentFree;
+        const auto freeAfter = state->freeJewels - spentFree;
+        const auto paidAfter = state->paidJewels - spentPaid;
+        const auto pointsAfter = state->exchangePoint + drawCount;
+
+        std::time_t now = std::time(nullptr);
+        std::tm utc{};
+#if defined(_WIN32)
+        gmtime_s(&utc, &now);
+#else
+        gmtime_r(&now, &utc);
+#endif
+        char timeBuffer[32]{};
+        std::strftime(timeBuffer, sizeof(timeBuffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
+
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        auto rollback = [this]() -> std::optional<MockStoredResponse> {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        };
+        sqlite3_stmt* card = nullptr;
+        sqlite3_stmt* owned = nullptr;
+        sqlite3_stmt* obtain = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT d_card_datas_id FROM card_detail WHERE card_datas_id=? LIMIT 1;",
+                               -1, &card, nullptr) != SQLITE_OK ||
+            sqlite3_prepare_v2(db, "SELECT 1 FROM museum_card_ownership WHERE d_card_datas_id=?;",
+                               -1, &owned, nullptr) != SQLITE_OK ||
+            sqlite3_prepare_v2(db,
+                "INSERT OR IGNORE INTO museum_card_ownership "
+                "(d_card_datas_id, acquired_at, acquisition_source) VALUES (?, ?, 'GACHA');",
+                -1, &obtain, nullptr) != SQLITE_OK) {
+            if (card) sqlite3_finalize(card);
+            if (owned) sqlite3_finalize(owned);
+            if (obtain) sqlite3_finalize(obtain);
+            return rollback();
+        }
+        nlohmann::json results = nlohmann::json::array();
+        bool valid = true;
+        for (int index = 0; index < drawCount && valid; ++index) {
+            const int cardId = cardIds[choose(rng)];
+            sqlite3_reset(card);
+            sqlite3_clear_bindings(card);
+            sqlite3_bind_int(card, 1, cardId);
+            if (sqlite3_step(card) != SQLITE_ROW) { valid = false; break; }
+            const auto* rawId = reinterpret_cast<const char*>(sqlite3_column_text(card, 0));
+            if (!rawId) { valid = false; break; }
+            const std::string dCardId(rawId);
+            sqlite3_reset(owned);
+            sqlite3_clear_bindings(owned);
+            BindText(owned, 1, dCardId);
+            const bool isNew = sqlite3_step(owned) != SQLITE_ROW;
+            sqlite3_reset(obtain);
+            sqlite3_clear_bindings(obtain);
+            valid = BindText(obtain, 1, dCardId) && BindText(obtain, 2, timeBuffer) &&
+                    sqlite3_step(obtain) == SQLITE_DONE;
+            results.push_back({
+                {"order_id", index + 1}, {"card_datas_id", cardId},
+                {"is_new", isNew}, {"coin_num", 0},
+                {"material_limitbreak_item_id", 0}, {"material_limitbreak_num", 0},
+            });
+        }
+        sqlite3_finalize(card);
+        sqlite3_finalize(owned);
+        sqlite3_finalize(obtain);
+        if (!valid) return rollback();
+
+        sqlite3_stmt* update = nullptr;
+        const char* updateSql =
+            "UPDATE museum_gacha_state SET free_jewels=?, paid_jewels=?, "
+            "exchange_point=?, draw_count=draw_count+? WHERE series_id=1055003;";
+        if (sqlite3_prepare_v2(db, updateSql, -1, &update, nullptr) != SQLITE_OK || !update) {
+            if (update) sqlite3_finalize(update);
+            return rollback();
+        }
+        sqlite3_bind_int64(update, 1, freeAfter);
+        sqlite3_bind_int64(update, 2, paidAfter);
+        sqlite3_bind_int64(update, 3, pointsAfter);
+        sqlite3_bind_int(update, 4, drawCount);
+        valid = sqlite3_step(update) == SQLITE_DONE && sqlite3_changes(db) == 1;
+        sqlite3_finalize(update);
+        if (!valid) return rollback();
+
+        sqlite3_stmt* mirror = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "UPDATE museum_item_inventory SET item_num=? WHERE d_item_datas_id="
+                "(SELECT d_item_datas_id FROM item WHERE item_id=? LIMIT 1);",
+                -1, &mirror, nullptr) != SQLITE_OK || !mirror) {
+            if (mirror) sqlite3_finalize(mirror);
+            return rollback();
+        }
+        for (const auto [itemId, quantity] :
+             {std::pair<int, int64_t>{1001001, paidAfter}, {1002001, freeAfter}}) {
+            sqlite3_reset(mirror);
+            sqlite3_clear_bindings(mirror);
+            sqlite3_bind_int64(mirror, 1, quantity);
+            sqlite3_bind_int(mirror, 2, itemId);
+            if (sqlite3_step(mirror) != SQLITE_DONE) valid = false;
+        }
+        sqlite3_finalize(mirror);
+        if (!valid) return rollback();
+
+        sqlite3_stmt* history = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT INTO museum_gacha_history "
+                "(series_id, drawn_at, price_type, price_num, results_json) VALUES (1055003, ?, 2, ?, ?);",
+                -1, &history, nullptr) != SQLITE_OK || !history) {
+            if (history) sqlite3_finalize(history);
+            return rollback();
+        }
+        const auto resultsText = results.dump();
+        valid = BindText(history, 1, timeBuffer) &&
+                sqlite3_bind_int(history, 2, price) == SQLITE_OK &&
+                BindText(history, 3, resultsText) && sqlite3_step(history) == SQLITE_DONE;
+        sqlite3_finalize(history);
+        if (!valid || !ExecSql(db, "COMMIT;")) return rollback();
+
+        nlohmann::json response;
+        response["gacha_result_list"] = std::move(results);
+        response["gacha_guarantee_point"] = {
+            {"exchange_point_id", 105503},
+            {"user_guarantee_point_num_before", state->exchangePoint},
+            {"user_guarantee_point_num_after", pointsAfter},
+        };
+        response["gacha_bonus_result_list"] = nlohmann::json::array();
+        response["user_single_ticket_num"] = 0;
+        response["user_consective_ticket_num"] = 0;
+        response["gacha_campaign_info_list"] = nlohmann::json::array();
+        response["gacha_series_list"] = nlohmann::json::array();
+        Log::InfoFmt("[HttpMockBackend] offline gacha purchase draws=%d points=%lld paid=%lld free=%lld",
+                     drawCount, static_cast<long long>(pointsAfter),
+                     static_cast<long long>(paidAfter), static_cast<long long>(freeAfter));
+        return MockStoredResponse{
+            response.dump(), GachaHeaders(freeAfter, paidAfter), 200, "OK (offline gacha)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetGachaHistoryResponseLocked() {
+        const auto state = LoadGachaStateLocked();
+        if (!state) return std::nullopt;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT drawn_at, price_type, price_num, results_json FROM museum_gacha_history "
+                "ORDER BY draw_id DESC LIMIT 100;", -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+        nlohmann::json list = nlohmann::json::array();
+        int rc = SQLITE_ROW;
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+            const auto* rawTime = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            const auto* rawResults = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+            const auto results = nlohmann::json::parse(rawResults ? rawResults : "[]", nullptr, false);
+            if (!results.is_array()) { sqlite3_finalize(stmt); return std::nullopt; }
+            nlohmann::json cards = nlohmann::json::array();
+            for (const auto& result : results) {
+                cards.push_back({
+                    {"order_id", result.value("order_id", 0)},
+                    {"card_datas_id", result.value("card_datas_id", 0)},
+                    {"gacha_bonus_result_history_list", nlohmann::json::array()},
+                });
+            }
+            list.push_back({
+                {"gacha_series_id", 1055003}, {"gacha_date_time", rawTime ? rawTime : ""},
+                {"gacha_price_type", sqlite3_column_int(stmt, 1)},
+                {"gacha_price_num", sqlite3_column_int(stmt, 2)},
+                {"gacha_result_history_info_list", std::move(cards)},
+            });
+        }
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE) return std::nullopt;
+        return MockStoredResponse{
+            nlohmann::json{{"gacha_result_history_list", std::move(list)}}.dump(),
+            GachaHeaders(state->freeJewels, state->paidJewels), 200, "OK (offline gacha)"};
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetCollectionListResponseLocked(
@@ -4132,6 +4434,21 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GetHomeResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetHomeResponseLocked();
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetGachaSeriesListResponse() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetGachaSeriesListResponseLocked();
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GachaSetPurchase(std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GachaSetPurchaseLocked(payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetGachaHistoryResponse() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetGachaHistoryResponseLocked();
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GetCardDetailByDCardId(std::string_view dCardDatasId) {

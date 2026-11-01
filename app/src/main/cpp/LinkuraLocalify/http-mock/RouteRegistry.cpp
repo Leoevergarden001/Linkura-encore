@@ -66,6 +66,21 @@ namespace LinkuraLocal::HttpMock {
             return ToBackendResponse(backend.GetHomeResponse());
         }
 
+        static std::optional<MockResponse> HandleGachaGetSeriesList(const MockRequestContext&,
+                                                                     HttpMockBackend& backend) {
+            return ToBackendResponse(backend.GetGachaSeriesListResponse());
+        }
+
+        static std::optional<MockResponse> HandleGachaSetPurchase(const MockRequestContext& request,
+                                                                   HttpMockBackend& backend) {
+            return ToBackendResponse(backend.GachaSetPurchase(request.payloadJson));
+        }
+
+        static std::optional<MockResponse> HandleGachaGetHistory(const MockRequestContext&,
+                                                                  HttpMockBackend& backend) {
+            return ToBackendResponse(backend.GetGachaHistoryResponse());
+        }
+
         static std::optional<MockResponse> HandleCollectionMusicList(const MockRequestContext&,
                                                                        HttpMockBackend& backend) {
             return ToBackendResponse(backend.GetCollectionMusicListResponse());
@@ -572,6 +587,9 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/user/login", HandleUserLogin);
             RegisterStaticJson(routes, "/v1/home/get_login_bonus", OfflineApiMockBuiltIn::HomeGetLoginBonusJsonView);
             RegisterBackend(routes, "/v1/home/get_home", HandleHomeGetHome);
+            RegisterBackend(routes, "/v1/gacha/get_series_list", HandleGachaGetSeriesList);
+            RegisterBackend(routes, "/v1/gacha/set_purchase", HandleGachaSetPurchase);
+            RegisterBackend(routes, "/v1/gacha/get_history", HandleGachaGetHistory);
             RegisterStaticJson(routes, "/v1/home/get_custom_setting", OfflineApiMockBuiltIn::GetCustomSettingJsonView);
             RegisterStaticJson(routes, "/v1/webview/school_idol_connect_post/get_theme_list", OfflineApiMockBuiltIn::WebviewSchoolIdolConnectPostGetThemeListJsonView);
             RegisterStaticJson(routes, "/v1/follow/live_chat_group_list", OfflineApiMockBuiltIn::FollowLiveChatGroupListJsonView);

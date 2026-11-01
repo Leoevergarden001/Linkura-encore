@@ -1,0 +1,28 @@
+{
+  "gacha_series_list": [
+    {
+      "gacha_series_id": 1055003,
+      "user_exchange_point_num": 0,
+      "user_series_exec_count": 0,
+      "received_gacha_prize_list": [],
+      "user_single_ticket_num": 0,
+      "user_consective_ticket_num": 0,
+      "is_single_enable": true,
+      "is_consective_enable": true,
+      "is_paid_enable": false,
+      "single_campaign_id": 0,
+      "consective_campaign_id": 0,
+      "remaining_single_campaign_count": 0,
+      "remaining_consective_campaign_count": 0,
+      "remaining_limited_gacha_count": 0,
+      "remaining_limited_consective_gacha_count": 0,
+      "remaining_limited_paid_gacha_count": 0,
+      "card_list": [],
+      "time_limit_gacha_end_time": null,
+      "remaining_rotation_count": 0
+    }
+  ],
+  "convert_exchange_point_list": [],
+  "select_ticket_series_list": [],
+  "expired_limited_gacha_ticket_id_confirm_list": []
+}
