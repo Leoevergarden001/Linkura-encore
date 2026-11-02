@@ -17,3 +17,21 @@ CREATE TABLE IF NOT EXISTS museum_gacha_history (
     price_num INTEGER NOT NULL,
     results_json TEXT NOT NULL
 );
+
+-- Museum bootstrap exposes cards in Collection. This table tracks whether a
+-- card has appeared in a local draw or exchange, so its first result can use
+-- the client's acquisition presentation without hiding the Collection.
+CREATE TABLE IF NOT EXISTS museum_gacha_acquisition (
+    card_datas_id INTEGER PRIMARY KEY,
+    first_acquired_at TEXT NOT NULL,
+    acquisition_source TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS museum_gacha_exchange_history (
+    exchange_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    series_id INTEGER NOT NULL,
+    exchange_point_rate_id INTEGER NOT NULL,
+    card_datas_id INTEGER NOT NULL,
+    point_cost INTEGER NOT NULL CHECK(point_cost > 0),
+    exchanged_at TEXT NOT NULL
+);

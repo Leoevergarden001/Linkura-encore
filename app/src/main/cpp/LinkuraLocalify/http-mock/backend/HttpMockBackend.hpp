@@ -27,6 +27,8 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetGachaSeriesListResponse();
         std::optional<MockStoredResponse> GachaSetPurchase(std::string_view payloadJson);
         std::optional<MockStoredResponse> GetGachaHistoryResponse();
+        std::optional<MockStoredResponse> GetGachaGuaranteePointList(std::string_view payloadJson);
+        std::optional<MockStoredResponse> GachaSetGuaranteePointExchange(std::string_view payloadJson);
         std::optional<MockStoredResponse> GetArchiveDetailById(std::string_view archivesId);
         std::optional<MockStoredResponse> LookupArchiveDetailFromPayload(std::string_view payloadJson,
                                                                          std::string_view fallbackArchiveId = {});

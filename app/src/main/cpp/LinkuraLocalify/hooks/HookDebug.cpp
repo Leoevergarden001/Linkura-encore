@@ -1557,7 +1557,13 @@ namespace LinkuraLocal::HookDebug {
                     {"GachaSceneController", "*"}, {"GachaSceneView", "*"},
                     {"GachaScenePresenter", "*"}, {"GachaAnimation", "*"},
                     {"GachaResultNewUI", "*"}, {"GachaResult", "Org.OpenAPITools.Model"},
-                    {"GachaSetPurchaseResponse", "Org.OpenAPITools.Model"}};
+                    {"GachaSetPurchaseResponse", "Org.OpenAPITools.Model"},
+                    {"GachaGetGuaranteePointListRequest", "Org.OpenAPITools.Model"},
+                    {"GachaGetGuaranteePointListResponse", "Org.OpenAPITools.Model"},
+                    {"GachaGuaranteePointExchangeItem", "Org.OpenAPITools.Model"},
+                    {"GachaReceiptItem", "Org.OpenAPITools.Model"},
+                    {"GachaSetGuaranteePointExchangeRequest", "Org.OpenAPITools.Model"},
+                    {"GachaSetGuaranteePointExchangeResponse", "Org.OpenAPITools.Model"}};
             for (const auto& [name, namespaze] : contractTypes) {
                 auto* klass = assemblyCSharp->Get(name, namespaze);
                 if (!klass) {

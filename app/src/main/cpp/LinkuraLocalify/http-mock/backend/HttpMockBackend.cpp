@@ -45,10 +45,14 @@ namespace LinkuraLocal::HttpMock {
         // animation path.  This is a local preservation catalog, not a claim
         // about the retired server's original odds table.
         static const auto kMuseumGachaSeries = [] {
-            std::array<MuseumGachaSeries, 3> series{{
+            std::array<MuseumGachaSeries, 7> series{{
                 {1055003, 105503, {19415010, 19425010, 19435010, 19315020, 19525010}, {}},
                 {1055002, 105502, {19215020, 19235010, 19425020, 19515010}, {}},
                 {1055001, 105501, {19215010, 19225010, 19235010, 19315010, 19335010}, {}},
+                {1050511, 10505, {10305010}, {}},
+                {1050509, 10505, {10315390, 10325370, 10335360}, {}},
+                {1050506, 10505, {10215170, 10225170, 10225180, 10235140, 10115010}, {}},
+                {1050505, 10505, {10215270, 10225270, 10235240, 10205010}, {}},
             }};
             for (auto& pool : series) {
                 pool.cards.reserve(kMuseumStandardRCards.size() + kMuseumStandardSRCards.size() +
@@ -78,6 +82,15 @@ namespace LinkuraLocal::HttpMock {
         static const MuseumGachaSeries* FindMuseumGachaSeries(int id) {
             for (const auto& series : kMuseumGachaSeries) if (series.id == id) return &series;
             return nullptr;
+        }
+        static int PointOwnerSeriesId(const MuseumGachaSeries& series) {
+            // Several graduation pools share the same ExchangePointId in Master.
+            int owner = series.id;
+            for (const auto& candidate : kMuseumGachaSeries) {
+                if (candidate.exchangePointId == series.exchangePointId)
+                    owner = std::min(owner, candidate.id);
+            }
+            return owner;
         }
         static std::filesystem::path GetBackendDatabasePath() {
             const auto base = LinkuraLocal::Local::GetBasePath();
@@ -209,6 +222,8 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetGachaSeriesListResponseLocked();
         std::optional<MockStoredResponse> GachaSetPurchaseLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GetGachaHistoryResponseLocked();
+        std::optional<MockStoredResponse> GetGachaGuaranteePointListLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> GachaSetGuaranteePointExchangeLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GetCardDetailByDCardIdLocked(std::string_view dCardDatasId);
         std::optional<MockStoredResponse> GetCardListResponseLocked();
         std::optional<MockStoredResponse> GetItemDetailByDItemIdLocked(std::string_view dItemDatasId);
@@ -974,7 +989,9 @@ namespace LinkuraLocal::HttpMock {
         if (!ExecSql(db,
                 "INSERT OR IGNORE INTO museum_gacha_state "
                 "(series_id, free_jewels, paid_jewels, exchange_point, draw_count) "
-                "VALUES (1055001, 0, 0, 0, 0), (1055002, 0, 0, 0, 0);")) {
+                "VALUES (1055001, 0, 0, 0, 0), (1055002, 0, 0, 0, 0), "
+                "(1050505, 0, 0, 0, 0), (1050506, 0, 0, 0, 0), "
+                "(1050509, 0, 0, 0, 0), (1050511, 0, 0, 0, 0);")) {
             ExecSql(db, "ROLLBACK;");
             return std::nullopt;
         }
@@ -984,14 +1001,16 @@ namespace LinkuraLocal::HttpMock {
         }
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db,
-                "SELECT wallet.free_jewels, wallet.paid_jewels, series.exchange_point, series.draw_count "
+                "SELECT wallet.free_jewels, wallet.paid_jewels, points.exchange_point, series.draw_count "
                 "FROM museum_gacha_state AS wallet JOIN museum_gacha_state AS series "
-                "ON series.series_id=? WHERE wallet.series_id=1055003;",
+                "ON series.series_id=? JOIN museum_gacha_state AS points ON points.series_id=? "
+                "WHERE wallet.series_id=1055003;",
                 -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
             if (stmt) sqlite3_finalize(stmt);
             return std::nullopt;
         }
         sqlite3_bind_int(stmt, 1, seriesId);
+        sqlite3_bind_int(stmt, 2, PointOwnerSeriesId(*FindMuseumGachaSeries(seriesId)));
         std::optional<GachaState> state;
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             state = GachaState{
@@ -1135,12 +1154,17 @@ namespace LinkuraLocal::HttpMock {
         };
         sqlite3_stmt* card = nullptr;
         sqlite3_stmt* owned = nullptr;
+        sqlite3_stmt* acquired = nullptr;
         sqlite3_stmt* obtain = nullptr;
         sqlite3_stmt* cardState = nullptr;
         if (sqlite3_prepare_v2(db, "SELECT d_card_datas_id FROM card_detail WHERE card_datas_id=? LIMIT 1;",
                                -1, &card, nullptr) != SQLITE_OK ||
-            sqlite3_prepare_v2(db, "SELECT 1 FROM museum_card_ownership WHERE d_card_datas_id=?;",
+            sqlite3_prepare_v2(db, "SELECT 1 FROM museum_gacha_acquisition WHERE card_datas_id=?;",
                                -1, &owned, nullptr) != SQLITE_OK ||
+            sqlite3_prepare_v2(db,
+                "INSERT OR IGNORE INTO museum_gacha_acquisition "
+                "(card_datas_id, first_acquired_at, acquisition_source) VALUES (?, ?, 'GACHA');",
+                -1, &acquired, nullptr) != SQLITE_OK ||
             sqlite3_prepare_v2(db,
                 "INSERT OR IGNORE INTO museum_card_ownership "
                 "(d_card_datas_id, acquired_at, acquisition_source) VALUES (?, ?, 'GACHA');",
@@ -1151,6 +1175,7 @@ namespace LinkuraLocal::HttpMock {
                 -1, &cardState, nullptr) != SQLITE_OK) {
             if (card) sqlite3_finalize(card);
             if (owned) sqlite3_finalize(owned);
+            if (acquired) sqlite3_finalize(acquired);
             if (obtain) sqlite3_finalize(obtain);
             if (cardState) sqlite3_finalize(cardState);
             return rollback();
@@ -1168,8 +1193,14 @@ namespace LinkuraLocal::HttpMock {
             const std::string dCardId(rawId);
             sqlite3_reset(owned);
             sqlite3_clear_bindings(owned);
-            BindText(owned, 1, dCardId);
+            sqlite3_bind_int(owned, 1, cardId);
             const bool isNew = sqlite3_step(owned) != SQLITE_ROW;
+            sqlite3_reset(acquired);
+            sqlite3_clear_bindings(acquired);
+            valid = sqlite3_bind_int(acquired, 1, cardId) == SQLITE_OK &&
+                    BindText(acquired, 2, timeBuffer) &&
+                    sqlite3_step(acquired) == SQLITE_DONE;
+            if (!valid) break;
             sqlite3_reset(obtain);
             sqlite3_clear_bindings(obtain);
             valid = BindText(obtain, 1, dCardId) && BindText(obtain, 2, timeBuffer) &&
@@ -1186,20 +1217,31 @@ namespace LinkuraLocal::HttpMock {
         }
         sqlite3_finalize(card);
         sqlite3_finalize(owned);
+        sqlite3_finalize(acquired);
         sqlite3_finalize(obtain);
         sqlite3_finalize(cardState);
         if (!valid) return rollback();
 
         sqlite3_stmt* update = nullptr;
         const char* updateSql =
-            "UPDATE museum_gacha_state SET exchange_point=?, draw_count=draw_count+? WHERE series_id=?;";
+            "UPDATE museum_gacha_state SET exchange_point=? WHERE series_id=?;";
         if (sqlite3_prepare_v2(db, updateSql, -1, &update, nullptr) != SQLITE_OK || !update) {
             if (update) sqlite3_finalize(update);
             return rollback();
         }
         sqlite3_bind_int64(update, 1, pointsAfter);
-        sqlite3_bind_int(update, 2, drawCount);
-        sqlite3_bind_int(update, 3, series->id);
+        sqlite3_bind_int(update, 2, PointOwnerSeriesId(*series));
+        valid = sqlite3_step(update) == SQLITE_DONE && sqlite3_changes(db) == 1;
+        sqlite3_finalize(update);
+        if (!valid) return rollback();
+        if (sqlite3_prepare_v2(db,
+                "UPDATE museum_gacha_state SET draw_count=draw_count+? WHERE series_id=?;",
+                -1, &update, nullptr) != SQLITE_OK || !update) {
+            if (update) sqlite3_finalize(update);
+            return rollback();
+        }
+        sqlite3_bind_int(update, 1, drawCount);
+        sqlite3_bind_int(update, 2, series->id);
         valid = sqlite3_step(update) == SQLITE_DONE && sqlite3_changes(db) == 1;
         sqlite3_finalize(update);
         if (!valid) return rollback();
@@ -1339,6 +1381,192 @@ namespace LinkuraLocal::HttpMock {
         return MockStoredResponse{
             nlohmann::json{{"gacha_result_history_list", std::move(list)}}.dump(),
             GachaHeaders(state->freeJewels, state->paidJewels), 200, "OK (offline gacha)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetGachaGuaranteePointListLocked(
+            std::string_view payloadJson) {
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        if (!payload.is_object() || !payload.contains("gacha_series_id") ||
+            !payload["gacha_series_id"].is_number_integer() ||
+            !payload.contains("exchange_point_id") ||
+            !payload["exchange_point_id"].is_number_integer()) {
+            return MockStoredResponse{R"({"error":"invalid exchange request"})", {}, 400,
+                                      "Invalid exchange request"};
+        }
+        const auto* series = FindMuseumGachaSeries(payload["gacha_series_id"].get<int>());
+        if (!series || series->exchangePointId != payload["exchange_point_id"].get<int>()) {
+            return MockStoredResponse{R"({"error":"unknown exchange pool"})", {}, 400,
+                                      "Unknown exchange pool"};
+        }
+        const auto state = LoadGachaStateLocked(series->id);
+        if (!state) return std::nullopt;
+        sqlite3_stmt* lookup = nullptr;
+        const char* query =
+            "SELECT "
+            "(SELECT count(*) FROM museum_gacha_exchange_history WHERE exchange_point_rate_id=?), "
+            "EXISTS(SELECT 1 FROM museum_card_ownership o JOIN card_detail c "
+            "ON c.d_card_datas_id=o.d_card_datas_id WHERE c.card_datas_id=?);";
+        if (sqlite3_prepare_v2(db, query, -1, &lookup, nullptr) != SQLITE_OK || !lookup) {
+            if (lookup) sqlite3_finalize(lookup);
+            return std::nullopt;
+        }
+        nlohmann::json items = nlohmann::json::array();
+        bool valid = true;
+        for (const auto& offer : kMuseumExchangeOffers) {
+            if (offer.seriesId != series->id) continue;
+            sqlite3_reset(lookup);
+            sqlite3_clear_bindings(lookup);
+            sqlite3_bind_int(lookup, 1, offer.rateId);
+            sqlite3_bind_int(lookup, 2, offer.cardId);
+            if (sqlite3_step(lookup) != SQLITE_ROW) { valid = false; break; }
+            const int used = sqlite3_column_int(lookup, 0);
+            items.push_back({
+                {"exchange_point_rate_id", offer.rateId},
+                // Unlimited offers have LimitedCount=0 in Master. The client
+                // always prints this response number; cap its display value.
+                {"remaining_exchange_num", offer.limit > 0 ? std::max(0, offer.limit - used) : 9999},
+                {"is_having", sqlite3_column_int(lookup, 1) != 0},
+            });
+        }
+        sqlite3_finalize(lookup);
+        if (!valid) return std::nullopt;
+        return MockStoredResponse{
+            nlohmann::json{{"exchange_item_list", std::move(items)}}.dump(),
+            GachaHeaders(state->freeJewels, state->paidJewels), 200, "OK (offline gacha exchange)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GachaSetGuaranteePointExchangeLocked(
+            std::string_view payloadJson) {
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        if (!payload.is_object() || !payload.contains("exchange_point_rate_id") ||
+            !payload["exchange_point_rate_id"].is_number_integer()) {
+            return MockStoredResponse{R"({"error":"invalid exchange request"})", {}, 400,
+                                      "Invalid exchange request"};
+        }
+        const int rateId = payload["exchange_point_rate_id"].get<int>();
+        const auto offer = std::find_if(kMuseumExchangeOffers.begin(), kMuseumExchangeOffers.end(),
+                                        [rateId](const auto& item) { return item.rateId == rateId; });
+        if (offer == kMuseumExchangeOffers.end() || !FindMuseumGachaSeries(offer->seriesId)) {
+            return MockStoredResponse{R"({"error":"unknown exchange item"})", {}, 400,
+                                      "Unknown exchange item"};
+        }
+        const auto* series = FindMuseumGachaSeries(offer->seriesId);
+        const auto state = LoadGachaStateLocked(series->id);
+        if (!state) return std::nullopt;
+        if (state->exchangePoint < offer->price) {
+            return MockStoredResponse{R"({"error":"insufficient exchange points"})",
+                                      GachaHeaders(state->freeJewels, state->paidJewels), 400,
+                                      "Insufficient exchange points"};
+        }
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        const auto rollback = [this]() -> std::optional<MockStoredResponse> {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        };
+        sqlite3_stmt* lookup = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT c.d_card_datas_id, "
+                "EXISTS(SELECT 1 FROM museum_gacha_acquisition a WHERE a.card_datas_id=c.card_datas_id), "
+                "(SELECT count(*) FROM museum_gacha_exchange_history WHERE exchange_point_rate_id=?) "
+                "FROM card_detail c WHERE c.card_datas_id=? LIMIT 1;",
+                -1, &lookup, nullptr) != SQLITE_OK || !lookup) {
+            if (lookup) sqlite3_finalize(lookup);
+            return rollback();
+        }
+        sqlite3_bind_int(lookup, 1, rateId);
+        sqlite3_bind_int(lookup, 2, offer->cardId);
+        if (sqlite3_step(lookup) != SQLITE_ROW) {
+            sqlite3_finalize(lookup);
+            return rollback();
+        }
+        const auto* rawId = reinterpret_cast<const char*>(sqlite3_column_text(lookup, 0));
+        if (!rawId) { sqlite3_finalize(lookup); return rollback(); }
+        const std::string dCardId(rawId);
+        const bool isNew = sqlite3_column_int(lookup, 1) == 0;
+        const int used = sqlite3_column_int(lookup, 2);
+        sqlite3_finalize(lookup);
+        if (offer->limit > 0 && used >= offer->limit) {
+            ExecSql(db, "ROLLBACK;");
+            return MockStoredResponse{R"({"error":"exchange limit reached"})",
+                                      GachaHeaders(state->freeJewels, state->paidJewels), 400,
+                                      "Exchange limit reached"};
+        }
+
+        sqlite3_stmt* update = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "UPDATE museum_gacha_state SET exchange_point=exchange_point-? "
+                "WHERE series_id=? AND exchange_point>=?;", -1, &update, nullptr) != SQLITE_OK || !update) {
+            if (update) sqlite3_finalize(update);
+            return rollback();
+        }
+        sqlite3_bind_int(update, 1, offer->price);
+        sqlite3_bind_int(update, 2, PointOwnerSeriesId(*series));
+        sqlite3_bind_int(update, 3, offer->price);
+        bool valid = sqlite3_step(update) == SQLITE_DONE && sqlite3_changes(db) == 1;
+        sqlite3_finalize(update);
+        if (!valid) return rollback();
+        sqlite3_stmt* acquired = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT OR IGNORE INTO museum_gacha_acquisition "
+                "(card_datas_id, first_acquired_at, acquisition_source) "
+                "VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'GACHA_EXCHANGE');",
+                -1, &acquired, nullptr) != SQLITE_OK || !acquired) {
+            if (acquired) sqlite3_finalize(acquired);
+            return rollback();
+        }
+        sqlite3_bind_int(acquired, 1, offer->cardId);
+        valid = sqlite3_step(acquired) == SQLITE_DONE;
+        sqlite3_finalize(acquired);
+        if (!valid) return rollback();
+
+        sqlite3_stmt* obtain = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT OR IGNORE INTO museum_card_ownership "
+                "(d_card_datas_id, acquired_at, acquisition_source) "
+                "VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'GACHA_EXCHANGE');",
+                -1, &obtain, nullptr) != SQLITE_OK || !obtain) {
+            if (obtain) sqlite3_finalize(obtain);
+            return rollback();
+        }
+        valid = BindText(obtain, 1, dCardId) && sqlite3_step(obtain) == SQLITE_DONE;
+        sqlite3_finalize(obtain);
+        if (!valid) return rollback();
+        sqlite3_stmt* cardState = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT OR IGNORE INTO museum_card_state "
+                "(d_card_datas_id, style_level, limit_break_times, is_evolve_max) "
+                "VALUES (?, 1, 0, 0);", -1, &cardState, nullptr) != SQLITE_OK || !cardState) {
+            if (cardState) sqlite3_finalize(cardState);
+            return rollback();
+        }
+        valid = BindText(cardState, 1, dCardId) && sqlite3_step(cardState) == SQLITE_DONE;
+        sqlite3_finalize(cardState);
+        if (!valid) return rollback();
+        sqlite3_stmt* history = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT INTO museum_gacha_exchange_history "
+                "(series_id, exchange_point_rate_id, card_datas_id, point_cost, exchanged_at) "
+                "VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'));",
+                -1, &history, nullptr) != SQLITE_OK || !history) {
+            if (history) sqlite3_finalize(history);
+            return rollback();
+        }
+        sqlite3_bind_int(history, 1, series->id);
+        sqlite3_bind_int(history, 2, rateId);
+        sqlite3_bind_int(history, 3, offer->cardId);
+        sqlite3_bind_int(history, 4, offer->price);
+        valid = sqlite3_step(history) == SQLITE_DONE;
+        sqlite3_finalize(history);
+        if (!valid || !ExecSql(db, "COMMIT;")) return rollback();
+        Log::InfoFmt("[HttpMockBackend] offline gacha exchange rate=%d card=%d points=%lld",
+                     rateId, offer->cardId,
+                     static_cast<long long>(state->exchangePoint - offer->price));
+        return MockStoredResponse{
+            nlohmann::json{{"receipt_items", nlohmann::json::array({{
+                {"get_item_type", 2}, {"get_id", offer->cardId},
+                {"get_num", offer->quantity}, {"is_new", isNew}
+            }})}}.dump(),
+            GachaHeaders(state->freeJewels, state->paidJewels), 200, "OK (offline gacha exchange)"};
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetCollectionListResponseLocked(
@@ -4690,6 +4918,18 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GetGachaHistoryResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetGachaHistoryResponseLocked();
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetGachaGuaranteePointList(
+            std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetGachaGuaranteePointListLocked(payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GachaSetGuaranteePointExchange(
+            std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GachaSetGuaranteePointExchangeLocked(payloadJson);
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GetCardDetailByDCardId(std::string_view dCardDatasId) {

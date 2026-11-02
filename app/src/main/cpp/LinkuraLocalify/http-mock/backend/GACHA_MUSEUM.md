@@ -5,8 +5,9 @@ The 5.1.0 client calls `/v1/gacha/get_series_list` before opening the scene and
 local SQLite backend. `/v1/gacha/get_history` reads the same persistent draw
 history. Home and Gacha response headers report the wallet from that database.
 
-Three preserved series are enabled: 1055003 (BRIGHT SEEDS), 1055002
-(FILM B.G.P.), and 1055001 (PERENNIAL). The original server probability
+Seven preserved series are enabled: 1055003 (BRIGHT SEEDS), 1055002
+(FILM B.G.P.), 1055001 (PERENNIAL), and four graduation series (1050511,
+1050509, 1050506, 1050505). The original server probability
 table has not been recovered. The offline candidate catalog now includes
 every non-placeholder, non-limited R/SR/UR base card present before all three
 series started in the preserved R2606000 Master snapshot: 46 R, 42 SR and
@@ -47,3 +48,21 @@ After the catalog expansion, emulator-5562 loaded the Gacha page with all
 draw returned standard R 10423030, showed its own illustration, and also
 reached Result.InitUI. The local database was backed up before installation.
 These two draws do not establish that every possible card asset is cached.
+
+The preserved ExchangePointRate Master records supply 25 card offers across
+these series. `/v1/gacha/get_guarantee_point_list` builds the exchange list;
+`/v1/gacha/set_guarantee_point_exchange` validates the selected rate and
+atomically debits points, records the exchange, and grants the card. On
+emulator-5562, a 200-point exchange of rate 10503195 returned the correct
+card result with its own artwork. SQLite integrity remained `ok`; series
+1055003 points changed from 290 to 90 and one exchange history row was added.
+The earlier unexpected-error dialog was from an installed list-probe APK whose
+submit route returned HTTP 501. The complete exchange APK no longer does so.
+
+`museum_gacha_acquisition` distinguishes the first local draw/exchange from
+the Museum bootstrap, so a first acquisition can set `is_new=true`. The
+client displayed the `NEW` label in the exchange result. This does not yet
+prove that every advanced card voice or acquisition movie plays: those need
+per-card asset and client playback verification. The client displays a
+numeric remaining-exchange count even for Master offers with no finite limit;
+the current capped display value can overlap the nearby Detail button.
