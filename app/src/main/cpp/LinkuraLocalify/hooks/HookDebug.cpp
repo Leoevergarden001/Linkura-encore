@@ -20,6 +20,7 @@ namespace LinkuraLocal::HookDebug {
         Il2cppUtils::FieldInfo* homeInitializeStateField = nullptr;
         Il2cppUtils::FieldInfo* homePrepareStateField = nullptr;
         Il2cppUtils::FieldInfo* gachaExecuteStateField = nullptr;
+        Il2cppUtils::FieldInfo* gachaStartAnimationStateField = nullptr;
         thread_local bool inGachaExecute = false;
         uintptr_t gachaIl2cppBase = 0;
         std::atomic<bool> pendingOfflineLoadingCoverRelease{false};
@@ -575,6 +576,17 @@ namespace LinkuraLocal::HookDebug {
         UniTaskVoidBuilder_SetException_Orig(self, exception, method);
     }
 
+    // IL2CPP emits an AOT copy of this builder used by the game assembly;
+    // the UniTask.dll method pointer alone does not intercept that copy.
+    DEFINE_HOOK(void, GachaAotBuilder_SetException, (void* self, void* exception, void* method)) {
+        if (exception) {
+            auto* toString = Il2cppUtils::GetMethod("mscorlib.dll", "System", "Exception", "ToString");
+            auto* message = toString ? toString->Invoke<Il2cppString*>(exception) : nullptr;
+            if (message) Log::LogUnityLog(ANDROID_LOG_ERROR, "[GachaFlow] AOT async fault:\n%s", message->ToString().c_str());
+        }
+        GachaAotBuilder_SetException_Orig(self, exception, method);
+    }
+
     DEFINE_HOOK(void, AsyncVoidBuilder_SetException, (void* self, void* exception, void* method)) {
         if (inGachaExecute && exception) {
             auto* toString = Il2cppUtils::GetMethod("mscorlib.dll", "System", "Exception", "ToString");
@@ -585,9 +597,11 @@ namespace LinkuraLocal::HookDebug {
     }
 
     DEFINE_HOOK(void, GachaSceneController_StartGachaAnimationAsync_MoveNext, (void* self, void* method)) {
-        Log::InfoFmt("[GachaFlow] StartGachaAnimationAsync.MoveNext enter self=%p", self);
+        Log::InfoFmt("[GachaFlow] StartGachaAnimationAsync.MoveNext enter state=%d self=%p",
+                     ReadAsyncState(self, gachaStartAnimationStateField), self);
         GachaSceneController_StartGachaAnimationAsync_MoveNext_Orig(self, method);
-        Log::InfoFmt("[GachaFlow] StartGachaAnimationAsync.MoveNext return self=%p", self);
+        Log::InfoFmt("[GachaFlow] StartGachaAnimationAsync.MoveNext return state=%d self=%p",
+                     ReadAsyncState(self, gachaStartAnimationStateField), self);
     }
 
     DEFINE_HOOK(void, GachaSceneController_EndGachaAnimationAsync_MoveNext, (void* self, void* method)) {
@@ -1423,6 +1437,11 @@ namespace LinkuraLocal::HookDebug {
                     if (std::memcmp(reinterpret_cast<void*>(getter), expected, sizeof(expected)) == 0) {
                         ADD_HOOK(GachaApiResult_get_Success, getter);
                         gachaIl2cppBase = execute->methodPointer - 0x4bd02f8;
+                        const uintptr_t aotSetException = gachaIl2cppBase + 0x3fe9138;
+                        if (*reinterpret_cast<const uint32_t*>(aotSetException) == 0xa9be57fe
+                                && *reinterpret_cast<const uint32_t*>(aotSetException + 4) == 0xa9014ff4) {
+                            ADD_HOOK(GachaAotBuilder_SetException, aotSetException);
+                        }
                         const uintptr_t raiseNull = gachaIl2cppBase + 0x3de3308;
                         const uint32_t expectedRaise[] = {0xf81f0ffe, 0x9400f110};
                         if (std::memcmp(reinterpret_cast<void*>(raiseNull), expectedRaise, sizeof(expectedRaise)) == 0) {
@@ -1438,7 +1457,20 @@ namespace LinkuraLocal::HookDebug {
                         Log::InfoFmt("[GachaFlow] ExecuteState field=%s type=%s offset=%d", field->name.c_str(), field->type->name.c_str(), field->offset);
                     }
                 }
-                auto* start = findAsync("StartGachaAnimationAsync");
+                auto* startNested = Il2cppUtils::find_nested_class(gacha, [](void* nestedClass) {
+                    const auto* name = static_cast<Il2cppUtils::Il2CppClassHead*>(nestedClass)->name;
+                    return name && std::string_view(name).starts_with("<StartGachaAnimationAsync>d__");
+                });
+                auto* start = startNested ? Il2cppUtils::GetMethodIl2cpp(startNested, "MoveNext", 0) : nullptr;
+                gachaStartAnimationStateField = startNested
+                        ? Il2cppUtils::il2cpp_class_get_field_from_name(startNested, "<>1__state") : nullptr;
+                if (startNested) {
+                    auto* metadata = Il2cppUtils::ToUnityResolveClass(startNested);
+                    for (auto* field : metadata->fields) if (field && field->type) {
+                        Log::InfoFmt("[GachaFlow] StartAnimationState field=%s type=%s offset=%d",
+                                     field->name.c_str(), field->type->name.c_str(), field->offset);
+                    }
+                }
                 auto* end = findAsync("EndGachaAnimationAsync");
                 ADD_HOOK(GachaSceneController_OnGachaAsync_MoveNext, onGacha ? onGacha->methodPointer : 0);
                 ADD_HOOK(GachaSceneController_OnGachaExecute_MoveNext, execute ? execute->methodPointer : 0);
