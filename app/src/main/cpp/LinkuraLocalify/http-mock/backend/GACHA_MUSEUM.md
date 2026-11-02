@@ -21,8 +21,8 @@ separate draws. Ticket purchases and daily paid discounts are not implemented.
 The Museum bootstrap owns all catalogued cards, so these featured cards appear
 as duplicates until a narrower preserved player inventory is imported.
 
-On the author emulator, the third series' ten draw traversed SetPhase 1,
-GetCardAnimation, ten distinct card displays, SetPhase 2, and Result.InitUI.
+On the author emulator, the second and third series' ten draws traversed
+SetPhase 1, GetCardAnimation, ten card displays, SetPhase 2, and Result.InitUI.
 The opening movie took several minutes including touch-to-advance sections;
 white or black transition frames during that sequence do not by themselves
 indicate a deadlock. The wallet and exchange points updated in the result.
