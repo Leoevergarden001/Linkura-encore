@@ -30,6 +30,20 @@ namespace LinkuraLocal::HttpMock {
             std::vector<int> featuredCards;
             std::vector<int> cards;
         };
+        // The preserved 5.1 asset cache does not contain every historical
+        // card-animation dependency.  10215210 has been reproduced as an
+        // actual CardAnimationPlayer null-reference on the offline client, so
+        // do not advertise or draw it until its missing animation asset is
+        // recovered.  The card remains in the player's collection if it was
+        // previously acquired; this only protects future gacha results.
+        inline constexpr std::array<int, 1> kMuseumAnimationQuarantinedCards{{
+            10215210,
+        }};
+        static bool IsMuseumAnimationQuarantined(int cardId) {
+            return std::find(kMuseumAnimationQuarantinedCards.begin(),
+                             kMuseumAnimationQuarantinedCards.end(), cardId) !=
+                   kMuseumAnimationQuarantinedCards.end();
+        }
         // Featured cards from the 5.1.0 GachaSeries/CardSeries masters.
         //
         // Gacha responses carry the base CardDatas record (the final digit is
@@ -59,7 +73,13 @@ namespace LinkuraLocal::HttpMock {
                                    kMuseumStandardURCards.size() + pool.featuredCards.size());
                 pool.cards.insert(pool.cards.end(), kMuseumStandardRCards.begin(), kMuseumStandardRCards.end());
                 pool.cards.insert(pool.cards.end(), kMuseumStandardSRCards.begin(), kMuseumStandardSRCards.end());
-                pool.cards.insert(pool.cards.end(), kMuseumStandardURCards.begin(), kMuseumStandardURCards.end());
+                for (const int cardId : kMuseumStandardURCards) {
+                    if (!IsMuseumAnimationQuarantined(cardId)) pool.cards.push_back(cardId);
+                }
+                pool.featuredCards.erase(
+                    std::remove_if(pool.featuredCards.begin(), pool.featuredCards.end(),
+                                   IsMuseumAnimationQuarantined),
+                    pool.featuredCards.end());
                 pool.cards.insert(pool.cards.end(), pool.featuredCards.begin(), pool.featuredCards.end());
             }
             return series;
@@ -77,7 +97,11 @@ namespace LinkuraLocal::HttpMock {
             if (roll < 80) return pick(kMuseumStandardRCards);
             if (roll < 97) return pick(kMuseumStandardSRCards);
             std::bernoulli_distribution featured(0.5);
-            return featured(rng) ? pick(series.featuredCards) : pick(kMuseumStandardURCards);
+            if (featured(rng) && !series.featuredCards.empty()) return pick(series.featuredCards);
+            // Preserve the original approximate UR odds while substituting a
+            // known-good preserved card for a quarantined animation record.
+            const int candidate = pick(kMuseumStandardURCards);
+            return IsMuseumAnimationQuarantined(candidate) ? 10315140 : candidate;
         }
         static const MuseumGachaSeries* FindMuseumGachaSeries(int id) {
             for (const auto& series : kMuseumGachaSeries) if (series.id == id) return &series;
@@ -1093,7 +1117,13 @@ namespace LinkuraLocal::HttpMock {
             series["user_series_exec_count"] = seriesState->drawCount;
             series["is_single_enable"] = state->freeJewels + state->paidJewels >= 200;
             series["is_consective_enable"] = state->freeJewels + state->paidJewels >= 2000;
-            series["card_list"] = GetOwnedMuseumGachaCardsLocked(config);
+            // card_list is the client-side asset-preload manifest for this
+            // gacha series, not an ownership summary.  Sending only cards
+            // already owned left a newly drawn card without its art/spine
+            // dependencies when GetCardAnimation opened, producing a white
+            // screen or CardAnimationPlayer null reference.  Advertise the
+            // complete, validated museum candidate set before a draw instead.
+            series["card_list"] = config.cards;
             seriesList.push_back(std::move(series));
         }
         return MockStoredResponse{
@@ -1327,7 +1357,7 @@ namespace LinkuraLocal::HttpMock {
                 item["user_series_exec_count"] = seriesState->drawCount;
                 item["is_single_enable"] = freeAfter + paidAfter >= 200;
                 item["is_consective_enable"] = freeAfter + paidAfter >= 2000;
-                item["card_list"] = GetOwnedMuseumGachaCardsLocked(config);
+                item["card_list"] = config.cards;
                 seriesList.push_back(std::move(item));
             }
             response["gacha_series_list"] = std::move(seriesList);

@@ -66,3 +66,20 @@ prove that every advanced card voice or acquisition movie plays: those need
 per-card asset and client playback verification. The client displays a
 numeric remaining-exchange count even for Master offers with no finite limit;
 the current capped display value can overlap the nearby Detail button.
+
+## Animation safety
+
+`GachaSeries.card_list` is treated by the client as the asset-preload manifest
+for a pool. The backend therefore sends the complete validated candidate set,
+not merely cards the local player already owns. The latter allowed a new draw
+to enter `GetCardAnimation` without the card art/spine dependency being
+prepared, which can present as a white screen.
+
+The preserved data still does not contain every historical animation
+dependency. Card `10215210` is temporarily quarantined from future Museum
+draws after a reproduced `Tecotec.CardAnimationPlayer.PlayAsync`
+`NullReferenceException` on emulator-5562. It is not deleted from ownership
+or Collection; it will be re-enabled only after its missing asset chain is
+preserved and replayed successfully. This is deliberately a narrow runtime
+safety exclusion, rather than silently treating the entire 73-card Master
+catalog as animation-verified.
