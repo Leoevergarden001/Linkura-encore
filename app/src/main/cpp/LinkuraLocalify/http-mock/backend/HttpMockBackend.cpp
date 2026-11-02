@@ -3,6 +3,7 @@
 #include "../../HookMain.h"
 #include "../../Local.h"
 #include "http_mock_backend_builtin_sql.hpp"
+#include "MuseumGachaCatalog.hpp"
 #include "offline_api_mock_builtin.hpp"
 
 #include <algorithm>
@@ -26,6 +27,7 @@ namespace LinkuraLocal::HttpMock {
         struct MuseumGachaSeries {
             int id;
             int exchangePointId;
+            std::vector<int> featuredCards;
             std::vector<int> cards;
         };
         // Featured cards from the 5.1.0 GachaSeries/CardSeries masters.
@@ -42,11 +44,37 @@ namespace LinkuraLocal::HttpMock {
         // that character instead, so every offline result has a recoverable
         // animation path.  This is a local preservation catalog, not a claim
         // about the retired server's original odds table.
-        static const std::array<MuseumGachaSeries, 3> kMuseumGachaSeries{{
-            {1055003, 105503, {19415010, 19425010, 19435010, 19315020, 19525010}},
-            {1055002, 105502, {19215020, 19235010, 19425020, 19515010}},
-            {1055001, 105501, {19215010, 19225010, 19235010, 19315010, 19335010}},
-        }};
+        static const auto kMuseumGachaSeries = [] {
+            std::array<MuseumGachaSeries, 3> series{{
+                {1055003, 105503, {19415010, 19425010, 19435010, 19315020, 19525010}, {}},
+                {1055002, 105502, {19215020, 19235010, 19425020, 19515010}, {}},
+                {1055001, 105501, {19215010, 19225010, 19235010, 19315010, 19335010}, {}},
+            }};
+            for (auto& pool : series) {
+                pool.cards.reserve(kMuseumStandardRCards.size() + kMuseumStandardSRCards.size() +
+                                   kMuseumStandardURCards.size() + pool.featuredCards.size());
+                pool.cards.insert(pool.cards.end(), kMuseumStandardRCards.begin(), kMuseumStandardRCards.end());
+                pool.cards.insert(pool.cards.end(), kMuseumStandardSRCards.begin(), kMuseumStandardSRCards.end());
+                pool.cards.insert(pool.cards.end(), kMuseumStandardURCards.begin(), kMuseumStandardURCards.end());
+                pool.cards.insert(pool.cards.end(), pool.featuredCards.begin(), pool.featuredCards.end());
+            }
+            return series;
+        }();
+        static int ChooseMuseumGachaCard(const MuseumGachaSeries& series, std::mt19937& rng) {
+            // Museum approximation, NOT the retired server's per-card odds.
+            // Tier selection prevents the catalog's large UR count from
+            // turning a uniform card-ID draw into a nearly 50% UR rate.
+            std::uniform_int_distribution<int> tier(0, 99);
+            const auto pick = [&rng](const auto& ids) -> int {
+                std::uniform_int_distribution<size_t> index(0, ids.size() - 1);
+                return ids[index(rng)];
+            };
+            const int roll = tier(rng);
+            if (roll < 80) return pick(kMuseumStandardRCards);
+            if (roll < 97) return pick(kMuseumStandardSRCards);
+            std::bernoulli_distribution featured(0.5);
+            return featured(rng) ? pick(series.featuredCards) : pick(kMuseumStandardURCards);
+        }
         static const MuseumGachaSeries* FindMuseumGachaSeries(int id) {
             for (const auto& series : kMuseumGachaSeries) if (series.id == id) return &series;
             return nullptr;
@@ -1081,10 +1109,9 @@ namespace LinkuraLocal::HttpMock {
                                       400, "Insufficient local SIsCa"};
         }
 
-        // Museum mode draws uniformly from each series' featured cards.
-        // The original server-side probability table was not preserved.
+        // The preserved Master identifies standard and featured candidates,
+        // but not the original server-side per-card probabilities.
         static thread_local std::mt19937 rng(std::random_device{}());
-        std::uniform_int_distribution<size_t> choose(0, series->cards.size() - 1);
         const auto spentFree = std::min<int64_t>(state->freeJewels, price);
         const auto spentPaid = price - spentFree;
         const auto freeAfter = state->freeJewels - spentFree;
@@ -1131,7 +1158,7 @@ namespace LinkuraLocal::HttpMock {
         nlohmann::json results = nlohmann::json::array();
         bool valid = true;
         for (int index = 0; index < drawCount && valid; ++index) {
-            const int cardId = series->cards[choose(rng)];
+            const int cardId = ChooseMuseumGachaCard(*series, rng);
             sqlite3_reset(card);
             sqlite3_clear_bindings(card);
             sqlite3_bind_int(card, 1, cardId);

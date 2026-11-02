@@ -7,12 +7,23 @@ history. Home and Gacha response headers report the wallet from that database.
 
 Three preserved series are enabled: 1055003 (BRIGHT SEEDS), 1055002
 (FILM B.G.P.), and 1055001 (PERENNIAL). The original server probability
-table has not been recovered. Museum mode chooses uniformly among a small
-set of featured base CardDatas IDs for each series. The result animation
-resolves the base ID (ending in 0), while Collection uses the corresponding
-fully evolved record (ending in 4). Two 94 records with missing
-CardGetMovieSettings use matching 95 character records. These are explicit
-preservation substitutions, not official prize pools or rates.
+table has not been recovered. The offline candidate catalog now includes
+every non-placeholder, non-limited R/SR/UR base card present before all three
+series started in the preserved R2606000 Master snapshot: 46 R, 42 SR and
+73 UR. Each series also includes its four or five featured mUR cards, for
+165 or 166 distinct candidates per series. This is a reproducible Museum
+catalog, not proof of the retired server's exact per-series prize list.
+`tools/generate_gacha_catalog.py` regenerates `MuseumGachaCatalog.hpp` from
+`link-like-diff`; `--check` verifies that the checked-in catalog matches.
+
+Until the original odds are recovered, Museum mode uses an explicit provisional
+80% R / 17% SR / 3% UR tier split. Half of the UR tier chooses one of the
+series' featured mUR cards uniformly; the other half chooses a standard UR
+uniformly. There is no claim that these are official odds, and ten-draw
+guarantees are not yet modeled. The result animation resolves the base ID
+(ending in 0), while Collection uses the corresponding fully evolved record
+(ending in 4). Two featured 94 records with missing CardGetMovieSettings use
+matching 95 character records. These are explicit preservation substitutions.
 
 One draw costs 200 local SIsCa; ten draws cost 2000. Wallet deduction, card
 ownership, exchange points, and history commit together. The local client
@@ -29,3 +40,10 @@ indicate a deadlock. The wallet and exchange points updated in the result.
 This validates that path, not every possible prize or asset. Remove any
 `mock_api/v1/gacha/*.json` overrides before testing: file mocks take
 precedence over registered backend routes.
+
+After the catalog expansion, emulator-5562 loaded the Gacha page with all
+161 standard base-card DTOs present. A single draw returned standard SR
+10214200, showed its own illustration, and reached Result.InitUI; a second
+draw returned standard R 10423030, showed its own illustration, and also
+reached Result.InitUI. The local database was backed up before installation.
+These two draws do not establish that every possible card asset is cached.
