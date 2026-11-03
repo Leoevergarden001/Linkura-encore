@@ -17,6 +17,9 @@ import generate_learning_stage_sql as learning_stage
 import generate_music_mastery_sql as music_mastery
 import generate_home_get_home as home
 import generate_music_list as music_list
+import generate_mission_get_list as mission_list
+import generate_item_exchange_catalog as item_exchange_catalog
+import generate_shop_get_list as shop_list
 import generate_music_sql as music_db
 import generate_quest_stage_sql as quest_stage
 import generate_rhythm_game_sql as rhythm_game
@@ -36,6 +39,9 @@ def main() -> None:
     character_info.generate_json()
     custom_setting.generate_json()
     home.generate_json()
+    mission_list.generate_json()
+    item_exchange_catalog.generate_json()
+    shop_list.generate_json()
     music_list.generate_json()
     sticker_list.generate_json()
     item.generate_json()

@@ -8,10 +8,12 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <random>
 #include <string>
@@ -251,6 +253,8 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetCardListResponseLocked();
         std::optional<MockStoredResponse> GetItemDetailByDItemIdLocked(std::string_view dItemDatasId);
         std::optional<MockStoredResponse> GetItemListResponseLocked();
+        std::optional<MockStoredResponse> GetItemExchangeListResponseLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> ItemExchangeSetPurchaseLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GetCollectionListResponseLocked(
             std::string_view querySql,
             std::string_view responseListKey
@@ -1743,6 +1747,172 @@ namespace LinkuraLocal::HttpMock {
         nlohmann::json result;
         result["item_category_list"] = std::move(categories);
         return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetItemExchangeListResponseLocked(
+            std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        if (!ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_item_exchange_purchase ("
+                         "item_exchanges_id INTEGER PRIMARY KEY, purchased_num INTEGER NOT NULL DEFAULT 0);"))
+            return std::nullopt;
+        const auto categoryText = ExtractJsonIntegerFieldAsString(payloadJson, "category_list_id");
+        if (categoryText.empty()) return std::nullopt;
+        int categoryId = 0;
+        const auto parsed = std::from_chars(categoryText.data(), categoryText.data() + categoryText.size(), categoryId);
+        if (parsed.ec != std::errc{} || parsed.ptr != categoryText.data() + categoryText.size()) return std::nullopt;
+        const auto catalog = OfflineApiMockBuiltIn::ItemExchangeCatalogJsonObj();
+        if (!catalog.is_array()) return std::nullopt;
+        sqlite3_stmt* count = nullptr;
+        if (sqlite3_prepare_v2(db,
+                               "SELECT COALESCE(SUM(item_num),0) FROM item WHERE item_id=?;",
+                               -1, &count, nullptr) != SQLITE_OK || !count) {
+            if (count) sqlite3_finalize(count);
+            return std::nullopt;
+        }
+        const auto owned = [count](int itemId) -> int64_t {
+            sqlite3_reset(count);
+            sqlite3_clear_bindings(count);
+            sqlite3_bind_int(count, 1, itemId);
+            return sqlite3_step(count) == SQLITE_ROW ? sqlite3_column_int64(count, 0) : 0;
+        };
+        sqlite3_stmt* history = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT purchased_num FROM offline_item_exchange_purchase "
+                                   "WHERE item_exchanges_id=?;", -1, &history, nullptr) != SQLITE_OK || !history) {
+            if (history) sqlite3_finalize(history);
+            sqlite3_finalize(count);
+            return std::nullopt;
+        }
+        nlohmann::json entries = nlohmann::json::array();
+        for (const auto& row : catalog) {
+            if (row.value("category_list_id", 0) != categoryId) continue;
+            sqlite3_reset(history);
+            sqlite3_clear_bindings(history);
+            sqlite3_bind_int(history, 1, row.value("id", 0));
+            const int used = sqlite3_step(history) == SQLITE_ROW ? sqlite3_column_int(history, 0) : 0;
+            const int limit = row.value("limit_num", 0);
+            entries.push_back({
+                {"item_exchanges_id", row.value("id", 0)},
+                {"user_product_item_num", owned(row.value("product_item_id", 0))},
+                {"user_material_item_num", owned(row.value("material_item_id", 0))},
+                {"remaining_exchange_num", limit > 0 ? std::max(0, limit - used) : 0},
+                {"is_lock", row.value("unlock_conditions", 0) != 0},
+            });
+        }
+        sqlite3_finalize(history);
+        sqlite3_finalize(count);
+        nlohmann::json response = {
+            {"item_exchange_list", std::move(entries)},
+            {"is_convertible_limit_break_material", false},
+        };
+        return MockStoredResponse{response.dump(), {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::ItemExchangeSetPurchaseLocked(
+            std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        if (!payload.is_object() || !payload.contains("item_exchanges_id") ||
+            !payload["item_exchanges_id"].is_number_integer() || !payload.contains("num") ||
+            !payload["num"].is_number_integer()) {
+            return MockStoredResponse{R"({"error":"invalid item exchange request"})", {}, 400,
+                                      "Invalid item exchange request"};
+        }
+        const int64_t exchangeId64 = payload["item_exchanges_id"].get<int64_t>();
+        const int64_t quantity64 = payload["num"].get<int64_t>();
+        if (exchangeId64 < 1 || exchangeId64 > std::numeric_limits<int>::max() ||
+            quantity64 < 1 || quantity64 > 100) {
+            return MockStoredResponse{R"({"error":"invalid exchange quantity"})", {}, 400,
+                                      "Invalid exchange quantity"};
+        }
+        const int exchangeId = static_cast<int>(exchangeId64);
+        const int quantity = static_cast<int>(quantity64);
+        const auto catalog = OfflineApiMockBuiltIn::ItemExchangeCatalogJsonObj();
+        const nlohmann::json* offer = nullptr;
+        if (catalog.is_array()) {
+            for (const auto& row : catalog) {
+                if (row.value("id", 0) == exchangeId) { offer = &row; break; }
+            }
+        }
+        if (!offer || offer->value("unlock_conditions", 0) != 0) {
+            return MockStoredResponse{R"({"error":"exchange item unavailable"})", {}, 400,
+                                      "Exchange item unavailable"};
+        }
+        const int productId = offer->value("product_item_id", 0);
+        const int materialId = offer->value("material_item_id", 0);
+        const int productEach = offer->value("product_item_num", 0);
+        const int materialEach = offer->value("material_item_num", 0);
+        const int limit = offer->value("limit_num", 0);
+        if (productId <= 0 || materialId <= 0 || productEach <= 0 || materialEach <= 0 ||
+            productId == materialId) return std::nullopt;
+        if (!ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_item_exchange_purchase ("
+                         "item_exchanges_id INTEGER PRIMARY KEY, purchased_num INTEGER NOT NULL DEFAULT 0);"))
+            return std::nullopt;
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        const auto rollback = [this]() -> std::optional<MockStoredResponse> {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        };
+        const auto scalar = [this](const char* sql, int key) -> std::optional<int64_t> {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+                if (stmt) sqlite3_finalize(stmt);
+                return std::nullopt;
+            }
+            sqlite3_bind_int(stmt, 1, key);
+            const auto result = sqlite3_step(stmt) == SQLITE_ROW
+                ? std::optional<int64_t>(sqlite3_column_int64(stmt, 0)) : std::nullopt;
+            sqlite3_finalize(stmt);
+            return result;
+        };
+        const auto countSql = "SELECT COALESCE(SUM(item_num),0) FROM item WHERE item_id=?;";
+        const auto ownedMaterial = scalar(countSql, materialId);
+        const auto ownedProduct = scalar(countSql, productId);
+        const auto used = scalar("SELECT COALESCE((SELECT purchased_num FROM offline_item_exchange_purchase "
+                                 "WHERE item_exchanges_id=?),0);", exchangeId);
+        if (!ownedMaterial || !ownedProduct || !used) return rollback();
+        const int64_t materialCost = int64_t(materialEach) * quantity;
+        const int64_t productGain = int64_t(productEach) * quantity;
+        if (*ownedMaterial < materialCost || (limit > 0 && *used + quantity > limit)) {
+            ExecSql(db, "ROLLBACK;");
+            return MockStoredResponse{R"({"error":"insufficient materials or exchange limit reached"})",
+                                      {}, 400, "Exchange unavailable"};
+        }
+        const auto changeItem = [this](const char* sql, int64_t amount, int itemId) -> bool {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+                if (stmt) sqlite3_finalize(stmt);
+                return false;
+            }
+            sqlite3_bind_int64(stmt, 1, amount);
+            sqlite3_bind_int(stmt, 2, itemId);
+            bool ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) == 1;
+            sqlite3_finalize(stmt);
+            return ok;
+        };
+        if (!changeItem("UPDATE item SET item_num=item_num-? WHERE item_id=?;",
+                        materialCost, materialId) ||
+            !changeItem("UPDATE item SET item_num=item_num+? WHERE item_id=?;",
+                        productGain, productId)) return rollback();
+        sqlite3_stmt* history = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT INTO offline_item_exchange_purchase(item_exchanges_id,purchased_num) "
+                "VALUES(?,?) ON CONFLICT(item_exchanges_id) DO UPDATE SET "
+                "purchased_num=purchased_num+excluded.purchased_num;",
+                -1, &history, nullptr) != SQLITE_OK || !history) {
+            if (history) sqlite3_finalize(history);
+            return rollback();
+        }
+        sqlite3_bind_int(history, 1, exchangeId);
+        sqlite3_bind_int(history, 2, quantity);
+        const bool recorded = sqlite3_step(history) == SQLITE_DONE;
+        sqlite3_finalize(history);
+        if (!recorded || !ExecSql(db, "COMMIT;")) return rollback();
+        return MockStoredResponse{nlohmann::json{
+            {"user_product_item_num", *ownedProduct + productGain},
+            {"user_material_item_num", *ownedMaterial - materialCost},
+        }.dump(), {}, 200, "OK (offline item exchange)"};
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetCharacterInfoByIdLocked(std::string_view characterId) {
@@ -5018,6 +5188,18 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GetItemListResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetItemListResponseLocked();
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetItemExchangeListResponse(
+            std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetItemExchangeListResponseLocked(payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::ItemExchangeSetPurchase(
+            std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->ItemExchangeSetPurchaseLocked(payloadJson);
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::LookupItemDetailFromPayload(std::string_view payloadJson) {

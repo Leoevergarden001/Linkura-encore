@@ -509,6 +509,29 @@ namespace LinkuraLocal::HookDebug {
         if (Config::enableOfflineApiMock) Log::Info("[HomeFlow] HomeCalendar.SetData return");
     }
 
+    DEFINE_HOOK(void, HomeMenu_SetDispImage,
+                (void* self, int32_t* status, void* lockImage, int32_t contentsId,
+                 void* animationPlayIdList, void* method)) {
+        // Museum mode has local route handlers for these launcher entries.
+        // The original release condition is tied to the retired online state.
+        if (Config::enableOfflineApiMock && status && *status == 0) {
+            switch (contentsId) {
+                case 402: // Mission
+                case 312: // Present Box
+                case 601: // Shop
+                case 303: // Circle
+                case 904: // Notice
+                case 304: // Friend
+                    *status = 1; // GameDefine.eLauncherInfoStatus.Released
+                    break;
+                default:
+                    break;
+            }
+        }
+        HomeMenu_SetDispImage_Orig(self, status, lockImage, contentsId,
+                                   animationPlayIdList, method);
+    }
+
     DEFINE_HOOK(void, UniTaskBuilder_SetException, (void* self, void* exception, void* method)) {
         // Awaited UniTask faults need not pass through Unity's Debug logger.
         // Forward unchanged; this diagnostic must not turn failures into success.
@@ -1411,6 +1434,9 @@ namespace LinkuraLocal::HookDebug {
         }
 
         if (Config::enableOfflineApiMock) {
+            auto* homeMenu = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Tecotec", "HomeMenu");
+            auto* setDispImage = homeMenu ? Il2cppUtils::GetMethodIl2cpp(homeMenu, "SetDispImage", 4) : nullptr;
+            ADD_HOOK(HomeMenu_SetDispImage, setDispImage ? setDispImage->methodPointer : 0);
             auto* gacha = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Tecotec", "GachaSceneController");
             if (gacha) {
                 auto* phase = Il2cppUtils::GetMethodIl2cpp(gacha, "SetPhase", 4);

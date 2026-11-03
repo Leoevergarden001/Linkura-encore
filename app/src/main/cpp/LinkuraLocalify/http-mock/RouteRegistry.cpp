@@ -66,6 +66,16 @@ namespace LinkuraLocal::HttpMock {
             return ToBackendResponse(backend.GetHomeResponse());
         }
 
+        static std::optional<MockResponse> HandleItemExchangeGetList(const MockRequestContext& request,
+                                                                       HttpMockBackend& backend) {
+            return ToBackendResponse(backend.GetItemExchangeListResponse(request.payloadJson));
+        }
+
+        static std::optional<MockResponse> HandleItemExchangeSetPurchase(const MockRequestContext& request,
+                                                                           HttpMockBackend& backend) {
+            return ToBackendResponse(backend.ItemExchangeSetPurchase(request.payloadJson));
+        }
+
         static std::optional<MockResponse> HandleGachaGetSeriesList(const MockRequestContext&,
                                                                      HttpMockBackend& backend) {
             return ToBackendResponse(backend.GetGachaSeriesListResponse());
@@ -597,6 +607,30 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/user/login", HandleUserLogin);
             RegisterStaticJson(routes, "/v1/home/get_login_bonus", OfflineApiMockBuiltIn::HomeGetLoginBonusJsonView);
             RegisterBackend(routes, "/v1/home/get_home", HandleHomeGetHome);
+            // These launcher screens must have a valid first response before
+            // HomeMenu exposes them in offline mode. Empty player collections
+            // represent a clean local save; the shop catalog comes from Shops.yaml.
+            RegisterStaticJson(routes, "/v1/mission/get_list",
+                               OfflineApiMockBuiltIn::MissionGetListJsonView);
+            RegisterStaticJson(routes, "/v1/present_box/get_list",
+                               R"({"total_count":0,"page":1,"items":[]})");
+            RegisterStaticJson(routes, "/v1/shop/get_list",
+                               OfflineApiMockBuiltIn::ShopGetListJsonView);
+            RegisterBackend(routes, "/v1/item_exchange/get_list", HandleItemExchangeGetList);
+            RegisterBackend(routes, "/v1/item_exchange/get_list_new", HandleItemExchangeGetList);
+            RegisterBackend(routes, "/v1/item_exchange/set_purchase", HandleItemExchangeSetPurchase);
+            RegisterStaticJson(routes, "/v1/circle/get_circle_top_info",
+                               R"({"circle_info":null,"circle_member_list":[],"circle_ranking_info":null,"item_request_result":null,"emoji_list":[],"membership_list":[]})");
+            RegisterStaticJson(routes, "/v1/follow/get_list",
+                               R"({"follow_info_list":[],"max_follow_count":0})");
+            RegisterStaticJson(routes, "/v1/follow/get_follower_list",
+                               R"({"follower_info_list":[],"max_follower_count":0})");
+            RegisterStaticJson(routes, "/v1/follow/recommend_list",
+                               R"({"recommend_info_list":[],"max_recommend_count":0})");
+            RegisterStaticJson(routes, "/v1/friend/get_list",
+                               R"({"friend_info_list":[],"max_friend_count":0})");
+            RegisterStaticJson(routes, "/v1/announce/list",
+                               R"({"announce_list":[]})");
             RegisterBackend(routes, "/v1/gacha/get_series_list", HandleGachaGetSeriesList);
             RegisterBackend(routes, "/v1/gacha/set_purchase", HandleGachaSetPurchase);
             RegisterBackend(routes, "/v1/gacha/get_history", HandleGachaGetHistory);
