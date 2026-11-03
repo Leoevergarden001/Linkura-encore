@@ -30,12 +30,11 @@ namespace LinkuraLocal::HttpMock {
             std::vector<int> featuredCards;
             std::vector<int> cards;
         };
-        // The preserved 5.1 asset cache does not contain every historical
-        // card-animation dependency.  10215210 has been reproduced as an
-        // actual CardAnimationPlayer null-reference on the offline client, so
-        // do not advertise or draw it until its missing animation asset is
-        // recovered.  The card remains in the player's collection if it was
-        // previously acquired; this only protects future gacha results.
+        // 10215210 occurred in a draw that reproduced a CardAnimationPlayer
+        // null-reference on the offline client. The exact missing dependency
+        // has not been isolated, so exclude it from future Gacha draws until
+        // its asset chain and playback can be checked. Existing ownership
+        // remains intact.
         inline constexpr std::array<int, 1> kMuseumAnimationQuarantinedCards{{
             10215210,
         }};
@@ -1117,12 +1116,11 @@ namespace LinkuraLocal::HttpMock {
             series["user_series_exec_count"] = seriesState->drawCount;
             series["is_single_enable"] = state->freeJewels + state->paidJewels >= 200;
             series["is_consective_enable"] = state->freeJewels + state->paidJewels >= 2000;
-            // card_list is the client-side asset-preload manifest for this
-            // gacha series, not an ownership summary.  Sending only cards
-            // already owned left a newly drawn card without its art/spine
-            // dependencies when GetCardAnimation opened, producing a white
-            // screen or CardAnimationPlayer null reference.  Advertise the
-            // complete, validated museum candidate set before a draw instead.
+            // This series catalog must not depend on which cards the player
+            // already owns. Advertise the complete Museum candidate set so a
+            // new acquisition is represented consistently. Whether the
+            // client preloads its assets from this field still needs a direct
+            // client-side trace; Master metadata alone proves no asset exists.
             series["card_list"] = config.cards;
             seriesList.push_back(std::move(series));
         }

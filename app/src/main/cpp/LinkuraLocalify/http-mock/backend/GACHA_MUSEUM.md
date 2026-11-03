@@ -69,17 +69,31 @@ the current capped display value can overlap the nearby Detail button.
 
 ## Animation safety
 
-`GachaSeries.card_list` is treated by the client as the asset-preload manifest
-for a pool. The backend therefore sends the complete validated candidate set,
-not merely cards the local player already owns. The latter allowed a new draw
-to enter `GetCardAnimation` without the card art/spine dependency being
-prepared, which can present as a white screen.
+`GachaSeries.card_list` now contains the complete Museum candidate set rather
+than only locally owned cards. The old value was inconsistent for a new draw.
+It is still a hypothesis that this field drives asset preloading: the client
+has not been traced reading it for that purpose, and an emulator retest of the
+specific failed animation has not yet been completed. Do not treat this change
+alone as proof that the `CardAnimationPlayer` fault is fixed.
 
 The preserved data still does not contain every historical animation
 dependency. Card `10215210` is temporarily quarantined from future Museum
 draws after a reproduced `Tecotec.CardAnimationPlayer.PlayAsync`
-`NullReferenceException` on emulator-5562. It is not deleted from ownership
-or Collection; it will be re-enabled only after its missing asset chain is
-preserved and replayed successfully. This is deliberately a narrow runtime
+`NullReferenceException` on emulator-5562. The failing draw also contained
+nine other cards, so its exact cause has not yet been isolated. It is not
+deleted from ownership or Collection; it will be re-enabled after its asset
+chain and playback are checked. This is deliberately a narrow runtime
 safety exclusion, rather than silently treating the entire 73-card Master
 catalog as animation-verified.
+
+`tools/audit_gacha_assets.py` reports every current standard and featured
+candidate, the Master rows needed by its animation, and the number/size of
+files in the preserved external-resource archive. The 2026-10-25 full archive
+contains 35,952 regular `D/` files totalling 17,460,984,601 bytes. Current
+pool definitions reference 161 standard and 26 distinct featured cards;
+none lacks the checked Master records. All 187 still require per-card asset
+mapping and playback verification; the report marks `10215210` as an observed
+failure. Opaque `D/` names cannot establish which specific cards have art,
+movie, or voice available. Recover the client's catalog mapping first, then
+verify those three asset classes and expand only with observed successful
+playback.
