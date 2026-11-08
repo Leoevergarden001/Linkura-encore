@@ -62,6 +62,9 @@ class LinkuraHookMain : IXposedHookLoadPackage, IXposedHookZygoteInit  {
     private val nativeLibName = "HasuKikaisann"
 
     private var l4DataInited = false
+    // Config prepared inside the game process (built-in offline defaults or
+    // files in the game's own storage), consumed by the next initLinkuraConfig.
+    private var pendingLocalConfig: Intent? = null
     private var linkuraConfig: LinkuraConfig? = null
 
     private var getConfigError: Exception? = null
@@ -857,7 +860,12 @@ class LinkuraHookMain : IXposedHookLoadPackage, IXposedHookZygoteInit  {
     }
 
     fun initLinkuraConfig(activity: Activity) {
-        val intent = activity.intent
+        val intent = if (activity.intent?.getStringExtra("l4Data") == null && !l4DataInited &&
+            pendingLocalConfig != null) {
+            pendingLocalConfig!!.also { pendingLocalConfig = null }
+        } else {
+            activity.intent
+        }
         val l4Data = intent.getStringExtra("l4Data")
         val programData = intent.getStringExtra("localData")
         val archiveData = intent.getStringExtra("archiveData")
@@ -1119,7 +1127,45 @@ class LinkuraHookMain : IXposedHookLoadPackage, IXposedHookZygoteInit  {
         return locale.language
     }
 
+    // Offline single-client mode: the game no longer needs the standalone
+    // Localify app. Config comes from <filesDir>/linkura-local/config/*.json
+    // when present (for debugging via adb), otherwise from the offline
+    // defaults bundled in this module (assets/offline-config). Creating
+    // <filesDir>/linkura-local/config/use-companion restores the original
+    // round trip through the Localify app.
+    private fun prepareLocalConfig(context: Context): Boolean {
+        val configDir = File(context.filesDir, "linkura-local/config")
+        if (File(configDir, "use-companion").exists()) return false
+        fun read(name: String, fallback: String): String {
+            val override = File(configDir, name)
+            if (override.isFile) {
+                return try { override.readText() } catch (e: Exception) { fallback }
+            }
+            return try {
+                java.util.zip.ZipFile(modulePath).use { zip ->
+                    val entry = zip.getEntry("assets/offline-config/$name") ?: return fallback
+                    zip.getInputStream(entry).bufferedReader().use { it.readText() }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Built-in offline config $name unavailable", e)
+                fallback
+            }
+        }
+        val l4Data = read("l4-config.json", "")
+        if (l4Data.isBlank()) return false
+        pendingLocalConfig = Intent().apply {
+            putExtra("l4Data", l4Data)
+            putExtra("archiveData", read("archive-config.json", "[]"))
+            putExtra("clientResData", read("client-res.json", "{}"))
+            putExtra("lVerName", BuildConfig.VERSION_NAME)
+        }
+        Log.i(TAG, "Using in-game offline config; Localify app not required")
+        LogExporter.addLogEntry(TAG, "I", "Using in-game offline config")
+        return true
+    }
+
     fun requestConfig(activity: Context) {
+        if (prepareLocalConfig(activity)) return
         try {
             val intent = Intent().apply {
                 setClassName("io.github.chocolzs.linkura.localify", "io.github.chocolzs.linkura.localify.TranslucentActivity")
