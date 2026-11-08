@@ -531,6 +531,64 @@ namespace LinkuraLocal::HookDebug {
                                    animationPlayIdList, method);
     }
 
+    // The offline Mission response populates all three controller lists, but
+    // the 5.1.0 client initializes cells only for Daily. Feed the other two
+    // lists through the original cell builder after Daily has initialized.
+    DEFINE_HOOK(void, MissionSceneController_CreateMissionList,
+                (void* self, void* list, void* scroll, void* method)) {
+        const auto countList = [](void* value) {
+            if (!value) return -1;
+            auto* listClass = static_cast<Il2cppUtils::Il2CppObject*>(value)->klass;
+            auto* sizeField = Il2cppUtils::il2cpp_class_get_field_from_name(listClass, "_size");
+            if (!sizeField) return -1;
+            int count = -1;
+            std::memcpy(&count, static_cast<char*>(value) + sizeField->offset, sizeof(count));
+            return count;
+        };
+        auto* controllerClass = Il2cppUtils::GetClassIl2cpp(
+                "Assembly-CSharp.dll", "Tecotec", "MissionSceneController");
+        const auto controllerList = [&](const char* name) {
+            auto* field = controllerClass
+                    ? Il2cppUtils::il2cpp_class_get_field_from_name(controllerClass, name) : nullptr;
+            void* value = nullptr;
+            if (self && field) std::memcpy(&value, static_cast<char*>(self) + field->offset, sizeof(value));
+            return value;
+        };
+        auto* controllerBase = controllerClass
+                ? UnityResolve::Invoke<void*>("il2cpp_class_get_parent", controllerClass) : nullptr;
+        auto* viewField = controllerBase
+                ? Il2cppUtils::il2cpp_class_get_field_from_name(controllerBase, "_view") : nullptr;
+        void* view = nullptr;
+        if (self && viewField) {
+            std::memcpy(&view, static_cast<char*>(self) + viewField->offset, sizeof(view));
+        }
+        auto* viewClass = Il2cppUtils::GetClassIl2cpp(
+                "Assembly-CSharp.dll", "Tecotec", "MissionSceneView");
+        const auto viewScroll = [&](const char* name) {
+            void* value = nullptr;
+            auto* field = viewClass
+                    ? Il2cppUtils::il2cpp_class_get_field_from_name(viewClass, name) : nullptr;
+            if (view && field) {
+                std::memcpy(&value, static_cast<char*>(view) + field->offset, sizeof(value));
+            }
+            return value;
+        };
+        const auto dailyScroll = viewScroll("scrollView");
+        MissionSceneController_CreateMissionList_Orig(self, list, scroll, method);
+        if (!Config::enableOfflineApiMock || !dailyScroll || scroll != dailyScroll) return;
+        const auto populate = [&](const char* listName, const char* scrollName) {
+            auto* targetList = controllerList(listName);
+            auto* targetScroll = viewScroll(scrollName);
+            const int count = countList(targetList);
+            if (!targetScroll || count <= 0) return;
+            Log::InfoFmt("[MissionFlow] initializing %s cells=%d", listName, count);
+            MissionSceneController_CreateMissionList_Orig(
+                    self, targetList, targetScroll, method);
+        };
+        populate("weekMissionDataList", "weekMissionScrollView");
+        populate("NormalMissionDataList", "normalScrollView");
+    }
+
     DEFINE_HOOK(void, UniTaskBuilder_SetException, (void* self, void* exception, void* method)) {
         // Awaited UniTask faults need not pass through Unity's Debug logger.
         // Forward unchanged; this diagnostic must not turn failures into success.
@@ -1437,6 +1495,10 @@ namespace LinkuraLocal::HookDebug {
             auto* homeMenu = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Tecotec", "HomeMenu");
             auto* setDispImage = homeMenu ? Il2cppUtils::GetMethodIl2cpp(homeMenu, "SetDispImage", 4) : nullptr;
             ADD_HOOK(HomeMenu_SetDispImage, setDispImage ? setDispImage->methodPointer : 0);
+            auto* mission = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Tecotec", "MissionSceneController");
+            auto* createMission = mission ? Il2cppUtils::GetMethodIl2cpp(mission, "CreateMissionList", 2) : nullptr;
+            ADD_HOOK(MissionSceneController_CreateMissionList,
+                     createMission ? createMission->methodPointer : 0);
             auto* gacha = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Tecotec", "GachaSceneController");
             if (gacha) {
                 auto* phase = Il2cppUtils::GetMethodIl2cpp(gacha, "SetPhase", 4);
