@@ -1,12 +1,9 @@
-"""Build the mission catalog shown by the offline launcher.
+"""Build the preserved mission catalog and private condition metadata.
 
-The catalog comes from the preserved 5.1 Master snapshot. The Museum player
-holds the completed collection, so every mission shows full progress and the
-per-type achievement prizes (MissionAchieveRewards.yaml) as reached. Only Daily
-missions are flagged achieved: the client hides any other tab whose missions
-are all achieved, which would make Weekly/Main unbrowsable. The 5.1
-API has no per-mission claim route: the retired server delivered mission
-rewards itself, so nothing is granted here.
+Progress and achievement state belong to the local player database.  The
+catalog JSON is only a template; the backend fills those fields at request
+time.  Keep Master condition types in a separate built-in file so they never
+leak into the 5.1.0 API response.
 """
 from __future__ import annotations
 
@@ -20,14 +17,11 @@ TOOLS_DIR = Path(__file__).resolve().parent
 MASTER_DIR = TOOLS_DIR.parents[8] / "link-like-diff"
 BUILTIN_DIR = TOOLS_DIR.parent.parent / "builtin"
 MISSION_NAMES = {1: "デイリー", 2: "ウィークリー", 3: "メイン"}
-DAILY_MISSION_TYPE = 1
 
 
 def generate_json() -> None:
     missions = yaml.safe_load((MASTER_DIR / "Missions.yaml").read_text(encoding="utf-8"))
     rewards = yaml.safe_load((MASTER_DIR / "MissionRewards.yaml").read_text(encoding="utf-8"))
-    achieve_rewards = yaml.safe_load(
-        (MASTER_DIR / "MissionAchieveRewards.yaml").read_text(encoding="utf-8"))
     rewards_by_mission: dict[int, list[dict]] = {}
     for reward in rewards:
         rewards_by_mission.setdefault(reward["MissionsId"], []).append({
@@ -55,28 +49,17 @@ def generate_json() -> None:
                 "name": row["Name"],
                 "description": row["Description"],
                 "condition_achieve_num": row.get("MissionConditionNum", 0),
-                "achieved_num": row.get("MissionConditionNum", 0),
+                "achieved_num": 0,
                 "transition_contents_id": row.get("TransitionContentsId", 0),
-                # The client hides a tab whose missions are all achieved (Daily
-                # excepted). Weekly/Main keep full progress but stay unachieved
-                # so their tabs remain browsable in the Museum.
-                "is_achieved": mission_type == DAILY_MISSION_TYPE,
+                "is_achieved": False,
                 "reward_list": rewards_by_mission.get(row["Id"], []),
             } for row in rows],
-            "achieve_reward_list": [{
-                "achieved_num": min(len(rows), prize["AchieveMarkNum"]),
-                "target_num": prize["AchieveMarkNum"],
-                "is_achieved": True,
-                "reward_list": [{
-                    "reward_type": 1,
-                    "item_type": prize["RewardType"],
-                    "item_id": prize["ItemsId"],
-                    "reward_num": prize["RewardNum"],
-                }],
-            } for prize in sorted(
-                (p for p in achieve_rewards if p.get("MissionType") == mission_type),
-                key=lambda p: (p.get("SortOrder", 0), p["Id"]),
-            )],
+            # Verified on 5.1.0 (2026-11-08): a non-empty Daily achieve list
+            # switches the screen to a Daily+共通-only layout that hides the
+            # ウィークリー/メイン tabs, and the Weekly prize panel renders no
+            # entries ("5/3"). Keep the prize lists empty so every tab stays
+            # usable; prizes are therefore neither shown nor paid offline.
+            "achieve_reward_list": [],
         })
     output = {
         "mission_list": groups,
@@ -89,6 +72,15 @@ def generate_json() -> None:
     output_path = BUILTIN_DIR / "mission_get_list.json"
     output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"  Written -> {output_path}")
+
+    rules = {str(row["Id"]): {
+        "mission_type": row["MissionType"],
+        "condition_type": row["MissionConditionType"],
+        "condition_detail": row.get("MissionConditionDetail", 0),
+    } for row in missions if row.get("MissionType") in MISSION_NAMES}
+    rules_path = BUILTIN_DIR / "mission_rules.json"
+    rules_path.write_text(json.dumps(rules, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"  Written -> {rules_path}")
 
 
 if __name__ == "__main__":

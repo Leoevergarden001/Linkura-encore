@@ -231,6 +231,7 @@ namespace LinkuraLocal::HttpMock {
 
         bool EnsureReadyLocked();
         bool EnsureMuseumCatalogLocked();
+        bool BackfillMissionHistoryLocked();
         bool EnsureMuseumGachaCardsLocked();
         std::vector<int> GetOwnedMuseumGachaCardsLocked(const MuseumGachaSeries& series);
         bool EnsureQuestSessionSchemaLocked();
@@ -238,6 +239,9 @@ namespace LinkuraLocal::HttpMock {
         bool RebuildLocked();
         std::optional<MockStoredResponse> GetArchiveDetailByIdLocked(std::string_view archivesId);
         std::optional<MockStoredResponse> GetHomeResponseLocked();
+        std::optional<MockStoredResponse> GetMissionListResponseLocked();
+        bool RecordMissionEventLocked(std::string_view sourceKey, std::string_view kind,
+                                      int amount = 1, int detail = 0);
         std::optional<nlohmann::json> BuildProfileInfoLocked();
         std::optional<MockStoredResponse> GetProfileInfoResponseLocked();
         struct CardGrowthState {
@@ -705,6 +709,62 @@ namespace LinkuraLocal::HttpMock {
             return false;
         }
 
+        if (!BackfillMissionHistoryLocked()) {
+            persistentStorageAvailable = false;
+            return false;
+        }
+
+        return true;
+    }
+
+    bool HttpMockBackend::Impl::BackfillMissionHistoryLocked() {
+        if (!db || !ExecSql(db, "BEGIN IMMEDIATE;")) return false;
+        sqlite3_stmt* insert = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT OR IGNORE INTO offline_mission_event "
+                "(source_key,event_kind,amount,detail,occurred_at) VALUES (?,'CARD_OBTAIN',?,0,?);",
+                -1, &insert, nullptr) != SQLITE_OK || !insert) {
+            if (insert) sqlite3_finalize(insert);
+            ExecSql(db, "ROLLBACK;");
+            return false;
+        }
+        const auto import = [this, insert](const char* sql, std::string_view prefix,
+                                           bool isDraw) -> bool {
+            sqlite3_stmt* rows = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &rows, nullptr) != SQLITE_OK || !rows) {
+                if (rows) sqlite3_finalize(rows);
+                return false;
+            }
+            bool ok = true;
+            while (sqlite3_step(rows) == SQLITE_ROW) {
+                const auto* rawDate = reinterpret_cast<const char*>(sqlite3_column_text(rows, 1));
+                const auto* rawResults = isDraw
+                    ? reinterpret_cast<const char*>(sqlite3_column_text(rows, 2)) : nullptr;
+                const auto parsed = isDraw
+                    ? nlohmann::json::parse(rawResults ? rawResults : "[]", nullptr, false)
+                    : nlohmann::json::array();
+                const int amount = isDraw && parsed.is_array() ? static_cast<int>(parsed.size()) : 1;
+                if (!rawDate || amount <= 0) continue;
+                sqlite3_reset(insert);
+                sqlite3_clear_bindings(insert);
+                ok = BindText(insert, 1, std::string(prefix) + std::to_string(sqlite3_column_int64(rows, 0))) &&
+                     sqlite3_bind_int(insert, 2, amount) == SQLITE_OK &&
+                     BindText(insert, 3, rawDate) && sqlite3_step(insert) == SQLITE_DONE;
+                if (!ok) break;
+            }
+            sqlite3_finalize(rows);
+            return ok;
+        };
+        const bool ok = import(
+            "SELECT draw_id, drawn_at, results_json FROM museum_gacha_history;",
+            "gacha-draw:", true) && import(
+            "SELECT exchange_id, exchanged_at FROM museum_gacha_exchange_history;",
+            "gacha-exchange:", false);
+        sqlite3_finalize(insert);
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return false;
+        }
         return true;
     }
 
@@ -911,12 +971,15 @@ namespace LinkuraLocal::HttpMock {
         if (!ExecSql(db, HttpMockBackendBuiltInSql::QueriesResetMuseumStateSqlView.data())) {
             return false;
         }
-        if (!ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
+        if (!ExecSql(db, "DELETE FROM offline_mission_event;") ||
+            !ExecSql(db, "DELETE FROM offline_mission_award;") ||
+            !ExecSql(db, "DELETE FROM offline_mission_meta;") ||
+            !ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
             return false;
         }
 
         return ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SeedScripts, "seed") &&
-               EnsureMuseumCatalogLocked();
+               EnsureMuseumCatalogLocked() && BackfillMissionHistoryLocked();
     }
 
     bool HttpMockBackend::Impl::RebuildLocked() {
@@ -1515,6 +1578,18 @@ namespace LinkuraLocal::HttpMock {
             ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) == 1;
         }
         if (stmt) sqlite3_finalize(stmt);
+        int characterId = 0;
+        sqlite3_stmt* characterStmt = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT character_id FROM card_detail WHERE d_card_datas_id=?;",
+                               -1, &characterStmt, nullptr) == SQLITE_OK && characterStmt) {
+            BindText(characterStmt, 1, state->dCardDatasId);
+            if (sqlite3_step(characterStmt) == SQLITE_ROW)
+                characterId = sqlite3_column_int(characterStmt, 0);
+        }
+        if (characterStmt) sqlite3_finalize(characterStmt);
+        ok = ok && RecordMissionEventLocked(
+            "style:" + state->dCardDatasId + ":" + std::to_string(target),
+            "STYLE_LEVEL_GAIN", target - state->styleLevel, characterId);
         if (!ok || !ExecSql(db, "COMMIT;")) {
             ExecSql(db, "ROLLBACK;");
             return GrowthResult(false, "insufficient style points");
@@ -1645,6 +1720,8 @@ namespace LinkuraLocal::HttpMock {
             }
             if (maxStmt) sqlite3_finalize(maxStmt);
         }
+        ok = ok && RecordMissionEventLocked(
+            "evolve:" + state->dCardDatasId + ":" + std::to_string(next), "EVOLUTION");
         if (!ok || !ExecSql(db, "COMMIT;")) {
             ExecSql(db, "ROLLBACK;");
             return GrowthResult(false, "insufficient materials");
@@ -1735,6 +1812,248 @@ namespace LinkuraLocal::HttpMock {
         return MockStoredResponse{
             result.dump(), GachaHeaders(gachaState->freeJewels, gachaState->paidJewels),
             200, "OK (offline mock)"};
+    }
+
+    bool HttpMockBackend::Impl::RecordMissionEventLocked(std::string_view sourceKey,
+                                                         std::string_view kind,
+                                                         int amount, int detail) {
+        if (!db || sourceKey.empty() || kind.empty() || amount < 0) return false;
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "INSERT OR IGNORE INTO offline_mission_event "
+                          "(source_key,event_kind,amount,detail) VALUES (?,?,?,?);";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            return false;
+        }
+        const bool ok = BindText(stmt, 1, sourceKey) && BindText(stmt, 2, kind) &&
+                        sqlite3_bind_int(stmt, 3, amount) == SQLITE_OK &&
+                        sqlite3_bind_int(stmt, 4, detail) == SQLITE_OK &&
+                        sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetMissionListResponseLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const auto& rules = OfflineApiMockBuiltIn::MissionRulesJsonObj();
+        nlohmann::json result = OfflineApiMockBuiltIn::MissionGetListJsonObj();
+        if (!rules.is_object() || !result.is_object() ||
+            !result.contains("mission_list") || !result["mission_list"].is_array()) return std::nullopt;
+
+        const auto scalar = [this](const std::string& sql, int detail = 0,
+                                   std::string_view kind = {}) -> int64_t {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+                if (stmt) sqlite3_finalize(stmt);
+                Log::ErrorFmt("[MissionFlow] progress query failed: %s", sqlite3_errmsg(db));
+                return 0;
+            }
+            int index = 1;
+            if (!kind.empty()) BindText(stmt, index++, kind);
+            if (detail) sqlite3_bind_int(stmt, index, detail);
+            const int64_t value = sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : 0;
+            sqlite3_finalize(stmt);
+            return value;
+        };
+        const auto eventCount = [&](int missionType, std::string_view kind,
+                                    int detail = 0, bool distinctDetail = false) -> int64_t {
+            std::string sql = distinctDetail ?
+                "SELECT COUNT(DISTINCT detail) FROM offline_mission_event WHERE event_kind=?" :
+                "SELECT COALESCE(SUM(amount),0) FROM offline_mission_event WHERE event_kind=?";
+            if (detail) sql += " AND detail=?";
+            if (missionType == 1) {
+                sql += " AND date(occurred_at,'+9 hours','-4 hours')="
+                       "date('now','+9 hours','-4 hours')";
+            } else if (missionType == 2) {
+                sql += " AND date(occurred_at,'+9 hours','-4 hours','weekday 0','-6 days')="
+                       "date('now','+9 hours','-4 hours','weekday 0','-6 days')";
+            }
+            return scalar(sql, detail, kind);
+        };
+
+        const auto periodKey = [](int missionType) -> std::string {
+            if (missionType == 3) return "main";
+            // 04:00 JST is 19:00 UTC on the preceding civil day.
+            std::time_t shifted = std::time(nullptr) + 5 * 3600;
+            std::tm day{};
+#if defined(_WIN32)
+            gmtime_s(&day, &shifted);
+#else
+            gmtime_r(&shifted, &day);
+#endif
+            if (missionType == 2) {
+                shifted -= ((day.tm_wday + 6) % 7) * 86400;
+#if defined(_WIN32)
+                gmtime_s(&day, &shifted);
+#else
+                gmtime_r(&shifted, &day);
+#endif
+            }
+            char date[16]{};
+            std::strftime(date, sizeof(date), "%Y-%m-%d", &day);
+            return std::to_string(missionType) + ":" + date;
+        };
+        nlohmann::json reachedAwards = nlohmann::json::array();
+        // Member Fan Lv. as shown in the profile (same ProfileInfo source).
+        const auto profile = BuildProfileInfoLocked();
+        const auto fanLevel = [&profile](int characterId) -> int64_t {
+            if (!profile || !profile->contains("fan_level_list")) return 0;
+            for (const auto& entry : (*profile)["fan_level_list"]) {
+                if (entry.value("character_id", 0) == characterId) return entry.value("member_fan_level", 0);
+            }
+            return 0;
+        };
+
+        for (auto& group : result["mission_list"]) {
+            const int missionType = group.value("mission_type", 0);
+            const std::string period = periodKey(missionType);
+            int completed = 0;
+            for (auto& mission : group["mission_list"]) {
+                const int id = mission.value("mission_id", 0);
+                const auto rule = rules.find(std::to_string(id));
+                if (rule == rules.end() || !rule->is_object()) continue;
+                const int condition = rule->value("condition_type", 0);
+                const int detail = rule->value("condition_detail", 0);
+                int64_t progress = 0;
+                switch (condition) {
+                    case 1: progress = eventCount(missionType, "QUEST_CLEAR"); break;
+                    case 3: progress = eventCount(missionType, "DAILY_CLEAR"); break;
+                    case 5: progress = eventCount(missionType, "DREAM_CLEAR"); break;
+                    case 10:
+                        progress = scalar(
+                            "SELECT COALESCE(SUM(best),0) FROM (SELECT MAX(amount) AS best "
+                            "FROM offline_mission_event WHERE event_kind=? GROUP BY detail)", 0, "QUEST_STAR");
+                        break;
+                    case 13:
+                        if (detail == 1) {
+                            const int64_t total = scalar(
+                                "SELECT COUNT(*) FROM daily_quest_stage WHERE stage_id % 100 = 1");
+                            progress = total > 0 &&
+                                eventCount(3, "DAILY_CLEAR_I", 0, true) >= total ? 1 : 0;
+                        }
+                        break;
+                    case 20:
+                        progress = detail == 0 ? scalar(
+                            "SELECT COUNT(DISTINCT card_detail.card_datas_id) FROM museum_card_ownership "
+                            "JOIN card_detail USING(d_card_datas_id)") : scalar(
+                            "SELECT COUNT(DISTINCT card_detail.card_datas_id) FROM museum_card_ownership "
+                            "JOIN card_detail USING(d_card_datas_id) WHERE card_detail.character_id=?1",
+                            detail);
+                        break;
+                    case 21: progress = eventCount(missionType, "CARD_OBTAIN"); break;
+                    case 30:
+                        // Main: a member's current style level total; Weekly:
+                        // levels gained this week.
+                        progress = (missionType == 3 && detail) ? scalar(
+                            "SELECT COALESCE(SUM(museum_card_state.style_level),0) FROM museum_card_ownership "
+                            "JOIN museum_card_state USING(d_card_datas_id) "
+                            "JOIN card_detail USING(d_card_datas_id) WHERE card_detail.character_id=?1",
+                            detail) : eventCount(missionType, "STYLE_LEVEL_GAIN", detail);
+                        break;
+                    case 60:
+                        progress = fanLevel(detail);
+                        break;
+                    case 40: progress = eventCount(missionType, "EVOLUTION"); break;
+                    case 901: progress = eventCount(missionType, "SHOW_CLEAR"); break;
+                    // Skill upgrades, With×MEETS viewing and social actions have
+                    // no local player event source yet.
+                    default: break;
+                }
+                const int target = mission.value("condition_achieve_num", 0);
+                const int shown = static_cast<int>(std::clamp<int64_t>(progress, 0, target));
+                mission["achieved_num"] = shown;
+                mission["is_achieved"] = target > 0 && shown >= target;
+                if (target > 0 && shown >= target) {
+                    ++completed;
+                    reachedAwards.push_back({{"period", period}, {"id", id},
+                                             {"rewards", mission.value("reward_list", nlohmann::json::array())}});
+                }
+            }
+            for (auto& prize : group["achieve_reward_list"]) {
+                prize["achieved_num"] = completed;
+                const int target = prize.value("target_num", 0);
+                prize["is_achieved"] = target > 0 && completed >= target;
+                if (target > 0 && completed >= target) {
+                    reachedAwards.push_back({
+                        {"period", period}, {"id", -1000000 - missionType * 1000 - target},
+                        {"rewards", prize.value("reward_list", nlohmann::json::array())}});
+                }
+            }
+        }
+
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        const auto rollback = [this]() -> std::optional<MockStoredResponse> {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        };
+        // Bump the version whenever progress rules change: on the first list
+        // after a rule change, everything already reached is baselined rather
+        // than paid out (otherwise new rules would pay for Museum state).
+        if (!ExecSql(db, "INSERT OR IGNORE INTO offline_mission_meta(key,value) "
+                         "VALUES('award_baseline_v2','done');")) return rollback();
+        const bool isBaseline = sqlite3_changes(db) == 1;
+        sqlite3_stmt* award = nullptr;
+        sqlite3_stmt* grant = nullptr;
+        const bool prepared =
+            sqlite3_prepare_v2(db,
+                "INSERT OR IGNORE INTO offline_mission_award(period_key,mission_id,award_state) "
+                "VALUES(?,?,?);", -1, &award, nullptr) == SQLITE_OK && award &&
+            sqlite3_prepare_v2(db,
+                "INSERT INTO museum_item_inventory(d_item_datas_id,item_num) "
+                "SELECT d_item_datas_id,?1 FROM item WHERE item_id=?2 LIMIT 1 "
+                "ON CONFLICT(d_item_datas_id) DO UPDATE SET item_num=item_num+excluded.item_num;",
+                -1, &grant, nullptr) == SQLITE_OK && grant;
+        if (!prepared) {
+            if (award) sqlite3_finalize(award);
+            if (grant) sqlite3_finalize(grant);
+            return rollback();
+        }
+        bool ok = true;
+        for (const auto& reached : reachedAwards) {
+            sqlite3_reset(award);
+            sqlite3_clear_bindings(award);
+            ok = BindText(award, 1, reached["period"].get<std::string>()) &&
+                 sqlite3_bind_int(award, 2, reached["id"].get<int>()) == SQLITE_OK &&
+                 BindText(award, 3, isBaseline ? "BASELINE" : "GRANTED") &&
+                 sqlite3_step(award) == SQLITE_DONE;
+            if (!ok) break;
+            if (sqlite3_changes(db) == 0 || isBaseline) continue;
+            for (const auto& reward : reached["rewards"]) {
+                // Category 1 records are achievement marks, not inventory.
+                if (reward.value("reward_type", 0) != 2 &&
+                    reached["id"].get<int>() > 0) continue;
+                const int itemId = reward.value("item_id", 0);
+                const int amount = reward.value("reward_num", 0);
+                if (itemId <= 0 || amount <= 0) continue;
+                sqlite3_reset(grant);
+                sqlite3_clear_bindings(grant);
+                ok = sqlite3_bind_int(grant, 1, amount) == SQLITE_OK &&
+                     sqlite3_bind_int(grant, 2, itemId) == SQLITE_OK &&
+                     sqlite3_step(grant) == SQLITE_DONE && sqlite3_changes(db) == 1;
+                if (!ok) break;
+                if (itemId == 1002001) {
+                    sqlite3_stmt* wallet = nullptr;
+                    ok = sqlite3_prepare_v2(db,
+                        "UPDATE museum_gacha_state SET free_jewels=free_jewels+? "
+                        "WHERE series_id=1055003;", -1, &wallet, nullptr) == SQLITE_OK && wallet;
+                    if (ok) {
+                        sqlite3_bind_int(wallet, 1, amount);
+                        ok = sqlite3_step(wallet) == SQLITE_DONE && sqlite3_changes(db) == 1;
+                    }
+                    if (wallet) sqlite3_finalize(wallet);
+                    if (!ok) break;
+                }
+            }
+            if (!ok) break;
+        }
+        sqlite3_finalize(award);
+        sqlite3_finalize(grant);
+        if (!ok || !ExecSql(db, "COMMIT;")) return rollback();
+        const auto wallet = LoadGachaStateLocked();
+        return MockStoredResponse{
+            result.dump(), wallet ? GachaHeaders(wallet->freeJewels, wallet->paidJewels) : std::string{},
+            200, "OK (offline mission state)"};
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetGachaSeriesListResponseLocked() {
@@ -1963,6 +2282,11 @@ namespace LinkuraLocal::HttpMock {
                 sqlite3_bind_int(history, 3, price) == SQLITE_OK &&
                 BindText(history, 4, resultsText) && sqlite3_step(history) == SQLITE_DONE;
         sqlite3_finalize(history);
+        if (valid) {
+            const auto drawId = sqlite3_last_insert_rowid(db);
+            valid = RecordMissionEventLocked("gacha-draw:" + std::to_string(drawId),
+                                             "CARD_OBTAIN", drawCount);
+        }
         if (!valid || !ExecSql(db, "COMMIT;")) return rollback();
 
         nlohmann::json response;
@@ -2230,6 +2554,11 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_bind_int(history, 4, offer->price);
         valid = sqlite3_step(history) == SQLITE_DONE;
         sqlite3_finalize(history);
+        if (valid) {
+            const auto exchangeId = sqlite3_last_insert_rowid(db);
+            valid = RecordMissionEventLocked("gacha-exchange:" + std::to_string(exchangeId),
+                                             "CARD_OBTAIN", offer->quantity);
+        }
         if (!valid || !ExecSql(db, "COMMIT;")) return rollback();
         Log::InfoFmt("[HttpMockBackend] offline gacha exchange rate=%d card=%d points=%lld",
                      rateId, offer->cardId,
@@ -3121,12 +3450,13 @@ namespace LinkuraLocal::HttpMock {
         }
         int musicId = 0;
         int difficulty = 0;
+        std::string missionSourceId;
         std::string sessionState;
         std::string storedResult;
         {
             sqlite3_stmt* stmt = nullptr;
             constexpr const char* sql =
-                "SELECT music_id, difficulty, state, result_json "
+                "SELECT music_id, difficulty, state, result_json, session_id "
                 "FROM rhythm_runtime_session WHERE singleton_id = 1;";
             if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
                 Log::ErrorFmt("[HttpMockBackend] rhythm session lookup failed: %s", sqlite3_errmsg(db));
@@ -3144,6 +3474,8 @@ namespace LinkuraLocal::HttpMock {
             const auto* rawResult = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
             sessionState = rawState ? rawState : "";
             storedResult = rawResult ? rawResult : "";
+            const auto* rawSessionId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+            missionSourceId = rawSessionId ? rawSessionId : "";
             sqlite3_finalize(stmt);
         }
         if (sessionState == "FINISHED" && !storedResult.empty()) {
@@ -3382,6 +3714,12 @@ namespace LinkuraLocal::HttpMock {
             return std::nullopt;
         }
         sqlite3_finalize(finish);
+        // A live that runs out of mental is a failure, not a clear.
+        const bool showCleared = payload.value("remain_mental", 1) > 0;
+        if (showCleared && !RecordMissionEventLocked("rhythm:" + missionSourceId, "SHOW_CLEAR")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
         if (!ExecSql(db, "COMMIT;")) {
             ExecSql(db, "ROLLBACK;");
             return std::nullopt;
@@ -4035,7 +4373,8 @@ namespace LinkuraLocal::HttpMock {
             {"play_report", currentQuestLive.playReport},
         };
 
-        if (!ExecSql(db, "BEGIN IMMEDIATE;")) {
+        const bool ownsTransaction = sqlite3_get_autocommit(db) != 0;
+        if (ownsTransaction && !ExecSql(db, "BEGIN IMMEDIATE;")) {
             return false;
         }
         sqlite3_stmt* stmt = nullptr;
@@ -4047,7 +4386,7 @@ namespace LinkuraLocal::HttpMock {
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
             Log::ErrorFmt("[HttpMockBackend] quest session persist prepare failed: %s", sqlite3_errmsg(db));
             if (stmt) sqlite3_finalize(stmt);
-            ExecSql(db, "ROLLBACK;");
+            if (ownsTransaction) ExecSql(db, "ROLLBACK;");
             return false;
         }
 
@@ -4066,11 +4405,11 @@ namespace LinkuraLocal::HttpMock {
         if (!bound || sqlite3_step(stmt) != SQLITE_DONE) {
             Log::ErrorFmt("[HttpMockBackend] quest session persist failed: %s", sqlite3_errmsg(db));
             sqlite3_finalize(stmt);
-            ExecSql(db, "ROLLBACK;");
+            if (ownsTransaction) ExecSql(db, "ROLLBACK;");
             return false;
         }
         sqlite3_finalize(stmt);
-        if (!ExecSql(db, "COMMIT;")) {
+        if (ownsTransaction && !ExecSql(db, "COMMIT;")) {
             ExecSql(db, "ROLLBACK;");
             return false;
         }
@@ -4223,7 +4562,59 @@ namespace LinkuraLocal::HttpMock {
         currentQuestLive.score = payload.value("score", int64_t(0));
         currentQuestLive.playReport = payload.value("play_report", std::string{});
         currentQuestLive.finished = true;
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) {
+            currentQuestLive.finished = false;
+            return std::nullopt;
+        }
         if (!PersistQuestSessionLocked("FINISHED")) {
+            ExecSql(db, "ROLLBACK;");
+            currentQuestLive.finished = false;
+            return std::nullopt;
+        }
+        bool missionRecorded = true;
+        // questLiveId is "<type>_<stage>" and repeats for every replay of a
+        // stage; the start time makes the key unique per play while a repeated
+        // finish of the same play still maps to the same key.
+        const std::string missionSource =
+            "quest:" + currentQuestLive.questLiveId + "@" + currentQuestLive.startTime;
+        const int liveType = currentQuestLive.questLiveType;
+        // "スクールアイドルステージでライブを○回クリア" counts any stage live.
+        // Dream counts only when cleared (recorded in dream/get_result); Grade
+        // lives can end in LIVE FAILED, which this handler cannot see.
+        if (liveType == kQuestLiveTypeStandard || liveType == kQuestLiveTypeDaily ||
+            liveType == 3 || liveType == 6) {
+            missionRecorded = RecordMissionEventLocked(missionSource, "QUEST_CLEAR", 1,
+                                                        currentQuestLive.stageId);
+        }
+        if (liveType == kQuestLiveTypeStandard && !currentQuestLive.isChallengeMode) {
+            sqlite3_stmt* scoreStmt = nullptr;
+            int stars = 0;
+            if (sqlite3_prepare_v2(db,
+                    "SELECT score1, score2, score3 FROM quest_stage WHERE stage_id=?;",
+                    -1, &scoreStmt, nullptr) == SQLITE_OK && scoreStmt) {
+                sqlite3_bind_int(scoreStmt, 1, currentQuestLive.stageId);
+                if (sqlite3_step(scoreStmt) == SQLITE_ROW) {
+                    for (int i = 0; i < 3; ++i) {
+                        const int64_t threshold = sqlite3_column_int64(scoreStmt, i);
+                        if (threshold > 0 && currentQuestLive.score >= threshold) ++stars;
+                    }
+                }
+            }
+            if (scoreStmt) sqlite3_finalize(scoreStmt);
+            // detail = stage: progress uses the best stars per stage.
+            missionRecorded = missionRecorded && RecordMissionEventLocked(
+                missionSource + ":stars", "QUEST_STAR", stars, currentQuestLive.stageId);
+        } else if (liveType == kQuestLiveTypeDaily) {
+            missionRecorded = missionRecorded && RecordMissionEventLocked(
+                missionSource + ":daily", "DAILY_CLEAR", 1, currentQuestLive.stageId);
+            if (currentQuestLive.stageId % 100 == 1) {
+                missionRecorded = missionRecorded && RecordMissionEventLocked(
+                    missionSource + ":rank-i", "DAILY_CLEAR_I", 1, currentQuestLive.stageId);
+            }
+        }
+        if (!missionRecorded) {
+            ExecSql(db, "ROLLBACK;");
+            currentQuestLive.finished = false;
             return std::nullopt;
         }
         currentQuestLive.rewardList = nlohmann::json::array();
@@ -4232,6 +4623,11 @@ namespace LinkuraLocal::HttpMock {
         if (currentQuestLive.questLiveType == kQuestLiveTypeDaily ||
             currentQuestLive.questLiveType == kQuestLiveTypeStandard) {
             currentQuestLive.rewardList = GrantStageDropsLocked(currentQuestLive.stageId);
+        }
+        if (!ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            currentQuestLive.finished = false;
+            return std::nullopt;
         }
 
         nlohmann::json result;
@@ -4324,11 +4720,18 @@ namespace LinkuraLocal::HttpMock {
             if (!initialized && !EnsureReadyLocked()) return std::nullopt;
             const int skips = std::max(1, payload.is_object() ? payload.value("skip_count", 1) : 1);
             ConsumeStaminaLocked(int64_t(StageStaminaCostLocked(questLiveType, stageId)) * skips);
+            if (questLiveType != kQuestLiveTypeStandard)
+                RecordMissionEventLocked("skip:" + GenerateUuid4(), "QUEST_CLEAR", skips, stageId);
         }
         if (questLiveType == kQuestLiveTypeDaily || questLiveType == kQuestLiveTypeStandard) {
             if (!initialized && !EnsureReadyLocked()) return std::nullopt;
             const int skipCount = std::max(1, payload.is_object() ? payload.value("skip_count", 1) : 1);
             if (questLiveType == kQuestLiveTypeDaily) ConsumeDailyTicketsLocked(skipCount);
+            // Skips count toward the clear missions ("（スキップ可）").
+            const std::string skipSource = "skip:" + GenerateUuid4();
+            RecordMissionEventLocked(skipSource, "QUEST_CLEAR", skipCount, stageId);
+            if (questLiveType == kQuestLiveTypeDaily)
+                RecordMissionEventLocked(skipSource + ":daily", "DAILY_CLEAR", skipCount, stageId);
             // One SkipRewardList entry per skipped play, plus the summed total.
             std::map<int, int64_t> totals;
             for (int index = 0; index < skipCount; ++index) {
@@ -5016,6 +5419,12 @@ namespace LinkuraLocal::HttpMock {
             if (stmt) sqlite3_finalize(stmt);
         }
         const bool isClear = currentQuestLive.score >= requiredLove;
+        if (isClear && db && !currentQuestLive.questLiveId.empty()) {
+            const std::string dreamSource =
+                "dream:" + currentQuestLive.questLiveId + "@" + currentQuestLive.startTime;
+            RecordMissionEventLocked(dreamSource, "DREAM_CLEAR", 1, currentQuestLive.stageId);
+            RecordMissionEventLocked(dreamSource + ":live", "QUEST_CLEAR", 1, currentQuestLive.stageId);
+        }
         if (isClear && !clearedBefore && db) {
             sqlite3_stmt* stmt = nullptr;
             if (sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO offline_dream_clear(stage_id) VALUES(?);",
@@ -6151,6 +6560,11 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GetHomeResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetHomeResponseLocked();
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetMissionListResponse() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetMissionListResponseLocked();
     }
 
     // Every response carries the wallet in its headers and the client updates

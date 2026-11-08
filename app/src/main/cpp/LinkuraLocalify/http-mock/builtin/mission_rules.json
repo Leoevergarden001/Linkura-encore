@@ -1,0 +1,507 @@
+{
+  "10010001": {
+    "mission_type": 1,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "10010002": {
+    "mission_type": 1,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "10010003": {
+    "mission_type": 1,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "10010004": {
+    "mission_type": 1,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "10010005": {
+    "mission_type": 1,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "10020001": {
+    "mission_type": 1,
+    "condition_type": 3,
+    "condition_detail": 0
+  },
+  "10080001": {
+    "mission_type": 1,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "10080002": {
+    "mission_type": 1,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "10080003": {
+    "mission_type": 1,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "10080004": {
+    "mission_type": 1,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "10080005": {
+    "mission_type": 1,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "10080006": {
+    "mission_type": 1,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "20010001": {
+    "mission_type": 2,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "20010002": {
+    "mission_type": 2,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "20010003": {
+    "mission_type": 2,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "20010004": {
+    "mission_type": 2,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "20010005": {
+    "mission_type": 2,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "20010006": {
+    "mission_type": 2,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "20010007": {
+    "mission_type": 2,
+    "condition_type": 1,
+    "condition_detail": 0
+  },
+  "20020001": {
+    "mission_type": 2,
+    "condition_type": 3,
+    "condition_detail": 0
+  },
+  "20020002": {
+    "mission_type": 2,
+    "condition_type": 3,
+    "condition_detail": 0
+  },
+  "20020003": {
+    "mission_type": 2,
+    "condition_type": 3,
+    "condition_detail": 0
+  },
+  "20080001": {
+    "mission_type": 2,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "20080002": {
+    "mission_type": 2,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "20080003": {
+    "mission_type": 2,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "20080004": {
+    "mission_type": 2,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "20080005": {
+    "mission_type": 2,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "20080006": {
+    "mission_type": 2,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "20080007": {
+    "mission_type": 2,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "20080008": {
+    "mission_type": 2,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "20080009": {
+    "mission_type": 2,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "20080010": {
+    "mission_type": 2,
+    "condition_type": 901,
+    "condition_detail": 0
+  },
+  "20200001": {
+    "mission_type": 2,
+    "condition_type": 21,
+    "condition_detail": 0
+  },
+  "20200002": {
+    "mission_type": 2,
+    "condition_type": 21,
+    "condition_detail": 0
+  },
+  "20200003": {
+    "mission_type": 2,
+    "condition_type": 21,
+    "condition_detail": 0
+  },
+  "20300001": {
+    "mission_type": 2,
+    "condition_type": 30,
+    "condition_detail": 0
+  },
+  "20300002": {
+    "mission_type": 2,
+    "condition_type": 30,
+    "condition_detail": 0
+  },
+  "20300003": {
+    "mission_type": 2,
+    "condition_type": 30,
+    "condition_detail": 0
+  },
+  "20300004": {
+    "mission_type": 2,
+    "condition_type": 30,
+    "condition_detail": 0
+  },
+  "20400001": {
+    "mission_type": 2,
+    "condition_type": 40,
+    "condition_detail": 0
+  },
+  "20400002": {
+    "mission_type": 2,
+    "condition_type": 40,
+    "condition_detail": 0
+  },
+  "20410001": {
+    "mission_type": 2,
+    "condition_type": 41,
+    "condition_detail": 0
+  },
+  "20410002": {
+    "mission_type": 2,
+    "condition_type": 41,
+    "condition_detail": 0
+  },
+  "20500001": {
+    "mission_type": 2,
+    "condition_type": 50,
+    "condition_detail": 0
+  },
+  "20500002": {
+    "mission_type": 2,
+    "condition_type": 50,
+    "condition_detail": 0
+  },
+  "30050001": {
+    "mission_type": 3,
+    "condition_type": 5,
+    "condition_detail": 0
+  },
+  "30050002": {
+    "mission_type": 3,
+    "condition_type": 5,
+    "condition_detail": 0
+  },
+  "30100001": {
+    "mission_type": 3,
+    "condition_type": 10,
+    "condition_detail": 0
+  },
+  "30100002": {
+    "mission_type": 3,
+    "condition_type": 10,
+    "condition_detail": 0
+  },
+  "30130001": {
+    "mission_type": 3,
+    "condition_type": 13,
+    "condition_detail": 1
+  },
+  "30200001": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 0
+  },
+  "30202101": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 1021
+  },
+  "30202201": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 1022
+  },
+  "30202301": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 1023
+  },
+  "30203101": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 1031
+  },
+  "30203201": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 1032
+  },
+  "30203301": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 1033
+  },
+  "30204101": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 1041
+  },
+  "30204201": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 1042
+  },
+  "30204301": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 1043
+  },
+  "30205101": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 1051
+  },
+  "30205201": {
+    "mission_type": 3,
+    "condition_type": 20,
+    "condition_detail": 1052
+  },
+  "30302101": {
+    "mission_type": 3,
+    "condition_type": 30,
+    "condition_detail": 1021
+  },
+  "30302201": {
+    "mission_type": 3,
+    "condition_type": 30,
+    "condition_detail": 1022
+  },
+  "30302301": {
+    "mission_type": 3,
+    "condition_type": 30,
+    "condition_detail": 1023
+  },
+  "30303101": {
+    "mission_type": 3,
+    "condition_type": 30,
+    "condition_detail": 1031
+  },
+  "30303201": {
+    "mission_type": 3,
+    "condition_type": 30,
+    "condition_detail": 1032
+  },
+  "30303301": {
+    "mission_type": 3,
+    "condition_type": 30,
+    "condition_detail": 1033
+  },
+  "30304101": {
+    "mission_type": 3,
+    "condition_type": 30,
+    "condition_detail": 1041
+  },
+  "30304201": {
+    "mission_type": 3,
+    "condition_type": 30,
+    "condition_detail": 1042
+  },
+  "30304301": {
+    "mission_type": 3,
+    "condition_type": 30,
+    "condition_detail": 1043
+  },
+  "30305101": {
+    "mission_type": 3,
+    "condition_type": 30,
+    "condition_detail": 1051
+  },
+  "30305201": {
+    "mission_type": 3,
+    "condition_type": 30,
+    "condition_detail": 1052
+  },
+  "30602101": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1021
+  },
+  "30602102": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1021
+  },
+  "30602201": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1022
+  },
+  "30602202": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1022
+  },
+  "30602301": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1023
+  },
+  "30602302": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1023
+  },
+  "30603101": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1031
+  },
+  "30603102": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1031
+  },
+  "30603201": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1032
+  },
+  "30603202": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1032
+  },
+  "30603301": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1033
+  },
+  "30603302": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1033
+  },
+  "30604101": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1041
+  },
+  "30604102": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1041
+  },
+  "30604201": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1042
+  },
+  "30604202": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1042
+  },
+  "30604301": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1043
+  },
+  "30604302": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1043
+  },
+  "30605101": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1051
+  },
+  "30605102": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1051
+  },
+  "30605201": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1052
+  },
+  "30605202": {
+    "mission_type": 3,
+    "condition_type": 60,
+    "condition_detail": 1052
+  },
+  "32010001": {
+    "mission_type": 3,
+    "condition_type": 201,
+    "condition_detail": 0
+  },
+  "32010002": {
+    "mission_type": 3,
+    "condition_type": 201,
+    "condition_detail": 0
+  },
+  "32010003": {
+    "mission_type": 3,
+    "condition_type": 201,
+    "condition_detail": 0
+  },
+  "32010004": {
+    "mission_type": 3,
+    "condition_type": 201,
+    "condition_detail": 0
+  },
+  "32010005": {
+    "mission_type": 3,
+    "condition_type": 201,
+    "condition_detail": 0
+  },
+  "32020001": {
+    "mission_type": 3,
+    "condition_type": 202,
+    "condition_detail": 0
+  }
+}

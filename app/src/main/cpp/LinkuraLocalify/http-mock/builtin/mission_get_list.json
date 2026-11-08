@@ -12,9 +12,9 @@
           "name": "スクールアイドルステージでライブを3回クリアしよう",
           "description": "ライブを3回クリアしよう（スキップ可）",
           "condition_achieve_num": 3,
-          "achieved_num": 3,
+          "achieved_num": 0,
           "transition_contents_id": 100,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -29,9 +29,9 @@
           "name": "スクールアイドルステージでライブを5回クリアしよう",
           "description": "ライブを5回クリアしよう（スキップ可）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 100,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -46,9 +46,9 @@
           "name": "スクールアイドルステージでライブを10回クリアしよう",
           "description": "ライブを10回クリアしよう（スキップ可）",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 100,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -63,9 +63,9 @@
           "name": "スクールアイドルステージでライブを20回クリアしよう",
           "description": "ライブを20回クリアしよう（スキップ可）",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 100,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -80,9 +80,9 @@
           "name": "スクールアイドルステージでライブを30回クリアしよう",
           "description": "ライブを30回クリアしよう（スキップ可）",
           "condition_achieve_num": 30,
-          "achieved_num": 30,
+          "achieved_num": 0,
           "transition_contents_id": 100,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -97,9 +97,9 @@
           "name": "スクールアイドルステージでデイリーライブを3回クリアしよう",
           "description": "デイリーライブを3回クリアしよう（スキップ可）",
           "condition_achieve_num": 3,
-          "achieved_num": 3,
+          "achieved_num": 0,
           "transition_contents_id": 103,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -114,9 +114,9 @@
           "name": "スクールアイドルショウで任意の楽曲を1回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を1回クリアしよう",
           "condition_achieve_num": 1,
-          "achieved_num": 1,
+          "achieved_num": 0,
           "transition_contents_id": 800,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -131,9 +131,9 @@
           "name": "スクールアイドルショウで任意の楽曲を2回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を2回クリアしよう",
           "condition_achieve_num": 2,
-          "achieved_num": 2,
+          "achieved_num": 0,
           "transition_contents_id": 800,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -148,9 +148,9 @@
           "name": "スクールアイドルショウで任意の楽曲を3回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を3回クリアしよう",
           "condition_achieve_num": 3,
-          "achieved_num": 3,
+          "achieved_num": 0,
           "transition_contents_id": 800,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -165,9 +165,9 @@
           "name": "スクールアイドルショウで任意の楽曲を5回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を5回クリアしよう",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 800,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -182,9 +182,9 @@
           "name": "スクールアイドルショウで任意の楽曲を7回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を7回クリアしよう",
           "condition_achieve_num": 7,
-          "achieved_num": 7,
+          "achieved_num": 0,
           "transition_contents_id": 800,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -199,9 +199,9 @@
           "name": "スクールアイドルショウで任意の楽曲を10回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を10回クリアしよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 800,
-          "is_achieved": true,
+          "is_achieved": false,
           "reward_list": [
             {
               "reward_type": 1,
@@ -212,47 +212,7 @@
           ]
         }
       ],
-      "achieve_reward_list": [
-        {
-          "achieved_num": 2,
-          "target_num": 2,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 3,
-              "item_id": 1002001,
-              "reward_num": 50
-            }
-          ]
-        },
-        {
-          "achieved_num": 4,
-          "target_num": 4,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 3,
-              "item_id": 1002001,
-              "reward_num": 50
-            }
-          ]
-        },
-        {
-          "achieved_num": 6,
-          "target_num": 6,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 1,
-              "item_id": 2003071,
-              "reward_num": 3
-            }
-          ]
-        }
-      ]
+      "achieve_reward_list": []
     },
     {
       "mission_type": 2,
@@ -266,7 +226,7 @@
           "name": "スクールアイドルステージでライブを50回クリアしよう",
           "description": "ライブを50回クリアしよう（スキップ可）",
           "condition_achieve_num": 50,
-          "achieved_num": 50,
+          "achieved_num": 0,
           "transition_contents_id": 100,
           "is_achieved": false,
           "reward_list": [
@@ -283,7 +243,7 @@
           "name": "スクールアイドルステージでライブを100回クリアしよう",
           "description": "ライブを100回クリアしよう（スキップ可）",
           "condition_achieve_num": 100,
-          "achieved_num": 100,
+          "achieved_num": 0,
           "transition_contents_id": 100,
           "is_achieved": false,
           "reward_list": [
@@ -300,7 +260,7 @@
           "name": "スクールアイドルステージでライブを150回クリアしよう",
           "description": "ライブを150回クリアしよう（スキップ可）",
           "condition_achieve_num": 150,
-          "achieved_num": 150,
+          "achieved_num": 0,
           "transition_contents_id": 100,
           "is_achieved": false,
           "reward_list": [
@@ -317,7 +277,7 @@
           "name": "スクールアイドルステージでライブを200回クリアしよう",
           "description": "ライブを200回クリアしよう（スキップ可）",
           "condition_achieve_num": 200,
-          "achieved_num": 200,
+          "achieved_num": 0,
           "transition_contents_id": 100,
           "is_achieved": false,
           "reward_list": [
@@ -334,7 +294,7 @@
           "name": "スクールアイドルステージでライブを300回クリアしよう",
           "description": "ライブを300回クリアしよう（スキップ可）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 100,
           "is_achieved": false,
           "reward_list": [
@@ -351,7 +311,7 @@
           "name": "スクールアイドルステージでライブを400回クリアしよう",
           "description": "ライブを400回クリアしよう（スキップ可）",
           "condition_achieve_num": 400,
-          "achieved_num": 400,
+          "achieved_num": 0,
           "transition_contents_id": 100,
           "is_achieved": false,
           "reward_list": [
@@ -368,7 +328,7 @@
           "name": "スクールアイドルステージでライブを500回クリアしよう",
           "description": "ライブを500回クリアしよう（スキップ可）",
           "condition_achieve_num": 500,
-          "achieved_num": 500,
+          "achieved_num": 0,
           "transition_contents_id": 100,
           "is_achieved": false,
           "reward_list": [
@@ -385,7 +345,7 @@
           "name": "スクールアイドルステージでデイリーライブを12回クリアしよう",
           "description": "デイリーライブを12回クリアしよう（スキップ可）",
           "condition_achieve_num": 12,
-          "achieved_num": 12,
+          "achieved_num": 0,
           "transition_contents_id": 103,
           "is_achieved": false,
           "reward_list": [
@@ -402,7 +362,7 @@
           "name": "スクールアイドルステージでデイリーライブを18回クリアしよう",
           "description": "デイリーライブを18回クリアしよう（スキップ可）",
           "condition_achieve_num": 18,
-          "achieved_num": 18,
+          "achieved_num": 0,
           "transition_contents_id": 103,
           "is_achieved": false,
           "reward_list": [
@@ -419,7 +379,7 @@
           "name": "スクールアイドルステージでデイリーライブを24回クリアしよう",
           "description": "デイリーライブを24回クリアしよう（スキップ可）",
           "condition_achieve_num": 24,
-          "achieved_num": 24,
+          "achieved_num": 0,
           "transition_contents_id": 103,
           "is_achieved": false,
           "reward_list": [
@@ -436,7 +396,7 @@
           "name": "スクールアイドルショウで任意の楽曲を5回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を5回クリアしよう",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 800,
           "is_achieved": false,
           "reward_list": [
@@ -453,7 +413,7 @@
           "name": "スクールアイドルショウで任意の楽曲を10回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を10回クリアしよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 800,
           "is_achieved": false,
           "reward_list": [
@@ -470,7 +430,7 @@
           "name": "スクールアイドルショウで任意の楽曲を15回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を15回クリアしよう",
           "condition_achieve_num": 15,
-          "achieved_num": 15,
+          "achieved_num": 0,
           "transition_contents_id": 800,
           "is_achieved": false,
           "reward_list": [
@@ -487,7 +447,7 @@
           "name": "スクールアイドルショウで任意の楽曲を20回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を20回クリアしよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 800,
           "is_achieved": false,
           "reward_list": [
@@ -504,7 +464,7 @@
           "name": "スクールアイドルショウで任意の楽曲を25回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を25回クリアしよう",
           "condition_achieve_num": 25,
-          "achieved_num": 25,
+          "achieved_num": 0,
           "transition_contents_id": 800,
           "is_achieved": false,
           "reward_list": [
@@ -521,7 +481,7 @@
           "name": "スクールアイドルショウで任意の楽曲を30回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を30回クリアしよう",
           "condition_achieve_num": 30,
-          "achieved_num": 30,
+          "achieved_num": 0,
           "transition_contents_id": 800,
           "is_achieved": false,
           "reward_list": [
@@ -538,7 +498,7 @@
           "name": "スクールアイドルショウで任意の楽曲を35回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を35回クリアしよう",
           "condition_achieve_num": 35,
-          "achieved_num": 35,
+          "achieved_num": 0,
           "transition_contents_id": 800,
           "is_achieved": false,
           "reward_list": [
@@ -555,7 +515,7 @@
           "name": "スクールアイドルショウで任意の楽曲を40回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を40回クリアしよう",
           "condition_achieve_num": 40,
-          "achieved_num": 40,
+          "achieved_num": 0,
           "transition_contents_id": 800,
           "is_achieved": false,
           "reward_list": [
@@ -572,7 +532,7 @@
           "name": "スクールアイドルショウで任意の楽曲を45回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を45回クリアしよう",
           "condition_achieve_num": 45,
-          "achieved_num": 45,
+          "achieved_num": 0,
           "transition_contents_id": 800,
           "is_achieved": false,
           "reward_list": [
@@ -589,7 +549,7 @@
           "name": "スクールアイドルショウで任意の楽曲を50回クリアしよう",
           "description": "スクールアイドルショウで任意の楽曲を50回クリアしよう",
           "condition_achieve_num": 50,
-          "achieved_num": 50,
+          "achieved_num": 0,
           "transition_contents_id": 800,
           "is_achieved": false,
           "reward_list": [
@@ -606,7 +566,7 @@
           "name": "カードを3回入手しよう",
           "description": "任意のカードを3回入手しよう（解放Pt.に変換されても可）",
           "condition_achieve_num": 3,
-          "achieved_num": 3,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -623,7 +583,7 @@
           "name": "カードを10回入手しよう",
           "description": "任意のカードを10回入手しよう（解放Pt.に変換されても可）",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -640,7 +600,7 @@
           "name": "カードを30回入手しよう",
           "description": "任意のカードを30回入手しよう（解放Pt.に変換されても可）",
           "condition_achieve_num": 30,
-          "achieved_num": 30,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -657,7 +617,7 @@
           "name": "スタイルのLvを合計20上げよう",
           "description": "任意のスタイルのLvを合計20上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -674,7 +634,7 @@
           "name": "スタイルのLvを合計40上げよう",
           "description": "任意のスタイルのLvを合計40上げよう",
           "condition_achieve_num": 40,
-          "achieved_num": 40,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -691,7 +651,7 @@
           "name": "スタイルのLvを合計60上げよう",
           "description": "任意のスタイルのLvを合計60上げよう",
           "condition_achieve_num": 60,
-          "achieved_num": 60,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -708,7 +668,7 @@
           "name": "スタイルのLvを合計80上げよう",
           "description": "任意のスタイルのLvを合計80上げよう",
           "condition_achieve_num": 80,
-          "achieved_num": 80,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -725,7 +685,7 @@
           "name": "1回特訓しよう",
           "description": "任意のスタイルを1回特訓しよう",
           "condition_achieve_num": 1,
-          "achieved_num": 1,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -742,7 +702,7 @@
           "name": "3回特訓しよう",
           "description": "任意のスタイルを3回特訓しよう",
           "condition_achieve_num": 3,
-          "achieved_num": 3,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -759,7 +719,7 @@
           "name": "スクールアイドルステージ、またはスクールアイドルショウでスキルLvを1回上げよう",
           "description": "スクールアイドルステージ、またはスクールアイドルショウでスキルLvを1回上げよう",
           "condition_achieve_num": 1,
-          "achieved_num": 1,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -776,7 +736,7 @@
           "name": "スクールアイドルステージ、またはスクールアイドルショウでスキルLvを3回上げよう",
           "description": "スクールアイドルステージ、またはスクールアイドルショウでスキルLvを3回上げよう",
           "condition_achieve_num": 3,
-          "achieved_num": 3,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -793,7 +753,7 @@
           "name": "With×MEETSを1回視聴しよう",
           "description": "With×MEETSを1回視聴しよう",
           "condition_achieve_num": 1,
-          "achieved_num": 1,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -810,7 +770,7 @@
           "name": "With×MEETSを2回視聴しよう",
           "description": "With×MEETSを2回視聴しよう",
           "condition_achieve_num": 2,
-          "achieved_num": 2,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -823,151 +783,7 @@
           ]
         }
       ],
-      "achieve_reward_list": [
-        {
-          "achieved_num": 3,
-          "target_num": 3,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 3,
-              "item_id": 1002001,
-              "reward_num": 50
-            }
-          ]
-        },
-        {
-          "achieved_num": 4,
-          "target_num": 4,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 1,
-              "item_id": 3006301,
-              "reward_num": 1
-            }
-          ]
-        },
-        {
-          "achieved_num": 5,
-          "target_num": 5,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 3,
-              "item_id": 1002001,
-              "reward_num": 50
-            }
-          ]
-        },
-        {
-          "achieved_num": 7,
-          "target_num": 7,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 3,
-              "item_id": 1002001,
-              "reward_num": 100
-            }
-          ]
-        },
-        {
-          "achieved_num": 8,
-          "target_num": 8,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 1,
-              "item_id": 3006301,
-              "reward_num": 1
-            }
-          ]
-        },
-        {
-          "achieved_num": 9,
-          "target_num": 9,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 3,
-              "item_id": 1002001,
-              "reward_num": 100
-            }
-          ]
-        },
-        {
-          "achieved_num": 11,
-          "target_num": 11,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 3,
-              "item_id": 1002001,
-              "reward_num": 150
-            }
-          ]
-        },
-        {
-          "achieved_num": 13,
-          "target_num": 13,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 3,
-              "item_id": 1002001,
-              "reward_num": 150
-            }
-          ]
-        },
-        {
-          "achieved_num": 15,
-          "target_num": 15,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 3,
-              "item_id": 1002001,
-              "reward_num": 200
-            }
-          ]
-        },
-        {
-          "achieved_num": 16,
-          "target_num": 16,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 1,
-              "item_id": 3006301,
-              "reward_num": 1
-            }
-          ]
-        },
-        {
-          "achieved_num": 17,
-          "target_num": 17,
-          "is_achieved": true,
-          "reward_list": [
-            {
-              "reward_type": 1,
-              "item_type": 1,
-              "item_id": 2003072,
-              "reward_num": 1
-            }
-          ]
-        }
-      ]
+      "achieve_reward_list": []
     },
     {
       "mission_type": 3,
@@ -981,7 +797,7 @@
           "name": "クエストライブの☆を30個獲得しよう",
           "description": "クエストライブ（チャレンジモードは除く）で☆を計30個獲得しよう",
           "condition_achieve_num": 30,
-          "achieved_num": 30,
+          "achieved_num": 0,
           "transition_contents_id": 101,
           "is_achieved": false,
           "reward_list": [
@@ -998,7 +814,7 @@
           "name": "クエストライブの☆を60個獲得しよう",
           "description": "クエストライブ（チャレンジモードは除く）で☆を計60個獲得しよう",
           "condition_achieve_num": 60,
-          "achieved_num": 60,
+          "achieved_num": 0,
           "transition_contents_id": 101,
           "is_achieved": false,
           "reward_list": [
@@ -1015,7 +831,7 @@
           "name": "乙宗梢のMember Fan Lv.を10まで上げよう",
           "description": "乙宗梢のMember Fan Lv.を10まで上げよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1032,7 +848,7 @@
           "name": "乙宗梢のMember Fan Lv.を20まで上げよう",
           "description": "乙宗梢のMember Fan Lv.を20まで上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1049,7 +865,7 @@
           "name": "夕霧綴理のMember Fan Lv.を10まで上げよう",
           "description": "夕霧綴理のMember Fan Lv.を10まで上げよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1066,7 +882,7 @@
           "name": "夕霧綴理のMember Fan Lv.を20まで上げよう",
           "description": "夕霧綴理のMember Fan Lv.を20まで上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1083,7 +899,7 @@
           "name": "藤島慈のMember Fan Lv.を10まで上げよう",
           "description": "藤島慈のMember Fan Lv.を10まで上げよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1100,7 +916,7 @@
           "name": "藤島慈のMember Fan Lv.を20まで上げよう",
           "description": "藤島慈のMember Fan Lv.を20まで上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1117,7 +933,7 @@
           "name": "日野下花帆のMember Fan Lv.を10まで上げよう",
           "description": "日野下花帆のMember Fan Lv.を10まで上げよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1134,7 +950,7 @@
           "name": "日野下花帆のMember Fan Lv.を20まで上げよう",
           "description": "日野下花帆のMember Fan Lv.を20まで上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1151,7 +967,7 @@
           "name": "村野さやかのMember Fan Lv.を10まで上げよう",
           "description": "村野さやかのMember Fan Lv.を10まで上げよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1168,7 +984,7 @@
           "name": "村野さやかのMember Fan Lv.を20まで上げよう",
           "description": "村野さやかのMember Fan Lv.を20まで上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1185,7 +1001,7 @@
           "name": "大沢瑠璃乃のMember Fan Lv.を10まで上げよう",
           "description": "大沢瑠璃乃のMember Fan Lv.を10まで上げよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1202,7 +1018,7 @@
           "name": "大沢瑠璃乃のMember Fan Lv.を20まで上げよう",
           "description": "大沢瑠璃乃のMember Fan Lv.を20まで上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1219,7 +1035,7 @@
           "name": "百生吟子のMember Fan Lv.を10まで上げよう",
           "description": "百生吟子のMember Fan Lv.を10まで上げよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1236,7 +1052,7 @@
           "name": "百生吟子のMember Fan Lv.を20まで上げよう",
           "description": "百生吟子のMember Fan Lv.を20まで上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1253,7 +1069,7 @@
           "name": "徒町小鈴のMember Fan Lv.を10まで上げよう",
           "description": "徒町小鈴のMember Fan Lv.を10まで上げよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1270,7 +1086,7 @@
           "name": "徒町小鈴のMember Fan Lv.を20まで上げよう",
           "description": "徒町小鈴のMember Fan Lv.を20まで上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1287,7 +1103,7 @@
           "name": "安養寺姫芽のMember Fan Lv.を10まで上げよう",
           "description": "安養寺姫芽のMember Fan Lv.を10まで上げよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1304,7 +1120,7 @@
           "name": "安養寺姫芽のMember Fan Lv.を20まで上げよう",
           "description": "安養寺姫芽のMember Fan Lv.を20まで上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1321,7 +1137,7 @@
           "name": "桂城 泉のMember Fan Lv.を10まで上げよう",
           "description": "桂城 泉のMember Fan Lv.を10まで上げよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1338,7 +1154,7 @@
           "name": "桂城 泉のMember Fan Lv.を20まで上げよう",
           "description": "桂城 泉のMember Fan Lv.を20まで上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1355,7 +1171,7 @@
           "name": "セラス 柳田 リリエンフェルトのMember Fan Lv.を10まで上げよう",
           "description": "セラス 柳田 リリエンフェルトのMember Fan Lv.を10まで上げよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1372,7 +1188,7 @@
           "name": "セラス 柳田 リリエンフェルトのMember Fan Lv.を20まで上げよう",
           "description": "セラス 柳田 リリエンフェルトのMember Fan Lv.を20まで上げよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 203,
           "is_achieved": false,
           "reward_list": [
@@ -1389,7 +1205,7 @@
           "name": "ドリームライブを1回クリアしよう",
           "description": "ドリームライブを1回クリアしよう（メンバーは問わず）",
           "condition_achieve_num": 1,
-          "achieved_num": 1,
+          "achieved_num": 0,
           "transition_contents_id": 106,
           "is_achieved": false,
           "reward_list": [
@@ -1406,7 +1222,7 @@
           "name": "ドリームライブを2回クリアしよう",
           "description": "ドリームライブを2回クリアしよう（メンバーは問わず）",
           "condition_achieve_num": 2,
-          "achieved_num": 2,
+          "achieved_num": 0,
           "transition_contents_id": 106,
           "is_achieved": false,
           "reward_list": [
@@ -1423,7 +1239,7 @@
           "name": "乙宗梢のカードを5種類入手しよう",
           "description": "乙宗梢のカードを5枚入手しよう（レアリティ問わず）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1440,7 +1256,7 @@
           "name": "夕霧綴理のカードを5種類入手しよう",
           "description": "夕霧綴理のカードを5枚入手しよう（レアリティ問わず）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1457,7 +1273,7 @@
           "name": "藤島慈のカードを5種類入手しよう",
           "description": "藤島慈のカードを5枚入手しよう（レアリティ問わず）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1474,7 +1290,7 @@
           "name": "日野下花帆のカードを5種類入手しよう",
           "description": "日野下花帆のカードを5枚入手しよう（レアリティ問わず）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1491,7 +1307,7 @@
           "name": "村野さやかのカードを5種類入手しよう",
           "description": "村野さやかのカードを5枚入手しよう（レアリティ問わず）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1508,7 +1324,7 @@
           "name": "大沢瑠璃乃のカードを5種類入手しよう",
           "description": "大沢瑠璃乃のカードを5枚入手しよう（レアリティ問わず）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1525,7 +1341,7 @@
           "name": "百生吟子のカードを5種類入手しよう",
           "description": "百生吟子のカードを5枚入手しよう（レアリティ問わず）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1542,7 +1358,7 @@
           "name": "徒町小鈴のカードを5種類入手しよう",
           "description": "徒町小鈴のカードを5枚入手しよう（レアリティ問わず）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1559,7 +1375,7 @@
           "name": "安養寺姫芽のカードを5種類入手しよう",
           "description": "安養寺姫芽のカードを5枚入手しよう（レアリティ問わず）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1576,7 +1392,7 @@
           "name": "桂城 泉のカードを5種類入手しよう",
           "description": "桂城 泉のカードを5枚入手しよう（レアリティ問わず）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1593,7 +1409,7 @@
           "name": "セラス 柳田 リリエンフェルトのカードを5種類入手しよう",
           "description": "セラス 柳田 リリエンフェルトのカードを5枚入手しよう（レアリティ問わず）",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1610,7 +1426,7 @@
           "name": "カードを計20種類入手しよう",
           "description": "カードを合計20枚入手しよう（レアリティ・メンバー問わず）",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 501,
           "is_achieved": false,
           "reward_list": [
@@ -1627,7 +1443,7 @@
           "name": "乙宗梢のスタイルのスタイルLv.を合計300まで上げよう",
           "description": "乙宗梢のスタイルのスタイルLv.を合計300まで上げよう（レアリティ問わず）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -1644,7 +1460,7 @@
           "name": "夕霧綴理のスタイルのスタイルLv.を合計300まで上げよう",
           "description": "夕霧綴理のスタイルのスタイルLv.を合計300まで上げよう（レアリティ問わず）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -1661,7 +1477,7 @@
           "name": "藤島慈のスタイルのスタイルLv.を合計300まで上げよう",
           "description": "藤島慈のスタイルのスタイルLv.を合計300まで上げよう（レアリティ問わず）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -1678,7 +1494,7 @@
           "name": "日野下花帆のスタイルのスタイルLv.を合計300まで上げよう",
           "description": "日野下花帆のスタイルのスタイルLv.を合計300まで上げよう（レアリティ問わず）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -1695,7 +1511,7 @@
           "name": "村野さやかのスタイルのスタイルLv.を合計300まで上げよう",
           "description": "村野さやかのスタイルのスタイルLv.を合計300まで上げよう（レアリティ問わず）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -1712,7 +1528,7 @@
           "name": "大沢瑠璃乃のスタイルのスタイルLv.を合計300まで上げよう",
           "description": "大沢瑠璃乃のスタイルのスタイルLv.を合計300まで上げよう（レアリティ問わず）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -1729,7 +1545,7 @@
           "name": "百生吟子のスタイルのスタイルLv.を合計300まで上げよう",
           "description": "百生吟子のスタイルのスタイルLv.を合計300まで上げよう（レアリティ問わず）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -1746,7 +1562,7 @@
           "name": "徒町小鈴のスタイルのスタイルLv.を合計300まで上げよう",
           "description": "徒町小鈴のスタイルのスタイルLv.を合計300まで上げよう（レアリティ問わず）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -1763,7 +1579,7 @@
           "name": "安養寺姫芽のスタイルのスタイルLv.を合計300まで上げよう",
           "description": "安養寺姫芽のスタイルのスタイルLv.を合計300まで上げよう（レアリティ問わず）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -1780,7 +1596,7 @@
           "name": "桂城 泉のスタイルのスタイルLv.を合計300まで上げよう",
           "description": "桂城 泉のスタイルのスタイルLv.を合計300まで上げよう（レアリティ問わず）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -1797,7 +1613,7 @@
           "name": "セラス 柳田 リリエンフェルトのスタイルのスタイルLv.を合計300まで上げよう",
           "description": "セラス 柳田 リリエンフェルトのスタイルのスタイルLv.を合計300まで上げよう（レアリティ問わず）",
           "condition_achieve_num": 300,
-          "achieved_num": 300,
+          "achieved_num": 0,
           "transition_contents_id": 309,
           "is_achieved": false,
           "reward_list": [
@@ -1814,7 +1630,7 @@
           "name": "デイリーライブの難易度Iを全てクリアしよう",
           "description": "デイリーライブの難易度Iを全てクリアしよう",
           "condition_achieve_num": 1,
-          "achieved_num": 1,
+          "achieved_num": 0,
           "transition_contents_id": 103,
           "is_achieved": false,
           "reward_list": [
@@ -1831,7 +1647,7 @@
           "name": "ユーザーを1人フォローしよう",
           "description": "ユーザーを1人フォローしよう",
           "condition_achieve_num": 1,
-          "achieved_num": 1,
+          "achieved_num": 0,
           "transition_contents_id": 304,
           "is_achieved": false,
           "reward_list": [
@@ -1848,7 +1664,7 @@
           "name": "ユーザーを3人フォローしよう",
           "description": "ユーザーを3人フォローしよう",
           "condition_achieve_num": 3,
-          "achieved_num": 3,
+          "achieved_num": 0,
           "transition_contents_id": 304,
           "is_achieved": false,
           "reward_list": [
@@ -1865,7 +1681,7 @@
           "name": "ユーザーを5人フォローしよう",
           "description": "ユーザーを5人フォローしよう",
           "condition_achieve_num": 5,
-          "achieved_num": 5,
+          "achieved_num": 0,
           "transition_contents_id": 304,
           "is_achieved": false,
           "reward_list": [
@@ -1882,7 +1698,7 @@
           "name": "ユーザーを10人フォローしよう",
           "description": "ユーザーを10人フォローしよう",
           "condition_achieve_num": 10,
-          "achieved_num": 10,
+          "achieved_num": 0,
           "transition_contents_id": 304,
           "is_achieved": false,
           "reward_list": [
@@ -1899,7 +1715,7 @@
           "name": "ユーザーを20人フォローしよう",
           "description": "ユーザーを20人フォローしよう",
           "condition_achieve_num": 20,
-          "achieved_num": 20,
+          "achieved_num": 0,
           "transition_contents_id": 304,
           "is_achieved": false,
           "reward_list": [
@@ -1916,7 +1732,7 @@
           "name": "ユーザー50人にフォローされよう",
           "description": "ユーザー50人にフォローされよう",
           "condition_achieve_num": 50,
-          "achieved_num": 50,
+          "achieved_num": 0,
           "transition_contents_id": 304,
           "is_achieved": false,
           "reward_list": [

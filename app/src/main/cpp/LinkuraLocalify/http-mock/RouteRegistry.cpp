@@ -66,6 +66,11 @@ namespace LinkuraLocal::HttpMock {
             return ToBackendResponse(backend.GetHomeResponse());
         }
 
+        static std::optional<MockResponse> HandleMissionGetList(const MockRequestContext&,
+                                                                 HttpMockBackend& backend) {
+            return ToBackendResponse(backend.GetMissionListResponse());
+        }
+
         static std::optional<MockResponse> HandleProfileGetInfo(const MockRequestContext&,
                                                                  HttpMockBackend& backend) {
             return ToBackendResponse(backend.GetProfileInfoResponse());
@@ -620,8 +625,7 @@ namespace LinkuraLocal::HttpMock {
             // These launcher screens must have a valid first response before
             // HomeMenu exposes them in offline mode. Empty player collections
             // represent a clean local save; the shop catalog comes from Shops.yaml.
-            RegisterStaticJson(routes, "/v1/mission/get_list",
-                               OfflineApiMockBuiltIn::MissionGetListJsonView);
+            RegisterBackend(routes, "/v1/mission/get_list", HandleMissionGetList);
             RegisterStaticJson(routes, "/v1/present_box/get_list",
                                R"({"total_count":0,"page":1,"items":[]})");
             RegisterStaticJson(routes, "/v1/present_box/get_history",
