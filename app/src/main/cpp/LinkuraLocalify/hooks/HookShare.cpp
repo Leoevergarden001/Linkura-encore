@@ -1303,6 +1303,36 @@ namespace LinkuraLocal::HookShare {
         }
         return result;
     }
+
+    // After login the client registers a push token (PushTokenAndroid ->
+    // FirebaseMessaging.GetTokenAsync -> /v1/user/push/devices) before it
+    // finishes initializing Home. Offline, a device that never had network
+    // has no cached FCM token and the Firebase task never completes, so the
+    // Home menu (School Idol Connect, Story, gacha and stage banners) stays
+    // empty. Hand back an already completed Task<string> with a placeholder;
+    // the offline API mock accepts the registration.
+    DEFINE_HOOK(void*, FirebaseMessaging_GetTokenAsync, (void* mtd)) {
+        if (!Config::enableOfflineApiMock) return FirebaseMessaging_GetTokenAsync_Orig(mtd);
+        static void* tcsKlass = Il2cppUtils::get_system_class_from_reflection_type_str(
+                "System.Threading.Tasks.TaskCompletionSource`1[[System.String, mscorlib]]", "mscorlib");
+        static auto* ctor = tcsKlass ? Il2cppUtils::GetMethodIl2cpp(tcsKlass, ".ctor", 0) : nullptr;
+        static auto* setResult = tcsKlass ? Il2cppUtils::GetMethodIl2cpp(tcsKlass, "SetResult", 1) : nullptr;
+        static auto* getTask = tcsKlass ? Il2cppUtils::GetMethodIl2cpp(tcsKlass, "get_Task", 0) : nullptr;
+        if (!ctor || !setResult || !getTask) {
+            Log::Error("[OfflinePush] TaskCompletionSource<string> not resolved; using Firebase");
+            return FirebaseMessaging_GetTokenAsync_Orig(mtd);
+        }
+        auto* tcs = UnityResolve::Invoke<void*>("il2cpp_object_new", tcsKlass);
+        if (!tcs) return FirebaseMessaging_GetTokenAsync_Orig(mtd);
+        reinterpret_cast<void (*)(void*, Il2cppUtils::MethodInfo*)>(ctor->methodPointer)(tcs, ctor);
+        auto* token = Il2cppUtils::Il2CppString::New("linkura-offline-push-token");
+        reinterpret_cast<void (*)(void*, void*, Il2cppUtils::MethodInfo*)>(setResult->methodPointer)(
+                tcs, token, setResult);
+        auto* task = reinterpret_cast<void* (*)(void*, Il2cppUtils::MethodInfo*)>(getTask->methodPointer)(
+                tcs, getTask);
+        Log::InfoFmt("[OfflinePush] GetTokenAsync -> completed placeholder task=%p", task);
+        return task ? task : FirebaseMessaging_GetTokenAsync_Orig(mtd);
+    }
 #pragma region
 
     void Install(HookInstaller* hookInstaller) {
@@ -1500,6 +1530,8 @@ namespace LinkuraLocal::HookShare {
 //        ADD_HOOK(AssetManager_SynchronizeResourceVersion, Il2cppUtils::GetMethodPointer("Core.dll", "Hailstorm", "AssetManager", "SynchronizeResourceVersion"));
         ADD_HOOK(Core_SynchronizeResourceVersion, Il2cppUtils::GetMethodPointer("Core.dll", "", "Core", "SynchronizeResourceVersion"));
         ADD_HOOK(Application_get_version, Il2cppUtils::il2cpp_resolve_icall("UnityEngine.Application::get_version"));
+        ADD_HOOK(FirebaseMessaging_GetTokenAsync, Il2cppUtils::GetMethodPointer(
+                "Firebase.Messaging.dll", "Firebase.Messaging", "FirebaseMessaging", "GetTokenAsync"));
 //        ADD_HOOK(ArchiveApi_ArchiveGetWithTimelineDataWithHttpInfoAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi", "ArchiveGetWithTimelineDataWithHttpInfoAsync"));
 //        ADD_HOOK(ArchiveApi_ArchiveGetFesTimelineDataWithHttpInfoAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi", "ArchiveGetFesTimelineDataWithHttpInfoAsync"));
         //        auto AssetManager_klass = Il2cppUtils::GetClassIl2cpp("Core.dll", "Hailstorm", "AssetManager");
