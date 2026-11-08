@@ -1229,7 +1229,10 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_stmt* cardState = nullptr;
         if (sqlite3_prepare_v2(db, "SELECT d_card_datas_id FROM card_detail WHERE card_datas_id=? LIMIT 1;",
                                -1, &card, nullptr) != SQLITE_OK ||
-            sqlite3_prepare_v2(db, "SELECT 1 FROM museum_gacha_acquisition WHERE card_datas_id=?;",
+            // NEW means "not yet held", so check the ownership table that the
+            // card list reads. The acquisition log misses cards obtained
+            // through point exchange and would mark them NEW again.
+            sqlite3_prepare_v2(db, "SELECT 1 FROM museum_card_ownership WHERE d_card_datas_id=?;",
                                -1, &owned, nullptr) != SQLITE_OK ||
             sqlite3_prepare_v2(db,
                 "INSERT OR IGNORE INTO museum_gacha_acquisition "
@@ -1263,7 +1266,7 @@ namespace LinkuraLocal::HttpMock {
             const std::string dCardId(rawId);
             sqlite3_reset(owned);
             sqlite3_clear_bindings(owned);
-            sqlite3_bind_int(owned, 1, cardId);
+            BindText(owned, 1, dCardId);
             const bool isNew = sqlite3_step(owned) != SQLITE_ROW;
             sqlite3_reset(acquired);
             sqlite3_clear_bindings(acquired);
