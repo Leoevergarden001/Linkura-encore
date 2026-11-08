@@ -735,6 +735,11 @@ namespace LinkuraLocal::HttpMock {
         if (it == routes.end()) {
             return std::nullopt;
         }
-        return it->second(request, HttpMockBackend::Get());
+        auto response = it->second(request, HttpMockBackend::Get());
+        if (response) {
+            response->headersText = HttpMockBackend::Get().ApplyLiveWalletHeaders(
+                    std::move(response->headersText));
+        }
+        return response;
     }
 }

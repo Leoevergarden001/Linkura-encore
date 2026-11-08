@@ -5152,6 +5152,48 @@ namespace LinkuraLocal::HttpMock {
         return impl_->GetHomeResponseLocked();
     }
 
+    // Every response carries the wallet in its headers and the client updates
+    // the displayed jewel balance from whichever response arrived last. Only
+    // the gacha and Home handlers used to write the live wallet; all other
+    // routes sent the template value (999999), so the balance flipped between
+    // screens. Rewrite the wallet lines from the persistent gacha wallet.
+    std::string HttpMockBackend::ApplyLiveWalletHeaders(std::string headers) {
+        if (headers.find("jewel_") == std::string::npos) return headers;
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        if (!impl_->initialized && !impl_->EnsureReadyLocked()) return headers;
+        if (!impl_->db) return headers;
+        std::optional<std::pair<int64_t, int64_t>> wallet;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(impl_->db,
+                "SELECT free_jewels, paid_jewels FROM museum_gacha_state WHERE series_id=1055003;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                wallet = std::make_pair(sqlite3_column_int64(stmt, 0), sqlite3_column_int64(stmt, 1));
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        if (!wallet) {
+            const auto state = impl_->LoadGachaStateLocked();
+            if (!state) return headers;
+            wallet = std::make_pair(state->freeJewels, state->paidJewels);
+        }
+        const auto rewrite = [&headers](std::string_view key, int64_t value) {
+            const std::string prefix = std::string(key) + ": ";
+            size_t pos = 0;
+            while ((pos = headers.find(prefix, pos)) != std::string::npos) {
+                if (pos != 0 && headers[pos - 1] != '\n') { pos += prefix.size(); continue; }
+                const size_t valueStart = pos + prefix.size();
+                size_t valueEnd = headers.find_first_of("\r\n", valueStart);
+                if (valueEnd == std::string::npos) valueEnd = headers.size();
+                headers.replace(valueStart, valueEnd - valueStart, std::to_string(value));
+                pos = valueStart;
+            }
+        };
+        rewrite("jewel_free", wallet->first);
+        rewrite("jewel_paid_google", wallet->second);
+        return headers;
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::GetProfileInfoResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetProfileInfoResponseLocked();
