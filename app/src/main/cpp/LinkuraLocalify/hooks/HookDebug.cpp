@@ -27,6 +27,16 @@ namespace LinkuraLocal::HookDebug {
         std::atomic<bool> pendingOfflineFooterTransitionRelease{false};
         std::atomic<uint64_t> sceneChangeGeneration{0};
 
+        bool IsSceneChangerInTransition(void* sceneChanger) {
+            if (!sceneChanger) return false;
+            auto* klass = Il2cppUtils::GetClass("Assembly-CSharp.dll", "", "SceneChanger");
+            auto* field = klass ? klass->Get<UnityResolve::Field>("<IsInTransition>k__BackingField") : nullptr;
+            if (!field || field->static_field || !field->type || field->type->name != "System.Boolean") return false;
+            bool transitioning = false;
+            std::memcpy(&transitioning, static_cast<const char*>(sceneChanger) + field->offset, sizeof(transitioning));
+            return transitioning;
+        }
+
         void LogOfflineSceneState(const char* event, void* sceneChanger) {
             if (!Config::enableOfflineApiMock || !sceneChanger) return;
             auto* klass = Il2cppUtils::GetClass("Assembly-CSharp.dll", "", "SceneChanger");
@@ -764,6 +774,20 @@ namespace LinkuraLocal::HookDebug {
                 ReleaseOfflineCapturedTransitionFrame();
                 CompleteOfflineTransition(
                         preservedSceneChanger, "offline footer transition completed");
+            } else if (Config::enableOfflineApiMock
+                    && IsSceneChangerInTransition(preservedSceneChanger)) {
+                // The sequence has terminated but nothing cleared the flag.
+                // Seen for back navigation into Mission (its initialization
+                // ends before the stock completion step offline) and for
+                // scenes whose preparation fails. A terminated sequence can
+                // never finish the transition later, and leaving the flag set
+                // makes the client ignore all further input.
+                LogOfflineSceneState("offline unclaimed sequence terminal", preservedSceneChanger);
+                DismissOfflineTutorialOverlay();
+                ReleaseOfflineLoadingCover();
+                ReleaseOfflineCapturedTransitionFrame();
+                CompleteOfflineTransition(
+                        preservedSceneChanger, "offline unclaimed transition completed");
             }
         }
     }
