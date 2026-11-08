@@ -2107,11 +2107,14 @@ namespace LinkuraLocal::HttpMock {
                         return failValidation("deck card must be an object");
                     }
                     const std::string ownedCardId = card.value("d_card_datas_id", std::string{});
-                    if (ownedCardId.empty() || !ownsCard(ownedCardId)) {
+                    // The 5.1 client sends an unassigned slot (for example the
+                    // FREE slot) as an empty card id. It is part of the deck
+                    // layout, not a card reference, so persist it unchanged.
+                    if (!ownedCardId.empty() && !ownsCard(ownedCardId)) {
                         ExecSql(db, "ROLLBACK;");
                         return failValidation("deck contains a card that is not owned by the Museum player");
                     }
-                    if (!uniqueCards.insert(ownedCardId).second) {
+                    if (!ownedCardId.empty() && !uniqueCards.insert(ownedCardId).second) {
                         ExecSql(db, "ROLLBACK;");
                         return failValidation("deck contains the same card more than once");
                     }
