@@ -614,6 +614,8 @@ namespace LinkuraLocal::HttpMock {
                                OfflineApiMockBuiltIn::MissionGetListJsonView);
             RegisterStaticJson(routes, "/v1/present_box/get_list",
                                R"({"total_count":0,"page":1,"items":[]})");
+            RegisterStaticJson(routes, "/v1/present_box/get_history",
+                               R"({"total_count":0,"page":1,"items":[]})");
             RegisterStaticJson(routes, "/v1/shop/get_list",
                                OfflineApiMockBuiltIn::ShopGetListJsonView);
             RegisterBackend(routes, "/v1/item_exchange/get_list", HandleItemExchangeGetList);

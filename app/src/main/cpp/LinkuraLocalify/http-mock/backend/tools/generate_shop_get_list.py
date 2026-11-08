@@ -14,15 +14,19 @@ BUILTIN_DIR = TOOLS_DIR.parent.parent / "builtin"
 
 def generate_json() -> None:
     rows = yaml.safe_load((MASTER_DIR / "Shops.yaml").read_text(encoding="utf-8"))
-    catalog = sorted(rows, key=lambda row: row["OrderId"])
+    # Only Item Exchange has a local product catalog and purchase transaction.
+    # Omitting other shops avoids advertising grey, non-functional tiles.
+    catalog = sorted(
+        (row for row in rows if row["ShopType"] == 3),
+        key=lambda row: row["OrderId"],
+    )
     response = {
         "shop_list": [{
             "shop_type": row["ShopType"],
             "name": row["Name"],
             "order_id": row["OrderId"],
             "is_maintenance": False,
-            # Only the item exchange has a local product catalog and purchase handler.
-            "is_exist_products": row["ShopType"] == 3,
+            "is_exist_products": True,
         } for row in catalog],
         "is_convertible_limit_break_material": False,
     }

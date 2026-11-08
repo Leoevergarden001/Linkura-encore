@@ -519,7 +519,6 @@ namespace LinkuraLocal::HookDebug {
                 case 402: // Mission
                 case 312: // Present Box
                 case 601: // Shop
-                case 303: // Circle
                 case 904: // Notice
                 case 304: // Friend
                     *status = 1; // GameDefine.eLauncherInfoStatus.Released
