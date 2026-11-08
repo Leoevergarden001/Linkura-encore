@@ -1803,7 +1803,10 @@ namespace LinkuraLocal::HttpMock {
         if (!catalog.is_array()) return std::nullopt;
         sqlite3_stmt* count = nullptr;
         if (sqlite3_prepare_v2(db,
-                               "SELECT COALESCE(SUM(item_num),0) FROM item WHERE item_id=?;",
+                               // Holdings are player state: read the same inventory that
+                               // /v1/user/items/get_list shows, not the catalog seed.
+                               "SELECT COALESCE(SUM(inventory.item_num),0) FROM item INNER JOIN museum_item_inventory AS inventory "
+                               "USING(d_item_datas_id) WHERE item.item_id=?;",
                                -1, &count, nullptr) != SQLITE_OK || !count) {
             if (count) sqlite3_finalize(count);
             return std::nullopt;
@@ -1904,7 +1907,9 @@ namespace LinkuraLocal::HttpMock {
             sqlite3_finalize(stmt);
             return result;
         };
-        const auto countSql = "SELECT COALESCE(SUM(item_num),0) FROM item WHERE item_id=?;";
+        const auto countSql =
+            "SELECT COALESCE(SUM(inventory.item_num),0) FROM item INNER JOIN museum_item_inventory AS inventory "
+            "USING(d_item_datas_id) WHERE item.item_id=?;";
         const auto ownedMaterial = scalar(countSql, materialId);
         const auto ownedProduct = scalar(countSql, productId);
         const auto used = scalar("SELECT COALESCE((SELECT purchased_num FROM offline_item_exchange_purchase "
@@ -1929,9 +1934,12 @@ namespace LinkuraLocal::HttpMock {
             sqlite3_finalize(stmt);
             return ok;
         };
-        if (!changeItem("UPDATE item SET item_num=item_num-? WHERE item_id=?;",
+        if (!changeItem("UPDATE museum_item_inventory SET item_num=item_num-? WHERE d_item_datas_id="
+                        "(SELECT d_item_datas_id FROM item WHERE item_id=? LIMIT 1);",
                         materialCost, materialId) ||
-            !changeItem("UPDATE item SET item_num=item_num+? WHERE item_id=?;",
+            !changeItem("INSERT INTO museum_item_inventory(d_item_datas_id, item_num) "
+                        "SELECT d_item_datas_id, ?1 FROM item WHERE item_id=?2 LIMIT 1 "
+                        "ON CONFLICT(d_item_datas_id) DO UPDATE SET item_num=item_num+excluded.item_num;",
                         productGain, productId)) return rollback();
         sqlite3_stmt* history = nullptr;
         if (sqlite3_prepare_v2(db,
