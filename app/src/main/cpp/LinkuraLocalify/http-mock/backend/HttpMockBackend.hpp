@@ -71,6 +71,9 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> QuestGetResult(std::string_view payloadJson);
         std::optional<MockStoredResponse> QuestSkip(std::string_view payloadJson);
 
+        std::optional<MockStoredResponse> DailyQuestStageSelect();
+        std::optional<MockStoredResponse> DailyGetRecoveryChallengeCount();
+        std::optional<MockStoredResponse> DailyRecoveryChallengeCount(std::string_view payloadJson);
         std::optional<MockStoredResponse> DailyQuestStageList(std::string_view payloadJson);
         std::optional<MockStoredResponse> DailyQuestStageData(std::string_view payloadJson);
 

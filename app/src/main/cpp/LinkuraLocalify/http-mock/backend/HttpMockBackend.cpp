@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <random>
 #include <string>
@@ -264,6 +265,7 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetCharacterInfoByIdLocked(std::string_view characterId);
         std::optional<MockStoredResponse> GetDeckListResponseLocked();
         std::optional<MockStoredResponse> ModifyDeckListLocked(std::string_view payloadJson);
+        static constexpr int kQuestLiveTypeDaily = 2;
         struct QuestLiveState {
             std::string questLiveId;
             int questLiveType = 0;
@@ -276,6 +278,7 @@ namespace LinkuraLocal::HttpMock {
             int64_t score = 0;
             std::string playReport;
             bool finished = false;
+            nlohmann::json rewardList = nlohmann::json::array();
         };
         QuestLiveState currentQuestLive;
 
@@ -316,6 +319,12 @@ namespace LinkuraLocal::HttpMock {
         bool PersistQuestSessionLocked(std::string_view state);
 
         std::optional<MockStoredResponse> DailyQuestStageListLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> DailyQuestStageSelectLocked();
+        nlohmann::json DailyTicketInfoLocked();
+        bool ConsumeDailyTicketsLocked(int count);
+        std::optional<MockStoredResponse> DailyGetRecoveryChallengeCountLocked();
+        std::optional<MockStoredResponse> DailyRecoveryChallengeCountLocked(std::string_view payloadJson);
+        nlohmann::json GrantDailyDropsLocked(int stageId);
         std::optional<MockStoredResponse> DailyQuestStageDataLocked(std::string_view payloadJson);
 
         std::optional<MockStoredResponse> MusicLearningGetMusicSelectLocked(std::string_view payloadJson);
@@ -3622,6 +3631,12 @@ namespace LinkuraLocal::HttpMock {
         if (!PersistQuestSessionLocked("FINISHED")) {
             return std::nullopt;
         }
+        currentQuestLive.rewardList = nlohmann::json::array();
+        if (currentQuestLive.questLiveType == kQuestLiveTypeDaily) {
+            // Settled once: a repeated finish takes the replay branch above.
+            ConsumeDailyTicketsLocked(1);
+            currentQuestLive.rewardList = GrantDailyDropsLocked(currentQuestLive.stageId);
+        }
 
         nlohmann::json result;
         result["quest_live_type"] = currentQuestLive.questLiveType;
@@ -3687,7 +3702,8 @@ namespace LinkuraLocal::HttpMock {
         result["add_style_point"] = gainStylePoint;
         result["is_challenge_mode"] = currentQuestLive.isChallengeMode;
         result["music_id"] = currentQuestLive.musicId;
-        result["reward_list"] = nlohmann::json::array();
+        result["reward_list"] = currentQuestLive.rewardList.is_array()
+                ? currentQuestLive.rewardList : nlohmann::json::array();
         result["play_report"] = currentQuestLive.playReport;
         result["mastary_level_before"] = 1;
         result["mastary_level_after"] = 1;
@@ -3706,6 +3722,28 @@ namespace LinkuraLocal::HttpMock {
         auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
         const int questLiveType = payload.is_object() ? payload.value("quest_live_type", 1) : 1;
         const int stageId = payload.is_object() ? payload.value("stage_id", 0) : 0;
+        nlohmann::json skipRewardList = nlohmann::json::array();
+        nlohmann::json totalSkipRewardList = nlohmann::json::array();
+        if (questLiveType == kQuestLiveTypeDaily) {
+            if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+            const int skipCount = std::max(1, payload.is_object() ? payload.value("skip_count", 1) : 1);
+            ConsumeDailyTicketsLocked(skipCount);
+            // One SkipRewardList entry per skipped play, plus the summed total.
+            std::map<int, int64_t> totals;
+            for (int index = 0; index < skipCount; ++index) {
+                auto rewards = GrantDailyDropsLocked(stageId);
+                for (const auto& reward : rewards) {
+                    totals[reward.value("item_id", 0)] += reward.value("reward_num", 0);
+                }
+                skipRewardList.push_back({{"reward_list", std::move(rewards)}});
+            }
+            for (const auto& [itemId, num] : totals) {
+                totalSkipRewardList.push_back({
+                    {"reward_type", 1}, {"item_type", 1}, {"item_id", itemId},
+                    {"item_num", num}, {"reward_num", num}, {"is_received", true},
+                });
+            }
+        }
 
         int gainStylePoint = 0;
         if (db && stageId > 0) {
@@ -3751,8 +3789,8 @@ namespace LinkuraLocal::HttpMock {
             {"stamina_recovery_time", "2099-01-01T00:00:00Z"},
         };
         result["add_style_point"] = gainStylePoint;
-        result["skip_reward_list"] = nlohmann::json::array();
-        result["total_skip_reward_list"] = nlohmann::json::array();
+        result["skip_reward_list"] = std::move(skipRewardList);
+        result["total_skip_reward_list"] = std::move(totalSkipRewardList);
         result["is_limit_over_style_point"] = false;
         if (questLiveType == 3) {
             int masteryLevel = 50;
@@ -3798,6 +3836,204 @@ namespace LinkuraLocal::HttpMock {
         return response;
     }
 
+    // Daily Live tickets: 3 per day, reset at 04:00 JST like the other daily
+    // content. Usage is player state keyed by the JST business day.
+    namespace {
+        constexpr int kDailyTicketMax = 3;
+        int64_t DailyBusinessDay(std::time_t now) {
+            return (static_cast<int64_t>(now) + 9 * 3600 - 4 * 3600) / 86400;
+        }
+    }
+
+    nlohmann::json HttpMockBackend::Impl::DailyTicketInfoLocked() {
+        const std::time_t now = std::time(nullptr);
+        const int64_t day = DailyBusinessDay(now);
+        int used = 0;
+        if (db && ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_daily_ticket ("
+                              "business_day INTEGER PRIMARY KEY, used INTEGER NOT NULL DEFAULT 0);")) {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT used FROM offline_daily_ticket WHERE business_day=?;",
+                                   -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int64(stmt, 1, day);
+                if (sqlite3_step(stmt) == SQLITE_ROW) used = sqlite3_column_int(stmt, 0);
+            }
+            if (stmt) sqlite3_finalize(stmt);
+        }
+        // Next 04:00 JST expressed in JST.
+        const std::time_t nextResetJst = static_cast<std::time_t>((day + 1) * 86400 + 4 * 3600);
+        std::tm tm{};
+#if defined(_WIN32)
+        gmtime_s(&tm, &nextResetJst);
+#else
+        gmtime_r(&nextResetJst, &tm);
+#endif
+        char buffer[40]{};
+        std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S+09:00", &tm);
+        return {
+            {"num", std::max(0, kDailyTicketMax - used)},
+            {"max", kDailyTicketMax},
+            {"next_reset_time", buffer},
+        };
+    }
+
+    bool HttpMockBackend::Impl::ConsumeDailyTicketsLocked(int count) {
+        if (!db || count <= 0) return false;
+        if (!ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_daily_ticket ("
+                         "business_day INTEGER PRIMARY KEY, used INTEGER NOT NULL DEFAULT 0);"))
+            return false;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT INTO offline_daily_ticket(business_day, used) VALUES(?1, MIN(?2, ?3)) "
+                "ON CONFLICT(business_day) DO UPDATE SET used=MIN(used + ?2, ?3);",
+                -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            return false;
+        }
+        sqlite3_bind_int64(stmt, 1, DailyBusinessDay(std::time(nullptr)));
+        sqlite3_bind_int(stmt, 2, count);
+        sqlite3_bind_int(stmt, 3, kDailyTicketMax);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    // Ticket recovery ("+" on the Daily screens). DTOs per 5.1 metadata:
+    // DailyGetRecoveryChallengeCountResponse{challenge_count, recovery_count,
+    // max_recovery_count, price}; DailyRecoveryChallengeCountRequest
+    // {recovery_count} -> Response{challenge_count}. The Museum makes recovery
+    // free (price 0) with a generous daily cap so the 3-ticket limit never
+    // locks the offline player out of Daily Live.
+    namespace {
+        constexpr int kDailyRecoveryMax = 99;
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::DailyGetRecoveryChallengeCountLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        if (!ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_daily_ticket_recovery ("
+                         "business_day INTEGER PRIMARY KEY, recovered INTEGER NOT NULL DEFAULT 0);"))
+            return std::nullopt;
+        int recovered = 0;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT recovered FROM offline_daily_ticket_recovery WHERE business_day=?;",
+                               -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int64(stmt, 1, DailyBusinessDay(std::time(nullptr)));
+            if (sqlite3_step(stmt) == SQLITE_ROW) recovered = sqlite3_column_int(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        const auto tickets = DailyTicketInfoLocked();
+        nlohmann::json result = {
+            {"challenge_count", tickets.value("num", 0)},
+            {"recovery_count", recovered},
+            {"max_recovery_count", kDailyRecoveryMax},
+            {"price", 0},
+        };
+        MockStoredResponse response;
+        response.body = result.dump();
+        return response;
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::DailyRecoveryChallengeCountLocked(
+            std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        const int count = payload.is_object() ? payload.value("recovery_count", 1) : 1;
+        if (count < 1 || count > kDailyRecoveryMax) {
+            return MockStoredResponse{R"({"error":"invalid recovery count"})", {}, 400, "Invalid recovery count"};
+        }
+        const int64_t day = DailyBusinessDay(std::time(nullptr));
+        if (!ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_daily_ticket ("
+                         "business_day INTEGER PRIMARY KEY, used INTEGER NOT NULL DEFAULT 0);") ||
+            !ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_daily_ticket_recovery ("
+                         "business_day INTEGER PRIMARY KEY, recovered INTEGER NOT NULL DEFAULT 0);") ||
+            !ExecSql(db, "BEGIN IMMEDIATE;"))
+            return std::nullopt;
+        const auto run = [this, day, count](const char* sql) {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+                if (stmt) sqlite3_finalize(stmt);
+                return false;
+            }
+            sqlite3_bind_int64(stmt, 1, day);
+            sqlite3_bind_int(stmt, 2, count);
+            const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+            sqlite3_finalize(stmt);
+            return ok;
+        };
+        // A recovered ticket offsets one used ticket for the business day.
+        if (!run("INSERT INTO offline_daily_ticket(business_day, used) VALUES(?1, -?2) "
+                 "ON CONFLICT(business_day) DO UPDATE SET used=used-?2;") ||
+            !run("INSERT INTO offline_daily_ticket_recovery(business_day, recovered) VALUES(?1, ?2) "
+                 "ON CONFLICT(business_day) DO UPDATE SET recovered=recovered+?2;") ||
+            !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        nlohmann::json result = {{"challenge_count", DailyTicketInfoLocked().value("num", 0)}};
+        MockStoredResponse response;
+        response.body = result.dump();
+        return response;
+    }
+
+    // Drops for a cleared Daily stage. Which materials a stage drops comes
+    // from the preserved Master (ItemSources.yaml via
+    // tools/generate_daily_quest_drop_catalog.py); the server-side drop tables
+    // were not preserved, so the quantity is a local Museum approximation
+    // (QuestRank of the stage) and not the retired server's rate.
+    nlohmann::json HttpMockBackend::Impl::GrantDailyDropsLocked(int stageId) {
+        nlohmann::json rewards = nlohmann::json::array();
+        if (!db) return rewards;
+        const auto catalog = OfflineApiMockBuiltIn::DailyQuestDropCatalogJsonObj();
+        if (!catalog.is_array()) return rewards;
+        const nlohmann::json* entry = nullptr;
+        for (const auto& row : catalog) {
+            if (row.value("stage_id", 0) == stageId) { entry = &row; break; }
+        }
+        if (!entry || !entry->contains("item_ids") || !(*entry)["item_ids"].is_array()) return rewards;
+        const int quantity = std::max(1, entry->value("quest_rank", 1));
+        sqlite3_stmt* grant = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT INTO museum_item_inventory(d_item_datas_id, item_num) "
+                "SELECT d_item_datas_id, ?1 FROM item WHERE item_id=?2 LIMIT 1 "
+                "ON CONFLICT(d_item_datas_id) DO UPDATE SET item_num=item_num+excluded.item_num;",
+                -1, &grant, nullptr) != SQLITE_OK || !grant) {
+            if (grant) sqlite3_finalize(grant);
+            return rewards;
+        }
+        for (const auto& itemIdJson : (*entry)["item_ids"]) {
+            if (!itemIdJson.is_number_integer()) continue;
+            const int itemId = itemIdJson.get<int>();
+            sqlite3_reset(grant);
+            sqlite3_clear_bindings(grant);
+            sqlite3_bind_int(grant, 1, quantity);
+            sqlite3_bind_int(grant, 2, itemId);
+            if (sqlite3_step(grant) != SQLITE_DONE || sqlite3_changes(db) != 1) continue;
+            // Quest/skip results use the reward model with item_num (5.1
+            // metadata); reward_num/item_type are kept for list consumers that
+            // use the mission reward shape.
+            rewards.push_back({
+                {"reward_type", 1}, {"item_type", 1}, {"item_id", itemId},
+                {"item_num", quantity}, {"reward_num", quantity}, {"is_received", true},
+            });
+        }
+        sqlite3_finalize(grant);
+        return rewards;
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::DailyQuestStageSelectLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        nlohmann::json result = OfflineApiMockBuiltIn::OutQuestLiveDailyGetStageSelectJsonObj();
+        if (!result.is_object()) result = nlohmann::json::object();
+        result["user_daily_ticket_info"] = DailyTicketInfoLocked();
+        if (!result.contains("temporary_release_daily_quest_series_id_list"))
+            result["temporary_release_daily_quest_series_id_list"] = nlohmann::json::array();
+        MockStoredResponse response;
+        response.body = result.dump();
+        return response;
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::Impl::DailyQuestStageListLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) {
             return std::nullopt;
@@ -3829,11 +4065,7 @@ namespace LinkuraLocal::HttpMock {
         }
 
         nlohmann::json result;
-        result["user_daily_ticket_info"] = {
-            {"num", 3},
-            {"max", 3},
-            {"next_reset_time", "2099-01-01T04:00:00+09:00"},
-        };
+        result["user_daily_ticket_info"] = DailyTicketInfoLocked();
         result["stage_list"] = std::move(stageList);
 
         MockStoredResponse response;
@@ -3892,12 +4124,25 @@ namespace LinkuraLocal::HttpMock {
         result["stage_id"] = stageId;
         result["clear_status"] = 3;
         result["best_love_music_id"] = bestLoveMusicId;
-        result["user_daily_ticket_info"] = {
-            {"num", 3},
-            {"max", 3},
-            {"next_reset_time", "2099-01-01T04:00:00+09:00"},
-        };
-        result["stage_reward_list"] = nlohmann::json::array();
+        result["user_daily_ticket_info"] = DailyTicketInfoLocked();
+        // "獲得可能アイテム": the materials this stage can drop (see
+        // GrantDailyDropsLocked for the quantity approximation).
+        nlohmann::json stageRewards = nlohmann::json::array();
+        const auto dropCatalog = OfflineApiMockBuiltIn::DailyQuestDropCatalogJsonObj();
+        if (dropCatalog.is_array()) {
+            for (const auto& row : dropCatalog) {
+                if (row.value("stage_id", 0) != stageId || !row.contains("item_ids")) continue;
+                const int quantity = std::max(1, row.value("quest_rank", 1));
+                for (const auto& itemId : row["item_ids"]) {
+                    if (!itemId.is_number_integer()) continue;
+                    stageRewards.push_back({
+                        {"item_id", itemId.get<int>()}, {"is_received", false},
+                        {"reward_type", 1}, {"item_num", quantity},
+                    });
+                }
+            }
+        }
+        result["stage_reward_list"] = std::move(stageRewards);
         result["music_list"] = std::move(musicList);
 
         MockStoredResponse response;
@@ -5416,6 +5661,21 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::QuestSkip(std::string_view payloadJson) {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->QuestSkipLocked(payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::DailyGetRecoveryChallengeCount() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->DailyGetRecoveryChallengeCountLocked();
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::DailyRecoveryChallengeCount(std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->DailyRecoveryChallengeCountLocked(payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::DailyQuestStageSelect() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->DailyQuestStageSelectLocked();
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::DailyQuestStageList(std::string_view payloadJson) {

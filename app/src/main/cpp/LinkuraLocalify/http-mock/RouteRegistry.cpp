@@ -402,6 +402,11 @@ namespace LinkuraLocal::HttpMock {
             return MockResponse{std::move(record->body), std::move(record->headersText), record->statusCode, std::move(record->statusDescription)};
         }
 
+        static std::optional<MockResponse> HandleDailyQuestStageSelect(const MockRequestContext&,
+                                                                        HttpMockBackend& backend) {
+            return ToBackendResponse(backend.DailyQuestStageSelect());
+        }
+
         static std::optional<MockResponse> HandleDailyQuestStageList(const MockRequestContext& request,
                                                                      HttpMockBackend& backend) {
             auto record = backend.DailyQuestStageList(request.payloadJson);
@@ -649,7 +654,15 @@ namespace LinkuraLocal::HttpMock {
             RegisterStaticJson(routes, "/v1/archive/get_home", OfflineApiMockBuiltIn::ArchiveGetHomeJsonView);
             RegisterStaticJson(routes, "/v1/archive/get_archive_list", OfflineApiMockBuiltIn::ArchiveGetArchiveListJsonView);
             RegisterStaticJson(routes, "/v1/out_quest_live/get_quest_top", OfflineApiMockBuiltIn::OutQuestLiveGetQuestTopJsonView);
-            RegisterStaticJson(routes, "/v1/out_quest_live/daily/get_stage_select", OfflineApiMockBuiltIn::OutQuestLiveDailyGetStageSelectJsonView);
+            RegisterBackend(routes, "/v1/out_quest_live/daily/get_stage_select", HandleDailyQuestStageSelect);
+            RegisterBackend(routes, "/v1/out_quest_live/daily/get_recovery_challenge_count",
+                            [](const MockRequestContext&, HttpMockBackend& backend) {
+                                return ToBackendResponse(backend.DailyGetRecoveryChallengeCount());
+                            });
+            RegisterBackend(routes, "/v1/out_quest_live/daily/recovery_challenge_count",
+                            [](const MockRequestContext& request, HttpMockBackend& backend) {
+                                return ToBackendResponse(backend.DailyRecoveryChallengeCount(request.payloadJson));
+                            });
             RegisterBackend(routes, "/v1/out_quest_live/daily/get_stage_list", HandleDailyQuestStageList);
             RegisterBackend(routes, "/v1/out_quest_live/daily/get_stage_data", HandleDailyQuestStageData);
             RegisterBackend(routes, "/v1/out_quest_live/music_learning/get_music_select", HandleMusicLearningGetMusicSelect);
