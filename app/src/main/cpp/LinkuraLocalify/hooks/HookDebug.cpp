@@ -702,6 +702,7 @@ namespace LinkuraLocal::HookDebug {
                     false, std::memory_order_acq_rel)) {
                 LogOfflineSceneState("offline footer sequence terminal", preservedSceneChanger);
                 DismissOfflineTutorialOverlay();
+                ReleaseOfflineLoadingCover();
                 ReleaseOfflineCapturedTransitionFrame();
                 CompleteOfflineTransition(
                         preservedSceneChanger, "offline footer transition completed");
