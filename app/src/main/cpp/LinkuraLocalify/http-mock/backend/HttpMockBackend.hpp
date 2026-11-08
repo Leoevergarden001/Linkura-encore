@@ -43,6 +43,7 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetCardListResponse();
         std::optional<MockStoredResponse> LookupCardDetailFromPayload(std::string_view payloadJson);
         std::optional<MockStoredResponse> CheckStyleLevelUp(std::string_view payloadJson);
+        std::optional<MockStoredResponse> CardGrowth(std::string_view action, std::string_view payloadJson);
 
         std::optional<MockStoredResponse> GetItemDetailByDItemId(std::string_view dItemDatasId);
         std::optional<MockStoredResponse> GetItemListResponse();

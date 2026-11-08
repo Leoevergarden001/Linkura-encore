@@ -694,6 +694,15 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/user/card/get_list", HandleCardGetList);
             RegisterBackend(routes, "/v1/user/card/get_detail", HandleCardDetail);
             RegisterBackend(routes, "/v1/user/card/check_style_level_up", HandleCheckStyleLevelUp);
+            // Card growth: costs from the Master, paid from the player inventory.
+            for (const char* action : {"style_level_up", "check_limit_break", "limit_break",
+                                       "check_evolution", "evolution", "check_skill_level_up"}) {
+                const std::string path = std::string("/v1/user/card/") + action;
+                const std::string name(action);
+                RegisterBackend(routes, path, [name](const MockRequestContext& request, HttpMockBackend& backend) {
+                    return ToBackendResponse(backend.CardGrowth(name, request.payloadJson));
+                });
+            }
             RegisterBackend(routes, "/v1/user/items/get_list", HandleItemGetList);
             RegisterBackend(routes, "/v1/user/item/get_detail", HandleItemDetail);
             RegisterBackend(routes, "/v1/collection/get_character_info", HandleCharacterInfo);

@@ -240,6 +240,25 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetHomeResponseLocked();
         std::optional<nlohmann::json> BuildProfileInfoLocked();
         std::optional<MockStoredResponse> GetProfileInfoResponseLocked();
+        struct CardGrowthState {
+            std::string dCardDatasId;
+            int baseCardId = 0;
+            int styleLevel = 0;
+            int limitBreakTimes = 0;
+            int evolveTimes = 0;
+            const nlohmann::json* growth = nullptr;
+        };
+        std::optional<CardGrowthState> LoadCardGrowthLocked(std::string_view payloadJson);
+        int64_t ItemHoldingLocked(int itemId);
+        bool ConsumeItemLocked(int itemId, int64_t amount);
+        nlohmann::json UserItemListLocked(const std::vector<int>& itemIds);
+        std::optional<MockStoredResponse> CheckStyleLevelUpLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> StyleLevelUpLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> CheckLimitBreakLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> LimitBreakLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> CheckEvolutionLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> EvolutionLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> CheckSkillLevelUpLocked(std::string_view payloadJson);
         bool EnsureMyDesignTableLocked();
         std::optional<MockStoredResponse> GetMyDesignListLocked(int designType);
         std::optional<MockStoredResponse> SetMyDesignLocked(int designType, std::string_view payloadJson);
@@ -505,11 +524,47 @@ namespace LinkuraLocal::HttpMock {
             return true;
         }
 
+        // Growth rules from tools/generate_card_growth_catalog.py (Master data).
+        const nlohmann::json& CardGrowthCatalog() {
+            static const nlohmann::json catalog = OfflineApiMockBuiltIn::CardGrowthCatalogJsonObj();
+            return catalog;
+        }
+
+        const nlohmann::json* FindCardGrowth(int baseCardId) {
+            const auto& catalog = CardGrowthCatalog();
+            if (!catalog.is_object() || !catalog.contains("cards")) return nullptr;
+            const auto& cards = catalog["cards"];
+            const auto it = cards.find(std::to_string(baseCardId));
+            return it == cards.end() ? nullptr : &*it;
+        }
+
+        int CardGrowthMaxEvolve(const nlohmann::json& growth) {
+            const auto it = growth.find("evolution");
+            return it != growth.end() && it->is_array() ? static_cast<int>(it->size()) : 0;
+        }
+
+        int CardGrowthStyleCap(const nlohmann::json& growth, int evolveTimes) {
+            const auto& caps = CardGrowthCatalog()["rarity_caps"];
+            const auto it = caps.find(std::to_string(growth.value("rarity", 0)));
+            if (it == caps.end() || !it->is_array() || it->empty()) return 0;
+            const int index = std::clamp(evolveTimes, 0, static_cast<int>(it->size()) - 1);
+            return (*it)[index].get<int>();
+        }
+
+        int64_t CardGrowthCumulativeStylePoint(const nlohmann::json& growth, int level) {
+            const auto& levels = CardGrowthCatalog()["levels"];
+            const auto it = levels.find(std::to_string(growth.value("experience_type", 0)));
+            if (it == levels.end() || !it->is_array() || level < 0 ||
+                level >= static_cast<int>(it->size())) return -1;
+            return (*it)[level].get<int64_t>();
+        }
+
         static std::optional<nlohmann::json> ComposeOwnedCardResponse(
                 const char* responseJson,
                 int styleLevel,
                 int limitBreakTimes,
-                bool isEvolveMax) {
+                bool isEvolveMax,
+                int evolveTimes) {
             auto response = nlohmann::json::parse(responseJson ? responseJson : "{}", nullptr, false);
             if (!response.is_object()) return std::nullopt;
             auto card = response.find("user_card_data");
@@ -521,6 +576,19 @@ namespace LinkuraLocal::HttpMock {
             (*card)["style_level"] = styleLevel;
             (*card)["limit_break_times"] = limitBreakTimes;
             (*card)["is_evolve_max"] = isEvolveMax;
+            // Base cards (from the gacha) can grow. An evolved card is the
+            // Master id base + evolve count; its style cap follows the rarity
+            // and stage. The preserved collection is fully developed and has
+            // no catalog entry, so its stored values are kept.
+            const int baseCardId = card->value("card_datas_id", 0);
+            if (const auto* growth = FindCardGrowth(baseCardId)) {
+                const int maxEvolve = CardGrowthMaxEvolve(*growth);
+                const int stage = std::clamp(evolveTimes, 0, maxEvolve);
+                (*card)["card_datas_id"] = baseCardId + stage;
+                (*card)["max_style_level"] = CardGrowthStyleCap(*growth, stage);
+                (*card)["is_evolve_max"] = stage >= maxEvolve;
+                (*card)["is_evolve_possible"] = stage < maxEvolve;
+            }
             return response;
         }
     }
@@ -913,12 +981,15 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_stmt* stmt = nullptr;
         constexpr const char* sql =
             "SELECT card_detail.response_json, museum_card_state.style_level, "
-            "museum_card_state.limit_break_times, museum_card_state.is_evolve_max "
+            "museum_card_state.limit_break_times, museum_card_state.is_evolve_max, "
+            "COALESCE(offline_card_growth.evolve_times, 0) "
             "FROM card_detail "
             "INNER JOIN museum_card_ownership "
             "ON museum_card_ownership.d_card_datas_id = card_detail.d_card_datas_id "
             "INNER JOIN museum_card_state "
             "ON museum_card_state.d_card_datas_id = museum_card_ownership.d_card_datas_id "
+            "LEFT JOIN offline_card_growth "
+            "ON offline_card_growth.d_card_datas_id = card_detail.d_card_datas_id "
             "WHERE card_detail.d_card_datas_id = ?;";
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
             Log::ErrorFmt("[HttpMockBackend] sqlite prepare failed for card_detail query: %s", sqlite3_errmsg(db));
@@ -943,7 +1014,8 @@ namespace LinkuraLocal::HttpMock {
             responseJson,
             sqlite3_column_int(stmt, 1),
             sqlite3_column_int(stmt, 2),
-            sqlite3_column_int(stmt, 3) != 0);
+            sqlite3_column_int(stmt, 3) != 0,
+            sqlite3_column_int(stmt, 4));
         if (!composed) {
             Log::Error("[HttpMockBackend] invalid catalog card response while composing detail");
             sqlite3_finalize(stmt);
@@ -966,12 +1038,15 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_stmt* stmt = nullptr;
         constexpr const char* sql =
             "SELECT card_detail.response_json, museum_card_state.style_level, "
-            "museum_card_state.limit_break_times, museum_card_state.is_evolve_max "
+            "museum_card_state.limit_break_times, museum_card_state.is_evolve_max, "
+            "COALESCE(offline_card_growth.evolve_times, 0) "
             "FROM card_detail "
             "INNER JOIN museum_card_ownership "
             "ON museum_card_ownership.d_card_datas_id = card_detail.d_card_datas_id "
             "INNER JOIN museum_card_state "
             "ON museum_card_state.d_card_datas_id = museum_card_ownership.d_card_datas_id "
+            "LEFT JOIN offline_card_growth "
+            "ON offline_card_growth.d_card_datas_id = card_detail.d_card_datas_id "
             "ORDER BY card_detail.card_datas_id;";
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
             Log::ErrorFmt("[HttpMockBackend] sqlite prepare failed for card list: %s", sqlite3_errmsg(db));
@@ -987,7 +1062,8 @@ namespace LinkuraLocal::HttpMock {
                 responseJson,
                 sqlite3_column_int(stmt, 1),
                 sqlite3_column_int(stmt, 2),
-                sqlite3_column_int(stmt, 3) != 0);
+                sqlite3_column_int(stmt, 3) != 0,
+                sqlite3_column_int(stmt, 4));
             if (!parsed) {
                 Log::ErrorFmt("[HttpMockBackend] invalid card_detail response_json while building list");
                 sqlite3_finalize(stmt);
@@ -1266,6 +1342,334 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_finalize(stmt);
         if (!ok) return std::nullopt;
         return MockStoredResponse{R"({"result":true})", {}, 200, "OK (offline mock)"};
+    }
+
+    // ---- Card growth (強化 / 解放 / 進化) ------------------------------------
+    // Request/response shapes from the 5.1 metadata:
+    //   check_style_level_up {d_card_datas_id} -> {is_possible,
+    //       current_style_level, selectable_max_level, style_point}
+    //   style_level_up {d_card_datas_id, style_level} -> {result}
+    //   check_limit_break {d_card_datas_id} -> {is_possible,
+    //       current_limit_break_times, selectable_limit_break_times,
+    //       user_item_list[{item_id,own_num}],
+    //       required_item_list[{cost_item_id1,cost_num1,..3}]}
+    //   limit_break {d_card_datas_id, limit_break_step} -> {result}
+    //   check_evolution {d_card_datas_id} -> {is_possible, user_item_list,
+    //       required_item_list, next_max_style_level}
+    //   evolution {d_card_datas_id} -> {result}
+    // Costs come from the Master (card_growth_catalog.json) and are taken
+    // from the player inventory; results persist in museum_card_state and
+    // offline_card_growth.
+    std::optional<HttpMockBackend::Impl::CardGrowthState> HttpMockBackend::Impl::LoadCardGrowthLocked(
+            std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const auto dCardId = ExtractPayloadStringField(payloadJson, "d_card_datas_id");
+        if (dCardId.empty()) return std::nullopt;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT card_detail.card_datas_id, museum_card_state.style_level, "
+                "museum_card_state.limit_break_times, COALESCE(offline_card_growth.evolve_times, 0) "
+                "FROM card_detail "
+                "INNER JOIN museum_card_ownership USING(d_card_datas_id) "
+                "INNER JOIN museum_card_state USING(d_card_datas_id) "
+                "LEFT JOIN offline_card_growth USING(d_card_datas_id) "
+                "WHERE card_detail.d_card_datas_id = ?;",
+                -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+        BindText(stmt, 1, dCardId);
+        std::optional<CardGrowthState> state;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            state = CardGrowthState{
+                dCardId,
+                sqlite3_column_int(stmt, 0),
+                sqlite3_column_int(stmt, 1),
+                sqlite3_column_int(stmt, 2),
+                sqlite3_column_int(stmt, 3),
+                nullptr,
+            };
+            state->growth = FindCardGrowth(state->baseCardId);
+            if (state->growth) {
+                state->evolveTimes = std::clamp(state->evolveTimes, 0, CardGrowthMaxEvolve(*state->growth));
+            }
+        }
+        sqlite3_finalize(stmt);
+        return state;
+    }
+
+    int64_t HttpMockBackend::Impl::ItemHoldingLocked(int itemId) {
+        sqlite3_stmt* stmt = nullptr;
+        int64_t value = 0;
+        if (sqlite3_prepare_v2(db,
+                "SELECT COALESCE(SUM(inventory.item_num),0) FROM item "
+                "INNER JOIN museum_item_inventory AS inventory USING(d_item_datas_id) WHERE item.item_id=?;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, itemId);
+            if (sqlite3_step(stmt) == SQLITE_ROW) value = sqlite3_column_int64(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return value;
+    }
+
+    bool HttpMockBackend::Impl::ConsumeItemLocked(int itemId, int64_t amount) {
+        if (amount <= 0) return true;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "UPDATE museum_item_inventory SET item_num=item_num-?1 WHERE item_num>=?1 AND d_item_datas_id="
+                "(SELECT d_item_datas_id FROM item WHERE item_id=?2 LIMIT 1);",
+                -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            return false;
+        }
+        sqlite3_bind_int64(stmt, 1, amount);
+        sqlite3_bind_int(stmt, 2, itemId);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) == 1;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    nlohmann::json HttpMockBackend::Impl::UserItemListLocked(const std::vector<int>& itemIds) {
+        nlohmann::json list = nlohmann::json::array();
+        std::unordered_set<int> seen;
+        for (const int itemId : itemIds) {
+            if (itemId <= 0 || !seen.insert(itemId).second) continue;
+            // The client's user_item_list element reads own_num (observed in
+            // its deserialized check_evolution response).
+            list.push_back({{"item_id", itemId}, {"own_num", ItemHoldingLocked(itemId)}});
+        }
+        return list;
+    }
+
+    namespace {
+        nlohmann::json RequiredItemEntry(const std::vector<std::pair<int, int64_t>>& costs) {
+            nlohmann::json entry = nlohmann::json::object();
+            for (int index = 0; index < 3; ++index) {
+                const auto key = std::to_string(index + 1);
+                const bool has = index < static_cast<int>(costs.size());
+                entry["cost_item_id" + key] = has ? costs[index].first : 0;
+                entry["cost_num" + key] = has ? costs[index].second : 0;
+            }
+            return entry;
+        }
+
+        std::vector<std::pair<int, int64_t>> EvolutionCosts(const nlohmann::json& growth, int stage) {
+            std::vector<std::pair<int, int64_t>> costs;
+            const auto& stages = growth["evolution"];
+            if (stage < 0 || stage >= static_cast<int>(stages.size())) return costs;
+            for (const auto& cost : stages[stage]) {
+                if (cost.is_array() && cost.size() == 2) costs.emplace_back(cost[0].get<int>(), cost[1].get<int64_t>());
+            }
+            return costs;
+        }
+
+        MockStoredResponse GrowthResult(bool ok, const char* reason = nullptr) {
+            nlohmann::json result = {{"result", ok}};
+            if (!ok && reason) result["error"] = reason;
+            return MockStoredResponse{result.dump(), {}, 200, ok ? "OK (offline card growth)" : "Rejected"};
+        }
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::CheckStyleLevelUpLocked(std::string_view payloadJson) {
+        const auto state = LoadCardGrowthLocked(payloadJson);
+        if (!state) return std::nullopt;
+        const int cap = state->growth ? CardGrowthStyleCap(*state->growth, state->evolveTimes) : state->styleLevel;
+        const int pointItem = CardGrowthCatalog().value("style_point_item_id", 3004000);
+        nlohmann::json result = {
+            {"is_possible", state->growth != nullptr && state->styleLevel < cap},
+            {"current_style_level", state->styleLevel},
+            {"selectable_max_level", std::max(cap, state->styleLevel)},
+            {"style_point", ItemHoldingLocked(pointItem)},
+        };
+        return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::StyleLevelUpLocked(std::string_view payloadJson) {
+        const auto state = LoadCardGrowthLocked(payloadJson);
+        if (!state) return std::nullopt;
+        if (!state->growth) return GrowthResult(false, "card cannot grow");
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        const int target = payload.is_object() ? payload.value("style_level", 0) : 0;
+        const int cap = CardGrowthStyleCap(*state->growth, state->evolveTimes);
+        if (target <= state->styleLevel || target > cap) return GrowthResult(false, "invalid style level");
+        const int64_t from = CardGrowthCumulativeStylePoint(*state->growth, state->styleLevel);
+        const int64_t to = CardGrowthCumulativeStylePoint(*state->growth, target);
+        if (from < 0 || to < from) return GrowthResult(false, "unknown level table");
+        const int pointItem = CardGrowthCatalog().value("style_point_item_id", 3004000);
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        sqlite3_stmt* stmt = nullptr;
+        bool ok = ConsumeItemLocked(pointItem, to - from) &&
+            sqlite3_prepare_v2(db, "UPDATE museum_card_state SET style_level=? WHERE d_card_datas_id=?;",
+                               -1, &stmt, nullptr) == SQLITE_OK && stmt;
+        if (ok) {
+            sqlite3_bind_int(stmt, 1, target);
+            BindText(stmt, 2, state->dCardDatasId);
+            ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) == 1;
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return GrowthResult(false, "insufficient style points");
+        }
+        return GrowthResult(true);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::CheckLimitBreakLocked(std::string_view payloadJson) {
+        const auto state = LoadCardGrowthLocked(payloadJson);
+        if (!state) return std::nullopt;
+        nlohmann::json required = nlohmann::json::array();
+        std::vector<int> itemIds;
+        int selectable = state->limitBreakTimes;
+        if (state->growth) {
+            std::map<int, int64_t> spent;
+            for (const auto& step : (*state->growth)["limit_break"]) {
+                const int times = step.value("times", 0);
+                if (times <= state->limitBreakTimes) continue;
+                const int itemId = step.value("item_id", 0);
+                const int64_t num = step.value("num", 0);
+                required.push_back(RequiredItemEntry({{itemId, num}}));
+                itemIds.push_back(itemId);
+                spent[itemId] += num;
+                if (spent[itemId] <= ItemHoldingLocked(itemId) && times == selectable + 1) selectable = times;
+            }
+        }
+        nlohmann::json result = {
+            {"is_possible", selectable > state->limitBreakTimes},
+            {"current_limit_break_times", state->limitBreakTimes},
+            {"selectable_limit_break_times", selectable},
+            {"user_item_list", UserItemListLocked(itemIds)},
+            {"required_item_list", std::move(required)},
+        };
+        return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::LimitBreakLocked(std::string_view payloadJson) {
+        const auto state = LoadCardGrowthLocked(payloadJson);
+        if (!state) return std::nullopt;
+        if (!state->growth) return GrowthResult(false, "card cannot grow");
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        const int steps = payload.is_object() ? payload.value("limit_break_step", 1) : 1;
+        const int target = state->limitBreakTimes + steps;
+        std::map<int, int64_t> costs;
+        int maxTimes = state->limitBreakTimes;
+        for (const auto& step : (*state->growth)["limit_break"]) {
+            const int times = step.value("times", 0);
+            maxTimes = std::max(maxTimes, times);
+            if (times > state->limitBreakTimes && times <= target)
+                costs[step.value("item_id", 0)] += step.value("num", 0);
+        }
+        if (steps < 1 || target > maxTimes) return GrowthResult(false, "invalid limit break step");
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        bool ok = true;
+        for (const auto& [itemId, num] : costs) ok = ok && ConsumeItemLocked(itemId, num);
+        sqlite3_stmt* stmt = nullptr;
+        ok = ok && sqlite3_prepare_v2(db,
+                "UPDATE museum_card_state SET limit_break_times=? WHERE d_card_datas_id=?;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt;
+        if (ok) {
+            sqlite3_bind_int(stmt, 1, target);
+            BindText(stmt, 2, state->dCardDatasId);
+            ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) == 1;
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return GrowthResult(false, "insufficient materials");
+        }
+        return GrowthResult(true);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::CheckEvolutionLocked(std::string_view payloadJson) {
+        const auto state = LoadCardGrowthLocked(payloadJson);
+        if (!state) return std::nullopt;
+        nlohmann::json required = nlohmann::json::array();
+        std::vector<int> itemIds;
+        bool affordable = false;
+        int nextCap = 0;
+        const bool canEvolve = state->growth && state->evolveTimes < CardGrowthMaxEvolve(*state->growth);
+        if (canEvolve) {
+            const auto costs = EvolutionCosts(*state->growth, state->evolveTimes);
+            required.push_back(RequiredItemEntry(costs));
+            affordable = true;
+            for (const auto& [itemId, num] : costs) {
+                itemIds.push_back(itemId);
+                affordable = affordable && ItemHoldingLocked(itemId) >= num;
+            }
+            nextCap = CardGrowthStyleCap(*state->growth, state->evolveTimes + 1);
+        }
+        nlohmann::json result = {
+            {"is_possible", canEvolve && affordable},
+            {"user_item_list", UserItemListLocked(itemIds)},
+            {"required_item_list", std::move(required)},
+            {"next_max_style_level", nextCap},
+        };
+        return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::EvolutionLocked(std::string_view payloadJson) {
+        const auto state = LoadCardGrowthLocked(payloadJson);
+        if (!state) return std::nullopt;
+        if (!state->growth || state->evolveTimes >= CardGrowthMaxEvolve(*state->growth))
+            return GrowthResult(false, "card cannot evolve");
+        const auto costs = EvolutionCosts(*state->growth, state->evolveTimes);
+        const int next = state->evolveTimes + 1;
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        bool ok = true;
+        for (const auto& [itemId, num] : costs) ok = ok && ConsumeItemLocked(itemId, num);
+        sqlite3_stmt* stmt = nullptr;
+        ok = ok && sqlite3_prepare_v2(db,
+                "INSERT INTO offline_card_growth(d_card_datas_id, evolve_times) VALUES(?1, ?2) "
+                "ON CONFLICT(d_card_datas_id) DO UPDATE SET evolve_times=excluded.evolve_times;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt;
+        if (ok) {
+            BindText(stmt, 1, state->dCardDatasId);
+            sqlite3_bind_int(stmt, 2, next);
+            ok = sqlite3_step(stmt) == SQLITE_DONE;
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        if (ok && next >= CardGrowthMaxEvolve(*state->growth)) {
+            sqlite3_stmt* maxStmt = nullptr;
+            ok = sqlite3_prepare_v2(db, "UPDATE museum_card_state SET is_evolve_max=1 WHERE d_card_datas_id=?;",
+                                    -1, &maxStmt, nullptr) == SQLITE_OK && maxStmt;
+            if (ok) {
+                BindText(maxStmt, 1, state->dCardDatasId);
+                ok = sqlite3_step(maxStmt) == SQLITE_DONE;
+            }
+            if (maxStmt) sqlite3_finalize(maxStmt);
+        }
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return GrowthResult(false, "insufficient materials");
+        }
+        return GrowthResult(true);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::CheckSkillLevelUpLocked(std::string_view payloadJson) {
+        // Gacha base cards carry the developed skill levels (already MAX), and
+        // the preserved collection is fully developed, so no skill can level.
+        const auto state = LoadCardGrowthLocked(payloadJson);
+        if (!state) return std::nullopt;
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        const int skillType = payload.is_object() ? payload.value("skill_type", 0) : 0;
+        int level = 0;
+        auto detail = GetCardDetailByDCardIdLocked(state->dCardDatasId);
+        if (detail) {
+            const auto card = nlohmann::json::parse(detail->body, nullptr, false);
+            if (card.is_object() && card.contains("user_card_data")) {
+                for (const auto& skill : card["user_card_data"].value("skill_list", nlohmann::json::array())) {
+                    if (skill.value("skill_type", -1) == skillType) level = skill.value("skill_level", 0);
+                }
+            }
+        }
+        nlohmann::json result = {
+            {"is_possible", false},
+            {"current_skill_level", level},
+            {"selectable_max_level", level},
+            {"user_item_list", nlohmann::json::array()},
+            {"required_item_list", nlohmann::json::array()},
+        };
+        return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetProfileInfoResponseLocked() {
@@ -2243,12 +2647,15 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_stmt* cardsStmt = nullptr;
         constexpr const char* cardsSql =
             "SELECT card_detail.response_json, museum_card_state.style_level, "
-            "museum_card_state.limit_break_times, museum_card_state.is_evolve_max "
+            "museum_card_state.limit_break_times, museum_card_state.is_evolve_max, "
+            "COALESCE(offline_card_growth.evolve_times, 0) "
             "FROM card_detail "
             "INNER JOIN museum_card_ownership "
             "ON museum_card_ownership.d_card_datas_id = card_detail.d_card_datas_id "
             "INNER JOIN museum_card_state "
             "ON museum_card_state.d_card_datas_id = museum_card_ownership.d_card_datas_id "
+            "LEFT JOIN offline_card_growth "
+            "ON offline_card_growth.d_card_datas_id = card_detail.d_card_datas_id "
             "ORDER BY card_detail.card_datas_id;";
         if (sqlite3_prepare_v2(db, cardsSql, -1, &cardsStmt, nullptr) != SQLITE_OK || !cardsStmt) {
             if (cardsStmt) sqlite3_finalize(cardsStmt);
@@ -2262,7 +2669,8 @@ namespace LinkuraLocal::HttpMock {
                 raw,
                 sqlite3_column_int(cardsStmt, 1),
                 sqlite3_column_int(cardsStmt, 2),
-                sqlite3_column_int(cardsStmt, 3) != 0);
+                sqlite3_column_int(cardsStmt, 3) != 0,
+                sqlite3_column_int(cardsStmt, 4));
             if (!parsed) {
                 sqlite3_finalize(cardsStmt);
                 return std::nullopt;
@@ -5692,35 +6100,19 @@ namespace LinkuraLocal::HttpMock {
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::CheckStyleLevelUp(std::string_view payloadJson) {
-        const auto dCardDatasId = ExtractPayloadStringField(payloadJson, "d_card_datas_id");
-        if (dCardDatasId.empty()) {
-            return std::nullopt;
-        }
-        auto record = GetCardDetailByDCardId(dCardDatasId);
-        if (!record.has_value()) {
-            return std::nullopt;
-        }
-        auto cardObj = nlohmann::json::parse(record->body, nullptr, false);
-        if (!cardObj.is_object()) {
-            return std::nullopt;
-        }
-        const auto cardDataIt = cardObj.find("user_card_data");
-        if (cardDataIt == cardObj.end() || !cardDataIt->is_object()) {
-            Log::ErrorFmt(
-                "[HttpMockBackend] card detail has no user_card_data object: d_card_datas_id=%s",
-                dCardDatasId.c_str()
-            );
-            return std::nullopt;
-        }
-        const auto& cardData = *cardDataIt;
-        const int currentStyleLevel = cardData.value("style_level", 0);
-        const int selectableMaxLevel = cardData.value("max_style_level", 0);
-        nlohmann::json result;
-        result["is_possible"] = currentStyleLevel < selectableMaxLevel;
-        result["current_style_level"] = currentStyleLevel;
-        result["selectable_max_level"] = selectableMaxLevel;
-        result["style_point"] = 0;
-        return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->CheckStyleLevelUpLocked(payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::CardGrowth(std::string_view action, std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        if (action == "style_level_up") return impl_->StyleLevelUpLocked(payloadJson);
+        if (action == "check_limit_break") return impl_->CheckLimitBreakLocked(payloadJson);
+        if (action == "limit_break") return impl_->LimitBreakLocked(payloadJson);
+        if (action == "check_evolution") return impl_->CheckEvolutionLocked(payloadJson);
+        if (action == "evolution") return impl_->EvolutionLocked(payloadJson);
+        if (action == "check_skill_level_up") return impl_->CheckSkillLevelUpLocked(payloadJson);
+        return std::nullopt;
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GetItemDetailByDItemId(std::string_view dItemDatasId) {
