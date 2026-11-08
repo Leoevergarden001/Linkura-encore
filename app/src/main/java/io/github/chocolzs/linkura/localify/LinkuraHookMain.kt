@@ -563,6 +563,11 @@ class LinkuraHookMain : IXposedHookLoadPackage, IXposedHookZygoteInit  {
             "loadNative",
             String::class.java,
             object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    // Unity has not read PlayerPrefs yet at this point.
+                    AndroidAppHelper.currentApplication()?.let { seedStorageKey(it) }
+                }
+
                 @SuppressLint("UnsafeDynamicallyLoadedCode")
                 override fun afterHookedMethod(param: MethodHookParam) {
                     super.afterHookedMethod(param)
@@ -1162,6 +1167,44 @@ class LinkuraHookMain : IXposedHookLoadPackage, IXposedHookZygoteInit  {
         Log.i(TAG, "Using in-game offline config; Localify app not required")
         LogExporter.addLogEntry(TAG, "I", "Using in-game offline config")
         return true
+    }
+
+    // The downloaded asset cache (external files D/ and M/) is named and
+    // encrypted with a per-install local-storage key that the game keeps in
+    // its encrypted PlayerPrefs. A fresh install generates a new key and
+    // ignores an imported cache. A resource pack therefore ships the
+    // matching PlayerPrefs entry in linkura-local/storage-key.json:
+    //   {"prefs": "com.oddno.lovelive.v2.playerprefs",
+    //    "entries": {"<xml name attribute>": "<xml value>"}}
+    // It is looked up in the external files dir (next to D/ and M/), then in
+    // the internal files dir. The entry holds no account identity, but it is
+    // copied from a real install, so it stays out of the repository.
+    private fun seedStorageKey(context: Context) {
+        val candidates = listOfNotNull(
+            context.getExternalFilesDir(null)?.let { File(it, "linkura-local/storage-key.json") },
+            File(context.filesDir, "linkura-local/storage-key.json"),
+        )
+        val source = candidates.firstOrNull { it.isFile } ?: return
+        try {
+            val root = org.json.JSONObject(source.readText())
+            val prefsName = root.optString("prefs", "${context.packageName}.v2.playerprefs")
+            val entries = root.optJSONObject("entries") ?: return
+            val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+            val editor = prefs.edit()
+            var changed = 0
+            for (name in entries.keys()) {
+                val value = entries.getString(name)
+                if (prefs.getString(name, null) != value) {
+                    editor.putString(name, value)
+                    changed++
+                }
+            }
+            if (changed > 0) editor.commit()
+            Log.i(TAG, "Storage key seed from ${source.absolutePath}: ${entries.length()} entries, $changed updated")
+            LogExporter.addLogEntry(TAG, "I", "Storage key seed: $changed updated")
+        } catch (e: Exception) {
+            Log.e(TAG, "Storage key seed failed (${source.absolutePath})", e)
+        }
     }
 
     fun requestConfig(activity: Context) {
