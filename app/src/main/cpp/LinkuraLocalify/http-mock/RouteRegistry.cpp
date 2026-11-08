@@ -690,6 +690,20 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/archive/get_with_archive_data", HandleArchiveDetail);
             RegisterBackend(routes, "/v1/archive/get_fes_archive_data", HandleArchiveDetail);
 
+            // Chapter RANK (season pass). ChapterHomeResponse per 5.1 metadata:
+            // chapter_id, rank_info{current_rank,current_point,is_max_rank},
+            // category_list[{category_id,current_point,max_point,is_capped}].
+            // Museum state: the final chapter (Chapters.yaml 10003) completed at
+            // the top rank (ChapterRanks.yaml 6 = Rank SS); categories filled to
+            // their ChapterMissionCategorys.yaml LimitPoint (2 has no limit).
+            RegisterStaticJson(routes, "/v1/chapter/home",
+                               R"({"chapter_id":10003,)"
+                               R"("rank_info":{"current_rank":6,"current_point":10000,"is_max_rank":true},)"
+                               R"("category_list":[)"
+                               R"({"category_id":1,"current_point":3000,"max_point":3000,"is_capped":true},)"
+                               R"({"category_id":2,"current_point":0,"max_point":0,"is_capped":false},)"
+                               R"({"category_id":3,"current_point":4000,"max_point":4000,"is_capped":true},)"
+                               R"({"category_id":4,"current_point":3000,"max_point":3000,"is_capped":true}]})");
             RegisterBackend(routes, "/v1/profile/get_info", HandleProfileGetInfo);
             // The Museum player has no saved profile designs; both DTOs carry
             // only my_design_list (5.1 metadata), so an empty list is valid.
