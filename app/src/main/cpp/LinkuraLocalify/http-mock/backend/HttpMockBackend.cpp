@@ -5505,6 +5505,25 @@ namespace LinkuraLocal::HttpMock {
 
     // ─── Grand Prix ───
 
+    // Solo Grand Prix total: the sum of each quest's best daily point. There is
+    // no other player, so the personal ranking is 1 once anything is scored.
+    int64_t HttpMockBackend::Impl::GrandPrixTotalPointLocked(int grandPrixId) {
+        sqlite3_stmt* stmt = nullptr;
+        int64_t total = 0;
+        if (db && sqlite3_prepare_v2(db,
+                "SELECT COALESCE(SUM(best), 0) FROM ("
+                "SELECT s.quest_id, MAX(COALESCE(p.daily_best_score, 0)) AS best "
+                "FROM grand_prix_series gs JOIN grand_prix_stage s ON s.quest_id = gs.quest_id "
+                "LEFT JOIN grand_prix_progress p ON p.stage_id = s.stage_id "
+                "WHERE gs.grand_prix_id = ? GROUP BY s.quest_id);",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, grandPrixId);
+            if (sqlite3_step(stmt) == SQLITE_ROW) total = sqlite3_column_int64(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return total;
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GrandPrixGetTopInfoLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) return std::nullopt;
         if (!db) return std::nullopt;
