@@ -718,16 +718,26 @@ namespace LinkuraLocal::HttpMock {
                                R"({"category_id":3,"current_point":4000,"max_point":4000,"is_capped":true},)"
                                R"({"category_id":4,"current_point":3000,"max_point":3000,"is_capped":true}]})");
             RegisterBackend(routes, "/v1/profile/get_info", HandleProfileGetInfo);
-            // The Museum player has no saved profile designs; both DTOs carry
-            // only my_design_list (5.1 metadata), so an empty list is valid.
-            RegisterStaticJson(routes, "/v1/profile/get_my_design_card_list", R"({"my_design_list":[]})");
-            RegisterStaticJson(routes, "/v1/profile/get_my_design_icon_list", R"({"my_design_list":[]})");
-            // Opening the Profile scene with no saved card/icon design makes the
-            // client create a default one ("カスタム1", empty parts) for each.
-            // Accept them so the scene can open; the defaults are not persisted
-            // and are simply recreated on the next visit.
-            RegisterStaticJson(routes, "/v1/profile/set_my_design_card", R"({"result":true})");
-            RegisterStaticJson(routes, "/v1/profile/set_my_design_icon", R"({"result":true})");
+            // Profile "my designs" persist in the backend (see SetMyDesignLocked).
+            const auto designRoute = [&routes](const char* path, auto call) {
+                RegisterBackend(routes, path, [call](const MockRequestContext& request, HttpMockBackend& backend) {
+                    return ToBackendResponse(call(backend, request.payloadJson));
+                });
+            };
+            designRoute("/v1/profile/get_my_design_card_list",
+                        [](HttpMockBackend& b, std::string_view) { return b.GetMyDesignList(false); });
+            designRoute("/v1/profile/get_my_design_icon_list",
+                        [](HttpMockBackend& b, std::string_view) { return b.GetMyDesignList(true); });
+            designRoute("/v1/profile/set_my_design_card",
+                        [](HttpMockBackend& b, std::string_view p) { return b.SetMyDesign(false, p); });
+            designRoute("/v1/profile/set_my_design_icon",
+                        [](HttpMockBackend& b, std::string_view p) { return b.SetMyDesign(true, p); });
+            designRoute("/v1/profile/set_my_design_name",
+                        [](HttpMockBackend& b, std::string_view p) { return b.SetMyDesignName(p); });
+            designRoute("/v1/profile/set_profile_card",
+                        [](HttpMockBackend& b, std::string_view p) { return b.SetProfileDesign(false, p); });
+            designRoute("/v1/profile/set_profile_icon",
+                        [](HttpMockBackend& b, std::string_view p) { return b.SetProfileDesign(true, p); });
             RegisterStaticJson(routes, "/v1/profile/get_mute_list", OfflineApiMockBuiltIn::ProfileGetMuteListJsonView);
 
             RegisterBackend(routes, "/v1/user/deck/get_list", HandleDeckGetList);

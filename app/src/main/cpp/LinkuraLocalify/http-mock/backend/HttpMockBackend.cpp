@@ -240,6 +240,11 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetHomeResponseLocked();
         std::optional<nlohmann::json> BuildProfileInfoLocked();
         std::optional<MockStoredResponse> GetProfileInfoResponseLocked();
+        bool EnsureMyDesignTableLocked();
+        std::optional<MockStoredResponse> GetMyDesignListLocked(int designType);
+        std::optional<MockStoredResponse> SetMyDesignLocked(int designType, std::string_view payloadJson);
+        std::optional<MockStoredResponse> SetMyDesignNameLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> SetProfileDesignLocked(int designType, std::string_view payloadJson);
         struct GachaState {
             int64_t freeJewels = 0;
             int64_t paidJewels = 0;
@@ -1062,6 +1067,17 @@ namespace LinkuraLocal::HttpMock {
         return state;
     }
 
+    namespace {
+        constexpr int kMyDesignTypeCard = 1;
+        constexpr int kMyDesignTypeIcon = 2;
+        constexpr int kMyDesignSlotsPerType = 10;
+        std::string JsonStringField(const nlohmann::json& payload, const char* key) {
+            if (!payload.is_object() || !payload.contains(key)) return {};
+            const auto& value = payload[key];
+            return value.is_string() ? value.get<std::string>() : value.dump();
+        }
+    }
+
     // Home and the Profile scene both read the same ProfileInfo DTO. Counts
     // come from the persistent catalog/ownership tables, everything else from
     // the checked-in Home template.
@@ -1086,7 +1102,170 @@ namespace LinkuraLocal::HttpMock {
             profile[sqlite3_column_name(counts, index)] = sqlite3_column_int64(counts, index);
         }
         sqlite3_finalize(counts);
+        // Show the selected card/icon designs, when the player has any.
+        if (EnsureMyDesignTableLocked()) {
+            sqlite3_stmt* design = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "SELECT design_type, parts_info FROM offline_profile_my_design WHERE is_setting=1;",
+                    -1, &design, nullptr) == SQLITE_OK && design) {
+                while (sqlite3_step(design) == SQLITE_ROW) {
+                    const auto* raw = reinterpret_cast<const char*>(sqlite3_column_text(design, 1));
+                    if (!raw || !*raw) continue;
+                    profile[sqlite3_column_int(design, 0) == kMyDesignTypeCard
+                            ? "profile_card_parts_info" : "profile_icon_parts_info"] = raw;
+                }
+            }
+            if (design) sqlite3_finalize(design);
+        }
         return profile;
+    }
+
+    // Profile "my designs" (card and icon layouts). With an empty list the
+    // client creates ten default designs per type on every Profile visit, one
+    // request per frame (about 3 s of NOW LOADING), so they must persist.
+    // ProfileMyDesign per 5.1 metadata: d_profile_my_designs_id,
+    // my_design_type, my_design_parts_info, my_design_name, is_setting.
+    // my_design_type uses 1 = card, 2 = icon (enum DesignTypeCard/Icon order).
+    // Constants and JsonStringField are defined above BuildProfileInfoLocked.
+    bool HttpMockBackend::Impl::EnsureMyDesignTableLocked() {
+        return db && ExecSql(db,
+            "CREATE TABLE IF NOT EXISTS offline_profile_my_design ("
+            "d_profile_my_designs_id TEXT PRIMARY KEY, design_type INTEGER NOT NULL, "
+            "parts_info TEXT NOT NULL DEFAULT '', design_name TEXT NOT NULL DEFAULT '', "
+            "is_setting INTEGER NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 0);");
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetMyDesignListLocked(int designType) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!EnsureMyDesignTableLocked()) return std::nullopt;
+        nlohmann::json list = nlohmann::json::array();
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT d_profile_my_designs_id, parts_info, design_name, is_setting "
+                "FROM offline_profile_my_design WHERE design_type=? ORDER BY sort_order;",
+                -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+        sqlite3_bind_int(stmt, 1, designType);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const auto text = [stmt](int column) {
+                const auto* raw = reinterpret_cast<const char*>(sqlite3_column_text(stmt, column));
+                return std::string(raw ? raw : "");
+            };
+            list.push_back({
+                {"d_profile_my_designs_id", text(0)},
+                {"my_design_type", designType},
+                {"my_design_parts_info", text(1)},
+                {"my_design_name", text(2)},
+                {"is_setting", sqlite3_column_int(stmt, 3) != 0},
+            });
+        }
+        sqlite3_finalize(stmt);
+        return MockStoredResponse{nlohmann::json{{"my_design_list", std::move(list)}}.dump(),
+                                  {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::SetMyDesignLocked(
+            int designType, std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!EnsureMyDesignTableLocked()) return std::nullopt;
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        const char* partsKey = designType == kMyDesignTypeCard
+                ? "profile_card_parts_info" : "profile_icon_parts_info";
+        const std::string parts = JsonStringField(payload, partsKey);
+        const std::string name = JsonStringField(payload, "my_design_name");
+        const std::string id = JsonStringField(payload, "d_profile_my_designs_id");
+        const auto scalar = [this](const char* sql, int type) {
+            sqlite3_stmt* stmt = nullptr;
+            int value = 0;
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int(stmt, 1, type);
+                if (sqlite3_step(stmt) == SQLITE_ROW) value = sqlite3_column_int(stmt, 0);
+            }
+            if (stmt) sqlite3_finalize(stmt);
+            return value;
+        };
+        sqlite3_stmt* stmt = nullptr;
+        if (!id.empty()) {
+            if (sqlite3_prepare_v2(db,
+                    "UPDATE offline_profile_my_design SET parts_info=?1, "
+                    "design_name=CASE WHEN ?2='' THEN design_name ELSE ?2 END "
+                    "WHERE d_profile_my_designs_id=?3 AND design_type=?4;",
+                    -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+                if (stmt) sqlite3_finalize(stmt);
+                return std::nullopt;
+            }
+            BindText(stmt, 1, parts);
+            BindText(stmt, 2, name);
+            BindText(stmt, 3, id);
+            sqlite3_bind_int(stmt, 4, designType);
+        } else {
+            const int count = scalar("SELECT COUNT(*) FROM offline_profile_my_design WHERE design_type=?;",
+                                     designType);
+            if (count >= kMyDesignSlotsPerType) {
+                // All slots exist; accept without growing the table.
+                return MockStoredResponse{R"({"result":true})", {}, 200, "OK (offline mock)"};
+            }
+            if (sqlite3_prepare_v2(db,
+                    "INSERT INTO offline_profile_my_design "
+                    "(d_profile_my_designs_id, design_type, parts_info, design_name, is_setting, sort_order) "
+                    "VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+                    -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+                if (stmt) sqlite3_finalize(stmt);
+                return std::nullopt;
+            }
+            BindText(stmt, 1, GenerateUuid4());
+            sqlite3_bind_int(stmt, 2, designType);
+            BindText(stmt, 3, parts);
+            BindText(stmt, 4, name);
+            sqlite3_bind_int(stmt, 5, count == 0 ? 1 : 0);
+            sqlite3_bind_int(stmt, 6, count + 1);
+        }
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        if (!ok) return std::nullopt;
+        return MockStoredResponse{R"({"result":true})", {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::SetMyDesignNameLocked(std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!EnsureMyDesignTableLocked()) return std::nullopt;
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "UPDATE offline_profile_my_design SET design_name=? WHERE d_profile_my_designs_id=?;",
+                -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+        BindText(stmt, 1, JsonStringField(payload, "my_design_name"));
+        BindText(stmt, 2, JsonStringField(payload, "d_profile_my_designs_id"));
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        if (!ok) return std::nullopt;
+        return MockStoredResponse{R"({"result":true})", {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::SetProfileDesignLocked(
+            int designType, std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!EnsureMyDesignTableLocked()) return std::nullopt;
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "UPDATE offline_profile_my_design SET is_setting=(d_profile_my_designs_id=?1) "
+                "WHERE design_type=?2;",
+                -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+        BindText(stmt, 1, JsonStringField(payload, "d_profile_my_designs_id"));
+        sqlite3_bind_int(stmt, 2, designType);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        if (!ok) return std::nullopt;
+        return MockStoredResponse{R"({"result":true})", {}, 200, "OK (offline mock)"};
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetProfileInfoResponseLocked() {
@@ -5440,6 +5619,26 @@ namespace LinkuraLocal::HttpMock {
         rewrite("jewel_free", wallet->first);
         rewrite("jewel_paid_google", wallet->second);
         return headers;
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetMyDesignList(bool icon) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetMyDesignListLocked(icon ? kMyDesignTypeIcon : kMyDesignTypeCard);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::SetMyDesign(bool icon, std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->SetMyDesignLocked(icon ? kMyDesignTypeIcon : kMyDesignTypeCard, payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::SetMyDesignName(std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->SetMyDesignNameLocked(payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::SetProfileDesign(bool icon, std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->SetProfileDesignLocked(icon ? kMyDesignTypeIcon : kMyDesignTypeCard, payloadJson);
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GetProfileInfoResponse() {
