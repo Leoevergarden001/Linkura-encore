@@ -289,6 +289,7 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetCharacterInfoByIdLocked(std::string_view characterId);
         std::optional<MockStoredResponse> GetDeckListResponseLocked();
         std::optional<MockStoredResponse> ModifyDeckListLocked(std::string_view payloadJson);
+        static constexpr int kQuestLiveTypeStandard = 1;
         static constexpr int kQuestLiveTypeDaily = 2;
         struct QuestLiveState {
             std::string questLiveId;
@@ -344,11 +345,17 @@ namespace LinkuraLocal::HttpMock {
 
         std::optional<MockStoredResponse> DailyQuestStageListLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> DailyQuestStageSelectLocked();
+        int64_t CurrentStaminaLocked(std::time_t* fullAt = nullptr);
+        nlohmann::json StaminaJsonLocked();
+        void ConsumeStaminaLocked(int64_t amount);
+        int StageStaminaCostLocked(int questLiveType, int stageId);
+        int64_t GrandPrixTotalPointLocked(int grandPrixId);
         nlohmann::json DailyTicketInfoLocked();
         bool ConsumeDailyTicketsLocked(int count);
         std::optional<MockStoredResponse> DailyGetRecoveryChallengeCountLocked();
         std::optional<MockStoredResponse> DailyRecoveryChallengeCountLocked(std::string_view payloadJson);
-        nlohmann::json GrantDailyDropsLocked(int stageId);
+        nlohmann::json GrantStageDropsLocked(int stageId);
+        nlohmann::json StageRewardPreviewLocked(int stageId);
         std::optional<MockStoredResponse> DailyQuestStageDataLocked(std::string_view payloadJson);
 
         std::optional<MockStoredResponse> MusicLearningGetMusicSelectLocked(std::string_view payloadJson);
@@ -3505,11 +3512,7 @@ namespace LinkuraLocal::HttpMock {
 
         nlohmann::json result;
         result["stage_list"] = std::move(stageList);
-        result["user_stamina"] = {
-            {"stamina_now", 200},
-            {"stamina_max", 200},
-            {"stamina_recovery_time", "2099-01-01T00:00:00Z"},
-        };
+        result["user_stamina"] = StaminaJsonLocked();
         result["is_update_grade_live"] = false;
 
         MockStoredResponse response;
@@ -3536,7 +3539,15 @@ namespace LinkuraLocal::HttpMock {
         nlohmann::json stageDetailList = nlohmann::json::array();
         sqlite3_stmt* stmt = nullptr;
         constexpr const char* sql =
-            "SELECT stage_id, music_id, quest_musics_type, score1, score2, score3, gain_style_point, use_num "
+            // QuestMusicsType 0 ("any song") stages store the generation in
+            // music_id (e.g. 105), not a song. best_love_music_id must be a real
+            // song: the Quest skip popup looks it up and silently fails
+            // otherwise, leaving the stage UI half-locked.
+            "SELECT stage_id, "
+            "COALESCE((SELECT m.music_id FROM music m WHERE m.music_id = quest_stage.music_id AND m.has_score = 1), "
+            "(SELECT MIN(m.music_id) FROM music m WHERE m.has_score = 1 AND m.generations_id = quest_stage.music_id), "
+            "(SELECT MIN(m.music_id) FROM music m WHERE m.has_score = 1)), "
+            "quest_musics_type, score1, score2, score3, gain_style_point, use_num "
             "FROM quest_stage WHERE area_id = ? ORDER BY stage_id;";
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
             sqlite3_bind_int(stmt, 1, areaId);
@@ -3551,7 +3562,10 @@ namespace LinkuraLocal::HttpMock {
                 detail["is_skip"] = true;
                 detail["clear_status"] = 3;
                 detail["best_love_music_id"] = musicId;
-                detail["stage_reward_list"] = nlohmann::json::array();
+                detail["stage_reward_list"] = StageRewardPreviewLocked(stageId);
+                // Present in the 5.1 StageDetail DTO; a missing list arrives as
+                // null and the skip dialog never opened (no request sent).
+                detail["stage_challenge_reward_list"] = nlohmann::json::array();
                 detail["best_love"] = score3Val;
 
                 stageDetailList.push_back(std::move(detail));
@@ -3593,11 +3607,7 @@ namespace LinkuraLocal::HttpMock {
         nlohmann::json result;
         result["view_stage_id"] = viewStageId;
         result["stage_detail_list"] = std::move(stageDetailList);
-        result["user_stamina"] = {
-            {"stamina_now", 200},
-            {"stamina_max", 200},
-            {"stamina_recovery_time", "2099-01-01T00:00:00Z"},
-        };
+        result["user_stamina"] = StaminaJsonLocked();
         result["music_list"] = std::move(musicList);
 
         MockStoredResponse response;
@@ -3776,11 +3786,7 @@ namespace LinkuraLocal::HttpMock {
         result["deck_data"] = std::move(deckList);
         result["best_love_deck"] = nlohmann::json::object();
         result["best_love_musics_id"] = musicId;
-        result["user_stamina"] = {
-            {"stamina_now", 200},
-            {"stamina_max", 200},
-            {"stamina_recovery_time", "2099-01-01T00:00:00Z"},
-        };
+        result["user_stamina"] = StaminaJsonLocked();
         result["music_list"] = std::move(musicList);
         result["user_card_data_list"] = std::move(userCardDataList);
         result["rental_deck_data"] = nlohmann::json::array();
@@ -4107,6 +4113,7 @@ namespace LinkuraLocal::HttpMock {
         char buf[64]{};
         std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S+09:00", &tmLocal);
         currentQuestLive.startTime = buf;
+        ConsumeStaminaLocked(StageStaminaCostLocked(currentQuestLive.questLiveType, currentQuestLive.stageId));
         currentQuestLive.finished = false;
         currentQuestLive.score = 0;
         currentQuestLive.playReport.clear();
@@ -4220,10 +4227,11 @@ namespace LinkuraLocal::HttpMock {
             return std::nullopt;
         }
         currentQuestLive.rewardList = nlohmann::json::array();
-        if (currentQuestLive.questLiveType == kQuestLiveTypeDaily) {
-            // Settled once: a repeated finish takes the replay branch above.
-            ConsumeDailyTicketsLocked(1);
-            currentQuestLive.rewardList = GrantDailyDropsLocked(currentQuestLive.stageId);
+        // Settled once: a repeated finish takes the replay branch above.
+        if (currentQuestLive.questLiveType == kQuestLiveTypeDaily) ConsumeDailyTicketsLocked(1);
+        if (currentQuestLive.questLiveType == kQuestLiveTypeDaily ||
+            currentQuestLive.questLiveType == kQuestLiveTypeStandard) {
+            currentQuestLive.rewardList = GrantStageDropsLocked(currentQuestLive.stageId);
         }
 
         nlohmann::json result;
@@ -4312,14 +4320,19 @@ namespace LinkuraLocal::HttpMock {
         const int stageId = payload.is_object() ? payload.value("stage_id", 0) : 0;
         nlohmann::json skipRewardList = nlohmann::json::array();
         nlohmann::json totalSkipRewardList = nlohmann::json::array();
-        if (questLiveType == kQuestLiveTypeDaily) {
+        if (questLiveType != kQuestLiveTypeDaily) {
+            if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+            const int skips = std::max(1, payload.is_object() ? payload.value("skip_count", 1) : 1);
+            ConsumeStaminaLocked(int64_t(StageStaminaCostLocked(questLiveType, stageId)) * skips);
+        }
+        if (questLiveType == kQuestLiveTypeDaily || questLiveType == kQuestLiveTypeStandard) {
             if (!initialized && !EnsureReadyLocked()) return std::nullopt;
             const int skipCount = std::max(1, payload.is_object() ? payload.value("skip_count", 1) : 1);
-            ConsumeDailyTicketsLocked(skipCount);
+            if (questLiveType == kQuestLiveTypeDaily) ConsumeDailyTicketsLocked(skipCount);
             // One SkipRewardList entry per skipped play, plus the summed total.
             std::map<int, int64_t> totals;
             for (int index = 0; index < skipCount; ++index) {
-                auto rewards = GrantDailyDropsLocked(stageId);
+                auto rewards = GrantStageDropsLocked(stageId);
                 for (const auto& reward : rewards) {
                     totals[reward.value("item_id", 0)] += reward.value("reward_num", 0);
                 }
@@ -4371,11 +4384,7 @@ namespace LinkuraLocal::HttpMock {
         nlohmann::json result;
         result["quest_live_type"] = questLiveType;
         result["quest_live_id"] = "";
-        result["user_stamina"] = {
-            {"stamina_now", 200},
-            {"stamina_max", 200},
-            {"stamina_recovery_time", "2099-01-01T00:00:00Z"},
-        };
+        result["user_stamina"] = StaminaJsonLocked();
         result["add_style_point"] = gainStylePoint;
         result["skip_reward_list"] = std::move(skipRewardList);
         result["total_skip_reward_list"] = std::move(totalSkipRewardList);
@@ -4422,6 +4431,107 @@ namespace LinkuraLocal::HttpMock {
         MockStoredResponse response;
         response.body = result.dump();
         return response;
+    }
+
+    // プレイPt. (user_stamina). Spent by Quest and Learning plays per
+    // the stage's Master use_num; it regenerates over time at 1 point per 6
+    // minutes, the interval the 5.1 client itself assumes when it shows
+    // "1回復まであと" (the rate is not in the Master snapshot).
+    namespace {
+        constexpr int64_t kStaminaMax = 999;
+        constexpr int64_t kStaminaRecoverySeconds = 360;
+    }
+
+    int64_t HttpMockBackend::Impl::CurrentStaminaLocked(std::time_t* fullAt) {
+        const std::time_t now = std::time(nullptr);
+        int64_t value = kStaminaMax;
+        int64_t updated = now;
+        if (db && ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_player_stamina ("
+                              "singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1), "
+                              "stamina INTEGER NOT NULL, updated_at INTEGER NOT NULL);")) {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT stamina, updated_at FROM offline_player_stamina WHERE singleton_id=1;",
+                                   -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                if (sqlite3_step(stmt) == SQLITE_ROW) {
+                    value = sqlite3_column_int64(stmt, 0);
+                    updated = sqlite3_column_int64(stmt, 1);
+                }
+            }
+            if (stmt) sqlite3_finalize(stmt);
+        }
+        if (value < kStaminaMax && now > updated) {
+            value = std::min(kStaminaMax, value + (now - updated) / kStaminaRecoverySeconds);
+        }
+        if (fullAt) {
+            // Partial progress toward the next point is kept by not moving updated_at.
+            const int64_t missing = std::max<int64_t>(0, kStaminaMax - value);
+            const int64_t elapsed = value < kStaminaMax ? (now - updated) % kStaminaRecoverySeconds : 0;
+            *fullAt = now + missing * kStaminaRecoverySeconds - elapsed;
+        }
+        return value;
+    }
+
+    nlohmann::json HttpMockBackend::Impl::StaminaJsonLocked() {
+        std::time_t fullAt = 0;
+        const int64_t value = CurrentStaminaLocked(&fullAt);
+        std::tm tm{};
+#if defined(_WIN32)
+        gmtime_s(&tm, &fullAt);
+#else
+        gmtime_r(&fullAt, &tm);
+#endif
+        char buffer[48]{};
+        std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S.000000000Z", &tm);
+        return {{"stamina_now", value}, {"stamina_max", kStaminaMax}, {"stamina_recovery_time", buffer}};
+    }
+
+    void HttpMockBackend::Impl::ConsumeStaminaLocked(int64_t amount) {
+        if (!db || amount <= 0) return;
+        const std::time_t now = std::time(nullptr);
+        const int64_t current = CurrentStaminaLocked();
+        // Keep the partial-minute progress so regeneration stays continuous.
+        sqlite3_stmt* read = nullptr;
+        int64_t updated = now;
+        int64_t stored = kStaminaMax;
+        if (sqlite3_prepare_v2(db, "SELECT stamina, updated_at FROM offline_player_stamina WHERE singleton_id=1;",
+                               -1, &read, nullptr) == SQLITE_OK && read) {
+            if (sqlite3_step(read) == SQLITE_ROW) {
+                stored = sqlite3_column_int64(read, 0);
+                updated = sqlite3_column_int64(read, 1);
+            }
+        }
+        if (read) sqlite3_finalize(read);
+        const int64_t base = stored >= kStaminaMax
+                ? now : updated + (current - stored) * kStaminaRecoverySeconds;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT INTO offline_player_stamina(singleton_id, stamina, updated_at) VALUES(1, ?1, ?2) "
+                "ON CONFLICT(singleton_id) DO UPDATE SET stamina=excluded.stamina, updated_at=excluded.updated_at;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int64(stmt, 1, std::max<int64_t>(0, current - amount));
+            sqlite3_bind_int64(stmt, 2, current >= kStaminaMax ? now : base);
+            sqlite3_step(stmt);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+    }
+
+    int HttpMockBackend::Impl::StageStaminaCostLocked(int questLiveType, int stageId) {
+        const char* sql = nullptr;
+        switch (questLiveType) {
+            case 1: sql = "SELECT use_num FROM quest_stage WHERE stage_id=?;"; break;
+            case 3: sql = "SELECT use_num FROM learning_stage WHERE stage_id=?;"; break;
+            // Daily uses tickets, Grade action Pt.; Dream's Master UseType 2 is
+            // the ユメノカケラ item (not consumed in the Museum); Grand Prix is free.
+            default: return 0;
+        }
+        sqlite3_stmt* stmt = nullptr;
+        int cost = 0;
+        if (db && sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, stageId);
+            if (sqlite3_step(stmt) == SQLITE_ROW) cost = sqlite3_column_int(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return cost;
     }
 
     // Daily Live tickets: 3 per day, reset at 04:00 JST like the other daily
@@ -4569,17 +4679,17 @@ namespace LinkuraLocal::HttpMock {
     // tools/generate_daily_quest_drop_catalog.py); the server-side drop tables
     // were not preserved, so the quantity is a local Museum approximation
     // (QuestRank of the stage) and not the retired server's rate.
-    nlohmann::json HttpMockBackend::Impl::GrantDailyDropsLocked(int stageId) {
+    nlohmann::json HttpMockBackend::Impl::GrantStageDropsLocked(int stageId) {
         nlohmann::json rewards = nlohmann::json::array();
         if (!db) return rewards;
-        const auto catalog = OfflineApiMockBuiltIn::DailyQuestDropCatalogJsonObj();
+        const auto catalog = OfflineApiMockBuiltIn::QuestDropCatalogJsonObj();
         if (!catalog.is_array()) return rewards;
         const nlohmann::json* entry = nullptr;
         for (const auto& row : catalog) {
             if (row.value("stage_id", 0) == stageId) { entry = &row; break; }
         }
         if (!entry || !entry->contains("item_ids") || !(*entry)["item_ids"].is_array()) return rewards;
-        const int quantity = std::max(1, entry->value("quest_rank", 1));
+        const int quantity = std::max(1, entry->value("quantity", 1));
         sqlite3_stmt* grant = nullptr;
         if (sqlite3_prepare_v2(db,
                 "INSERT INTO museum_item_inventory(d_item_datas_id, item_num) "
@@ -4607,6 +4717,26 @@ namespace LinkuraLocal::HttpMock {
         }
         sqlite3_finalize(grant);
         return rewards;
+    }
+
+    // "獲得可能アイテム": the materials a Daily/Quest stage can drop (see
+    // GrantStageDropsLocked for the quantity approximation).
+    nlohmann::json HttpMockBackend::Impl::StageRewardPreviewLocked(int stageId) {
+        nlohmann::json stageRewards = nlohmann::json::array();
+        static const auto dropCatalog = OfflineApiMockBuiltIn::QuestDropCatalogJsonObj();
+        if (!dropCatalog.is_array()) return stageRewards;
+        for (const auto& row : dropCatalog) {
+            if (row.value("stage_id", 0) != stageId || !row.contains("item_ids")) continue;
+            const int quantity = std::max(1, row.value("quantity", 1));
+            for (const auto& itemId : row["item_ids"]) {
+                if (!itemId.is_number_integer()) continue;
+                stageRewards.push_back({
+                    {"item_id", itemId.get<int>()}, {"is_received", false},
+                    {"reward_type", 1}, {"item_num", quantity},
+                });
+            }
+        }
+        return stageRewards;
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::DailyQuestStageSelectLocked() {
@@ -4713,24 +4843,7 @@ namespace LinkuraLocal::HttpMock {
         result["clear_status"] = 3;
         result["best_love_music_id"] = bestLoveMusicId;
         result["user_daily_ticket_info"] = DailyTicketInfoLocked();
-        // "獲得可能アイテム": the materials this stage can drop (see
-        // GrantDailyDropsLocked for the quantity approximation).
-        nlohmann::json stageRewards = nlohmann::json::array();
-        const auto dropCatalog = OfflineApiMockBuiltIn::DailyQuestDropCatalogJsonObj();
-        if (dropCatalog.is_array()) {
-            for (const auto& row : dropCatalog) {
-                if (row.value("stage_id", 0) != stageId || !row.contains("item_ids")) continue;
-                const int quantity = std::max(1, row.value("quest_rank", 1));
-                for (const auto& itemId : row["item_ids"]) {
-                    if (!itemId.is_number_integer()) continue;
-                    stageRewards.push_back({
-                        {"item_id", itemId.get<int>()}, {"is_received", false},
-                        {"reward_type", 1}, {"item_num", quantity},
-                    });
-                }
-            }
-        }
-        result["stage_reward_list"] = std::move(stageRewards);
+        result["stage_reward_list"] = StageRewardPreviewLocked(stageId);
         result["music_list"] = std::move(musicList);
 
         MockStoredResponse response;
@@ -4882,12 +4995,42 @@ namespace LinkuraLocal::HttpMock {
         nlohmann::json result;
         result["stage_id"] = currentQuestLive.stageId;
         result["quest_live_type"] = 5;
-        result["is_clear"] = true;
+        // Clear when the LOVE reaches the stage requirement (Master Score1).
+        int64_t requiredLove = 0;
+        bool clearedBefore = false;
+        if ((initialized || EnsureReadyLocked()) && db && currentQuestLive.stageId > 0) {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT score1 FROM dream_quest_stage WHERE stage_id=?;",
+                                   -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int(stmt, 1, currentQuestLive.stageId);
+                if (sqlite3_step(stmt) == SQLITE_ROW) requiredLove = sqlite3_column_int64(stmt, 0);
+            }
+            if (stmt) sqlite3_finalize(stmt);
+            ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_dream_clear (stage_id INTEGER PRIMARY KEY);");
+            stmt = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT 1 FROM offline_dream_clear WHERE stage_id=?;",
+                                   -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int(stmt, 1, currentQuestLive.stageId);
+                clearedBefore = sqlite3_step(stmt) == SQLITE_ROW;
+            }
+            if (stmt) sqlite3_finalize(stmt);
+        }
+        const bool isClear = currentQuestLive.score >= requiredLove;
+        if (isClear && !clearedBefore && db) {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO offline_dream_clear(stage_id) VALUES(?);",
+                                   -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int(stmt, 1, currentQuestLive.stageId);
+                sqlite3_step(stmt);
+            }
+            if (stmt) sqlite3_finalize(stmt);
+        }
+        result["is_clear"] = isClear;
         result["result_love"] = currentQuestLive.score;
         result["get_card_id"] = 0;
         result["music_id"] = currentQuestLive.musicId;
         result["play_report"] = currentQuestLive.playReport;
-        result["first_clear_flag"] = true;
+        result["first_clear_flag"] = isClear && !clearedBefore;
 
         MockStoredResponse response;
         response.body = result.dump();
@@ -5563,8 +5706,9 @@ namespace LinkuraLocal::HttpMock {
         result["guild_total_point"] = 0;
         result["guild_ranking"] = 0;
         result["within_guild_ranking"] = 0;
-        result["personal_total_point"] = 0;
-        result["personal_ranking"] = 0;
+        const int64_t totalPoint = GrandPrixTotalPointLocked(gpId);
+        result["personal_total_point"] = totalPoint;
+        result["personal_ranking"] = totalPoint > 0 ? 1 : 0;
         result["get_points"] = nlohmann::json::array();
         result["personal_rewards"] = std::move(rewardsJson);
 
@@ -5646,11 +5790,13 @@ namespace LinkuraLocal::HttpMock {
         result["daily_total_point"] = dailyTotalPoint;
         result["best_point"] = bestPoint;
         result["stages"] = std::move(stages);
+        // quest_id 0 is the overall "合計グランプリPt." row.
+        const int64_t gpTotal = GrandPrixTotalPointLocked(gpId);
         result["stage_ranking_info_list"] = nlohmann::json::array({
-            {{"quest_id", 0}, {"rank_display_type", 1}, {"rank", 0}, {"point", 0}},
+            {{"quest_id", 0}, {"rank_display_type", 1}, {"rank", gpTotal > 0 ? 1 : 0}, {"point", gpTotal}},
         });
         result["predicated_ranking_score_info"] = {
-            {"ranking_score", 0}, {"contents_type", 2},
+            {"ranking_score", gpTotal}, {"contents_type", 2},
         };
 
         MockStoredResponse response;
@@ -6046,6 +6192,15 @@ namespace LinkuraLocal::HttpMock {
         };
         rewrite("jewel_free", wallet->first);
         rewrite("jewel_paid_google", wallet->second);
+        // プレイPt. lives in the same headers (user_stamina JSON line).
+        const std::string staminaKey = "user_stamina: ";
+        if (const auto pos = headers.find(staminaKey);
+            pos != std::string::npos && (pos == 0 || headers[pos - 1] == '\n')) {
+            const size_t valueStart = pos + staminaKey.size();
+            size_t valueEnd = headers.find_first_of("\r\n", valueStart);
+            if (valueEnd == std::string::npos) valueEnd = headers.size();
+            headers.replace(valueStart, valueEnd - valueStart, impl_->StaminaJsonLocked().dump());
+        }
         return headers;
     }
 
