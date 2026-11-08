@@ -66,6 +66,11 @@ namespace LinkuraLocal::HttpMock {
             return ToBackendResponse(backend.GetHomeResponse());
         }
 
+        static std::optional<MockResponse> HandleProfileGetInfo(const MockRequestContext&,
+                                                                 HttpMockBackend& backend) {
+            return ToBackendResponse(backend.GetProfileInfoResponse());
+        }
+
         static std::optional<MockResponse> HandleItemExchangeGetList(const MockRequestContext& request,
                                                                        HttpMockBackend& backend) {
             return ToBackendResponse(backend.GetItemExchangeListResponse(request.payloadJson));
@@ -685,6 +690,17 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/archive/get_with_archive_data", HandleArchiveDetail);
             RegisterBackend(routes, "/v1/archive/get_fes_archive_data", HandleArchiveDetail);
 
+            RegisterBackend(routes, "/v1/profile/get_info", HandleProfileGetInfo);
+            // The Museum player has no saved profile designs; both DTOs carry
+            // only my_design_list (5.1 metadata), so an empty list is valid.
+            RegisterStaticJson(routes, "/v1/profile/get_my_design_card_list", R"({"my_design_list":[]})");
+            RegisterStaticJson(routes, "/v1/profile/get_my_design_icon_list", R"({"my_design_list":[]})");
+            // Opening the Profile scene with no saved card/icon design makes the
+            // client create a default one ("カスタム1", empty parts) for each.
+            // Accept them so the scene can open; the defaults are not persisted
+            // and are simply recreated on the next visit.
+            RegisterStaticJson(routes, "/v1/profile/set_my_design_card", R"({"result":true})");
+            RegisterStaticJson(routes, "/v1/profile/set_my_design_icon", R"({"result":true})");
             RegisterStaticJson(routes, "/v1/profile/get_mute_list", OfflineApiMockBuiltIn::ProfileGetMuteListJsonView);
 
             RegisterBackend(routes, "/v1/user/deck/get_list", HandleDeckGetList);

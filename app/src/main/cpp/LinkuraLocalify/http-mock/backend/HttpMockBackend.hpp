@@ -24,6 +24,7 @@ namespace LinkuraLocal::HttpMock {
         static bool ResetAtFilesDir(const std::string& filesDir);
         static bool RebuildAtFilesDir(const std::string& filesDir);
         std::optional<MockStoredResponse> GetHomeResponse();
+        std::optional<MockStoredResponse> GetProfileInfoResponse();
         std::optional<MockStoredResponse> GetGachaSeriesListResponse();
         std::optional<MockStoredResponse> GachaSetPurchase(std::string_view payloadJson);
         std::optional<MockStoredResponse> GetGachaHistoryResponse();

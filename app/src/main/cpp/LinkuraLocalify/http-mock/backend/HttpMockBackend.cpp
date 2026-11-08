@@ -237,6 +237,8 @@ namespace LinkuraLocal::HttpMock {
         bool RebuildLocked();
         std::optional<MockStoredResponse> GetArchiveDetailByIdLocked(std::string_view archivesId);
         std::optional<MockStoredResponse> GetHomeResponseLocked();
+        std::optional<nlohmann::json> BuildProfileInfoLocked();
+        std::optional<MockStoredResponse> GetProfileInfoResponseLocked();
         struct GachaState {
             int64_t freeJewels = 0;
             int64_t paidJewels = 0;
@@ -1051,18 +1053,13 @@ namespace LinkuraLocal::HttpMock {
         return state;
     }
 
-    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetHomeResponseLocked() {
-        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
-        if (!db) return std::nullopt;
-        const auto gachaState = LoadGachaStateLocked();
-        if (!gachaState) return std::nullopt;
-
-        // Keep only the DTO shape/default compatibility values in the checked-in
-        // JSON. Every count below is derived from the same persistent catalog and
-        // player ownership tables used by the detail/list routes.
-        nlohmann::json result = OfflineApiMockBuiltIn::HomeGetHomeJsonObj();
-        if (!result.is_object()) return std::nullopt;
-        auto profile = result.value("profile_info", nlohmann::json::object());
+    // Home and the Profile scene both read the same ProfileInfo DTO. Counts
+    // come from the persistent catalog/ownership tables, everything else from
+    // the checked-in Home template.
+    std::optional<nlohmann::json> HttpMockBackend::Impl::BuildProfileInfoLocked() {
+        const nlohmann::json home = OfflineApiMockBuiltIn::HomeGetHomeJsonObj();
+        if (!home.is_object()) return std::nullopt;
+        auto profile = home.value("profile_info", nlohmann::json::object());
         if (!profile.is_object()) profile = nlohmann::json::object();
 
         sqlite3_stmt* counts = nullptr;
@@ -1080,7 +1077,48 @@ namespace LinkuraLocal::HttpMock {
             profile[sqlite3_column_name(counts, index)] = sqlite3_column_int64(counts, index);
         }
         sqlite3_finalize(counts);
-        result["profile_info"] = std::move(profile);
+        return profile;
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetProfileInfoResponseLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        auto profile = BuildProfileInfoLocked();
+        if (!profile) return std::nullopt;
+
+        // ProfileGetInfoResponse field order recovered from the 5.1 metadata:
+        // profile_info, is_own, is_mute, is_report, friend_request_status,
+        // circle_invite_status, follow_status. The offline player only ever
+        // views its own profile; there is no social graph to report on.
+        nlohmann::json result;
+        result["profile_info"] = std::move(*profile);
+        result["is_own"] = true;
+        result["is_mute"] = false;
+        result["is_report"] = false;
+        result["friend_request_status"] = 0;
+        result["circle_invite_status"] = 0;
+        result["follow_status"] = 0;
+        const auto gachaState = LoadGachaStateLocked();
+        std::string headers = gachaState
+                ? GachaHeaders(gachaState->freeJewels, gachaState->paidJewels)
+                : std::string{};
+        return MockStoredResponse{result.dump(), std::move(headers), 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetHomeResponseLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const auto gachaState = LoadGachaStateLocked();
+        if (!gachaState) return std::nullopt;
+
+        // Keep only the DTO shape/default compatibility values in the checked-in
+        // JSON. Every count below is derived from the same persistent catalog and
+        // player ownership tables used by the detail/list routes.
+        nlohmann::json result = OfflineApiMockBuiltIn::HomeGetHomeJsonObj();
+        if (!result.is_object()) return std::nullopt;
+        auto profile = BuildProfileInfoLocked();
+        if (!profile) return std::nullopt;
+        result["profile_info"] = std::move(*profile);
 
         // No plan source has been fabricated.  The empty value is now a real
         // query result for the currently imported 5.1 Master subset rather than
@@ -5104,6 +5142,11 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GetHomeResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetHomeResponseLocked();
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetProfileInfoResponse() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetProfileInfoResponseLocked();
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GetGachaSeriesListResponse() {
