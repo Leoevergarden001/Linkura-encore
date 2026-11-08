@@ -2131,7 +2131,8 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_stmt* lookup = nullptr;
         if (sqlite3_prepare_v2(db,
                 "SELECT c.d_card_datas_id, "
-                "EXISTS(SELECT 1 FROM museum_gacha_acquisition a WHERE a.card_datas_id=c.card_datas_id), "
+                // NEW = not yet held (same rule as gacha draws).
+                "EXISTS(SELECT 1 FROM museum_card_ownership o WHERE o.d_card_datas_id=c.d_card_datas_id), "
                 "(SELECT count(*) FROM museum_gacha_exchange_history WHERE exchange_point_rate_id=?) "
                 "FROM card_detail c WHERE c.card_datas_id=? LIMIT 1;",
                 -1, &lookup, nullptr) != SQLITE_OK || !lookup) {
