@@ -1304,6 +1304,27 @@ namespace LinkuraLocal::HookShare {
         return result;
     }
 
+    // Core.SynchronizeResourceVersion passes the stored ("saved") resource
+    // version to Hailstorm.AssetManager, which downloads when it is missing.
+    // The stored version lives in per-player local storage, keyed by the
+    // player id; a fresh install (player 000000000) has none even when the
+    // imported asset cache is complete, so it stops at a download error.
+    // Offline there is nothing to download: report the cache's version.
+    // Arguments are forwarded untouched (Core methods may be instance or
+    // static; every argument is pointer-sized).
+    DEFINE_HOOK(Il2cppUtils::Il2CppString*, Core_GetStoredResourceVersion,
+                (void* a0, void* a1, void* a2, void* a3)) {
+        auto* stored = Core_GetStoredResourceVersion_Orig(a0, a1, a2, a3);
+        const std::string value = stored ? stored->ToString() : std::string();
+        if (Config::enableOfflineApiMock && value.empty() && !Config::currentResVersion.empty()) {
+            Log::InfoFmt("[OfflineRes] stored resource version empty -> %s",
+                         Config::currentResVersion.c_str());
+            return Il2cppUtils::Il2CppString::New(Config::currentResVersion);
+        }
+        Log::DebugFmt("[OfflineRes] stored resource version=%s", value.c_str());
+        return stored;
+    }
+
     // After login the client registers a push token (PushTokenAndroid ->
     // FirebaseMessaging.GetTokenAsync -> /v1/user/push/devices) before it
     // finishes initializing Home. Offline, a device that never had network
@@ -1530,6 +1551,8 @@ namespace LinkuraLocal::HookShare {
 //        ADD_HOOK(AssetManager_SynchronizeResourceVersion, Il2cppUtils::GetMethodPointer("Core.dll", "Hailstorm", "AssetManager", "SynchronizeResourceVersion"));
         ADD_HOOK(Core_SynchronizeResourceVersion, Il2cppUtils::GetMethodPointer("Core.dll", "", "Core", "SynchronizeResourceVersion"));
         ADD_HOOK(Application_get_version, Il2cppUtils::il2cpp_resolve_icall("UnityEngine.Application::get_version"));
+        ADD_HOOK(Core_GetStoredResourceVersion, Il2cppUtils::GetMethodPointer(
+                "Core.dll", "", "Core", "GetStoredResourceVersion"));
         ADD_HOOK(FirebaseMessaging_GetTokenAsync, Il2cppUtils::GetMethodPointer(
                 "Firebase.Messaging.dll", "Firebase.Messaging", "FirebaseMessaging", "GetTokenAsync"));
 //        ADD_HOOK(ArchiveApi_ArchiveGetWithTimelineDataWithHttpInfoAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi", "ArchiveGetWithTimelineDataWithHttpInfoAsync"));
