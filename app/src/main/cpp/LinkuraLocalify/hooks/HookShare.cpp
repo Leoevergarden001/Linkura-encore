@@ -1304,6 +1304,52 @@ namespace LinkuraLocal::HookShare {
         return result;
     }
 
+    // Destructive account/cache actions. Offline, "キャッシュ削除" would wipe
+    // the imported asset cache (which can no longer be downloaded), and
+    // logout / user deletion would reset the local identity and storage.
+    // Swallow them and tell the player why.
+    static bool BlockOfflineAction(const char* what) {
+        if (!Config::enableOfflineApiMock) return false;
+        Log::InfoFmt("[OfflineGuard] blocked %s", what);
+        Log::ShowToast("オフライン版では使用できません");
+        return true;
+    }
+    DEFINE_HOOK(void, TitleMenuPopup_OnClickCacheClear, (void* self, void* mtd)) {
+        if (BlockOfflineAction("TitleMenuPopup.OnClickCacheClear")) return;
+        TitleMenuPopup_OnClickCacheClear_Orig(self, mtd);
+    }
+    DEFINE_HOOK(void, TitleMenuPopup_OnClickLogout, (void* self, void* mtd)) {
+        if (BlockOfflineAction("TitleMenuPopup.OnClickLogout")) return;
+        TitleMenuPopup_OnClickLogout_Orig(self, mtd);
+    }
+    DEFINE_HOOK(void, TitleMenuPopup_OnClickDeleteUser, (void* self, void* mtd)) {
+        if (BlockOfflineAction("TitleMenuPopup.OnClickDeleteUser")) return;
+        TitleMenuPopup_OnClickDeleteUser_Orig(self, mtd);
+    }
+    DEFINE_HOOK(void, TPopupSetting_OnClickCacheClear, (void* self, void* mtd)) {
+        if (BlockOfflineAction("TPopupSetting.OnClickCacheClear")) return;
+        TPopupSetting_OnClickCacheClear_Orig(self, mtd);
+    }
+    DEFINE_HOOK(void, TPopupSettingMenu_OnClickLogoutPositiveButton, (void* self, void* arg, void* mtd)) {
+        if (BlockOfflineAction("TPopupSettingMenu.OnClickLogoutPositiveButton")) return;
+        TPopupSettingMenu_OnClickLogoutPositiveButton_Orig(self, arg, mtd);
+    }
+    DEFINE_HOOK(void, TPopupSettingMenu_OnClickDeleteUserPositiveButton, (void* self, void* arg, void* mtd)) {
+        if (BlockOfflineAction("TPopupSettingMenu.OnClickDeleteUserPositiveButton")) return;
+        TPopupSettingMenu_OnClickDeleteUserPositiveButton_Orig(self, arg, mtd);
+    }
+    DEFINE_HOOK(void, TPopupSettingMenu_Logout, (void* self, void* mtd)) {
+        if (BlockOfflineAction("TPopupSettingMenu.Logout")) return;
+        TPopupSettingMenu_Logout_Orig(self, mtd);
+    }
+    DEFINE_HOOK(void, Core_RecreateCurrentSavedata, (void* self, void* arg, void* mtd)) {
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[OfflineGuard] blocked Core.RecreateCurrentSavedata");
+            return;
+        }
+        Core_RecreateCurrentSavedata_Orig(self, arg, mtd);
+    }
+
     // Core.SynchronizeResourceVersion passes the stored ("saved") resource
     // version to Hailstorm.AssetManager, which downloads when it is missing.
     // The stored version lives in per-player local storage, keyed by the
@@ -1551,6 +1597,22 @@ namespace LinkuraLocal::HookShare {
 //        ADD_HOOK(AssetManager_SynchronizeResourceVersion, Il2cppUtils::GetMethodPointer("Core.dll", "Hailstorm", "AssetManager", "SynchronizeResourceVersion"));
         ADD_HOOK(Core_SynchronizeResourceVersion, Il2cppUtils::GetMethodPointer("Core.dll", "", "Core", "SynchronizeResourceVersion"));
         ADD_HOOK(Application_get_version, Il2cppUtils::il2cpp_resolve_icall("UnityEngine.Application::get_version"));
+        ADD_HOOK(TitleMenuPopup_OnClickCacheClear, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TitleMenuPopup", "OnClickCacheClear"));
+        ADD_HOOK(TitleMenuPopup_OnClickLogout, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TitleMenuPopup", "OnClickLogout"));
+        ADD_HOOK(TitleMenuPopup_OnClickDeleteUser, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TitleMenuPopup", "OnClickDeleteUser"));
+        ADD_HOOK(TPopupSetting_OnClickCacheClear, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TPopupSetting", "OnClickCacheClear"));
+        ADD_HOOK(TPopupSettingMenu_OnClickLogoutPositiveButton, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TPopupSettingMenu", "OnClickLogoutPositiveButton"));
+        ADD_HOOK(TPopupSettingMenu_OnClickDeleteUserPositiveButton, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TPopupSettingMenu", "OnClickDeleteUserPositiveButton"));
+        ADD_HOOK(TPopupSettingMenu_Logout, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TPopupSettingMenu", "Logout"));
+        ADD_HOOK(Core_RecreateCurrentSavedata, Il2cppUtils::GetMethodPointer(
+                "Core.dll", "", "Core", "RecreateCurrentSavedata"));
         ADD_HOOK(Core_GetStoredResourceVersion, Il2cppUtils::GetMethodPointer(
                 "Core.dll", "", "Core", "GetStoredResourceVersion"));
         ADD_HOOK(FirebaseMessaging_GetTokenAsync, Il2cppUtils::GetMethodPointer(
