@@ -1,7 +1,6 @@
 #include "HttpMockBackend.hpp"
 
-#include "../../HookMain.h"
-#include "../../Local.h"
+#include "../MockPlatform.hpp"
 #include "http_mock_backend_builtin_sql.hpp"
 #include "MuseumGachaCatalog.hpp"
 #include "offline_api_mock_builtin.hpp"

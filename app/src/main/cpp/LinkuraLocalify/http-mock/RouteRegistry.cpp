@@ -1,6 +1,6 @@
 #include "RouteRegistry.hpp"
 
-#include "../HookMain.h"
+#include "MockPlatform.hpp"
 #include "backend/HttpMockBackend.hpp"
 #include "offline_api_mock_builtin.hpp"
 
