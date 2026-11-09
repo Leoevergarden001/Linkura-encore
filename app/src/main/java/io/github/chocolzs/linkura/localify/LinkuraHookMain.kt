@@ -565,7 +565,10 @@ class LinkuraHookMain : IXposedHookLoadPackage, IXposedHookZygoteInit  {
             object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     // Unity has not read PlayerPrefs yet at this point.
-                    AndroidAppHelper.currentApplication()?.let { seedStorageKey(it) }
+                    AndroidAppHelper.currentApplication()?.let {
+                        prepareResourceDirs(it)
+                        seedStorageKey(it)
+                    }
                 }
 
                 @SuppressLint("UnsafeDynamicallyLoadedCode")
@@ -1167,6 +1170,40 @@ class LinkuraHookMain : IXposedHookLoadPackage, IXposedHookZygoteInit  {
         Log.i(TAG, "Using in-game offline config; Localify app not required")
         LogExporter.addLogEntry(TAG, "I", "Using in-game offline config")
         return true
+    }
+
+    // Resource-pack import without root. On Android 11+ `adb push` (shell
+    // uid) may add files to the game's external dir but cannot create new
+    // subdirectories there ("secure_mkdirs failed"). Create the cache layout
+    // up front: D/ holds one directory per two-character base32 prefix of
+    // the cached file names. Files pushed by adb belong to shell and are
+    // read-only for the game; the M/ databases are re-created as the game's
+    // own files so SQLite can open them read-write.
+    private fun prepareResourceDirs(context: Context) {
+        val ext = context.getExternalFilesDir(null) ?: return
+        try {
+            val alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+            val dRoot = File(ext, "D")
+            var created = 0
+            for (a in alphabet) for (b in alphabet) {
+                val dir = File(dRoot, "$a$b")
+                if (!dir.isDirectory && dir.mkdirs()) created++
+            }
+            val mRoot = File(ext, "M").apply { mkdirs() }
+            File(ext, "linkura-local").mkdirs()
+            var adopted = 0
+            mRoot.listFiles()?.forEach { file ->
+                if (!file.isFile || file.canWrite() || file.name.endsWith(".adopt")) return@forEach
+                val tmp = File(mRoot, file.name + ".adopt")
+                file.copyTo(tmp, overwrite = true)
+                if (file.delete() && tmp.renameTo(file)) adopted++ else tmp.delete()
+            }
+            if (created > 0 || adopted > 0) {
+                Log.i(TAG, "Resource dirs prepared: $created D dirs created, $adopted M files adopted")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Preparing resource dirs failed", e)
+        }
     }
 
     // The downloaded asset cache (external files D/ and M/) is named and
