@@ -9,6 +9,7 @@ data directory and checks the HTTP framing the game's .NET HttpClient uses
 """
 from __future__ import annotations
 
+import base64
 import http.client
 import json
 import socket
@@ -129,6 +130,51 @@ def main() -> int:
             check("receive total mission is idempotent", json.loads(body)["received_total_mission_ids"] == [])
             status, _, body = post(conn, "/v1/rhythm_game/home", {})
             check("rhythm home total order 1", json.loads(body)["received_total_mission_order"] == 1)
+
+            # Archive / circle screens that used to 404.
+            status, _, body = post(conn, "/v1/archive/get_ranking_list", {"member_id": 1021, "target_period": 1})
+            ranking = json.loads(body)
+            check("archive ranking", status == 200 and ranking["my_rank_status"] == 3 and
+                  len(ranking["cheer_rewards"]) > 0 and ranking["ranking_start_time"].startswith("2026-04-02"), body[:200].decode())
+            status, _, body = post(conn, "/v1/archive/get_with_station_list", {"limit": 20, "offset": 0})
+            stations = json.loads(body)
+            check("with station list", status == 200 and stations["with_station_list"] == [] and
+                  len(stations["filterable_characters"]) > 0, body[:200].decode())
+            status, _, body = post(conn, "/v1/archive/get_fes_timeline_data", {"archives_id": "x", "play_time_second": 0})
+            check("fes timeline", status == 200 and json.loads(body)["timelines"] == [])
+            status, _, body = post(conn, "/v1/profile/get_info", {})
+            profile = json.loads(body)["profile_info"]
+            check("profile has no circle (circle is locked offline)",
+                  profile["guild_name"] == "" and profile["search_guild_key"] == "")
+            status, _, body = post(conn, "/v1/profile/set_name", {"name": "テスト"})
+            check("set name", status == 200 and json.loads(body) == {"result": True}, body[:200].decode())
+            post(conn, "/v1/profile/set_comment", {"comment": "hello"})
+            status, _, body = post(conn, "/v1/profile/get_info", {})
+            renamed = json.loads(body)["profile_info"]
+            check("name/comment persisted", renamed["player_name"] == "テスト" and renamed["comment"] == "hello")
+            status, _, body = post(conn, "/v1/home/get_home", {})
+            check("home shows new name", json.loads(body)["profile_info"]["player_name"] == "テスト")
+            status, headers, body = post(conn, "/v1/home/get_home", {})
+            check("name header follows set_name", headers.get("name") == base64.b64encode("テスト".encode()).decode(),
+                  str(headers.get("name")))
+            status, _, body = post(conn, "/v1/home/get_custom_setting", {})
+            custom = json.loads(body)["profile_info"]
+            check("custom setting shows new name, no circle", status == 200 and custom["player_name"] == "テスト"
+                  and custom["guild_name"] == "", body[:200].decode())
+            status, _, body = post(conn, "/v1/user/card/get_list", {})
+            first_card = json.loads(body)["user_card_data_list"][0]["d_card_datas_id"]
+            status, _, body = post(conn, "/v1/follow/set_friend_card",
+                                   {"school_idol_stage_card_id": "", "rhythm_game_card_id": ""})
+            check("set empty friend cards", status == 200 and json.loads(body) == {"result": True}, body[:200].decode())
+            post(conn, "/v1/follow/set_friend_card", {"school_idol_stage_card_id": first_card, "rhythm_game_card_id": ""})
+            status, _, body = post(conn, "/v1/profile/get_info", {})
+            friend = json.loads(body)["profile_info"]["friend_card_info"]
+            check("friend card shown on profile", len(friend) == 1 and friend[0]["card_type"] == 1 and
+                  friend[0]["user_card_info"]["d_card_datas_id"] == first_card, json.dumps(friend)[:200])
+            status, _, body = post(conn, "/v1/profile/get_fan_level_info", {"player_id": profile["player_id"]})
+            fan = json.loads(body)
+            check("fan level info", status == 200 and len(fan["fan_level_info_list"]) == len(profile["fan_level_list"]) > 0,
+                  body[:200].decode())
             conn.close()
         finally:
             log += stop(proc)

@@ -4,6 +4,7 @@
 #include "backend/HttpMockBackend.hpp"
 #include "offline_api_mock_builtin.hpp"
 
+#include <ctime>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -59,6 +60,95 @@ namespace LinkuraLocal::HttpMock {
                 std::move(record->body), std::move(record->headersText),
                 record->statusCode, std::move(record->statusDescription),
             };
+        }
+
+        static MockResponse JsonResponse(const nlohmann::json& body) {
+            return MockResponse{body.dump(), std::string(OfflineApiMockBuiltIn::DefaultHeadersView)};
+        }
+
+        static std::string UtcNowIso() {
+            const std::time_t now = std::time(nullptr);
+            std::tm tm{};
+            gmtime_r(&now, &tm);
+            char buffer[32];
+            std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &tm);
+            return buffer;
+        }
+
+        // Archive 応援ランキング (cheer ranking). Periods and reward tiers come
+        // from the preserved Master (builtin/cheer_rankings.json); the player
+        // ranking itself was server-side and is empty offline. Enum values
+        // from 5.0.1 metadata: ArchiveStatus None=0 Notice=1 Open=2 Tally=3
+        // End=4; MyRankStatus Ranked=1 OutOfRank=2 NotParticipated=3.
+        static std::optional<MockResponse> HandleArchiveGetRankingList(const MockRequestContext& request,
+                                                                       HttpMockBackend&) {
+            const auto payload = nlohmann::json::parse(request.payloadJson, nullptr, false);
+            const int memberId = payload.is_object() ? payload.value("member_id", 0) : 0;
+            const nlohmann::json* ranking = nullptr;
+            for (const auto& row : OfflineApiMockBuiltIn::CheerRankingsJsonObj()) {
+                if (row.value("member_id", 0) == memberId) ranking = &row;  // sorted: keeps the latest
+            }
+            nlohmann::json body = {
+                {"status", 0}, {"cheer_point", 0}, {"my_rank", 0}, {"my_rank_status", 3},
+                {"cheer_rankings", nlohmann::json::array()}, {"cheer_rewards", nlohmann::json::array()},
+                {"ranking_start_time", "2023-04-15T00:00:00Z"}, {"ranking_end_time", "2023-04-15T00:00:00Z"},
+            };
+            if (ranking) {
+                const std::string now = UtcNowIso();
+                const std::string start = ranking->value("start_time", std::string{});
+                const std::string end = ranking->value("end_time", std::string{});
+                body["status"] = now < start ? 1 : (now <= end ? 2 : 4);
+                body["ranking_start_time"] = start;
+                body["ranking_end_time"] = end;
+                body["cheer_rewards"] = ranking->value("cheer_rewards", nlohmann::json::array());
+            }
+            return JsonResponse(body);
+        }
+
+        // With×STATION archive list: no With×STATION video was preserved, so
+        // the list is empty; filters reuse the archive list's.
+        static std::optional<MockResponse> HandleArchiveGetWithStationList(const MockRequestContext&,
+                                                                           HttpMockBackend&) {
+            const auto& archive = OfflineApiMockBuiltIn::ArchiveGetArchiveListJsonObj();
+            return JsonResponse({
+                {"with_station_list", nlohmann::json::array()},
+                {"filterable_characters", archive.value("filterable_characters", nlohmann::json::array())},
+                {"sortable_fields", archive.value("sortable_fields", nlohmann::json::array())},
+            });
+        }
+
+        // Fes×LIVE archive playback polls viewer comments; none were preserved.
+        static std::optional<MockResponse> HandleArchiveGetFesTimelineData(const MockRequestContext&,
+                                                                           HttpMockBackend&) {
+            return JsonResponse({{"timelines", nlohmann::json::array()}, {"polling_interval", 60}});
+        }
+
+        // Profile → Fan Lv. info: per-member fan levels from the offline
+        // profile; season experience / point stock were server-side.
+        static std::optional<MockResponse> HandleProfileGetFanLevelInfo(const MockRequestContext&,
+                                                                        HttpMockBackend& backend) {
+            auto profileRecord = backend.GetProfileInfoResponse();
+            if (!profileRecord.has_value()) return std::nullopt;
+            const auto parsed = nlohmann::json::parse(profileRecord->body, nullptr, false);
+            const auto profile = parsed.is_object() ? parsed.value("profile_info", nlohmann::json::object())
+                                                    : nlohmann::json::object();
+            nlohmann::json list = nlohmann::json::array();
+            for (const auto& level : profile.value("fan_level_list", nlohmann::json::array())) {
+                list.push_back({
+                    {"character_id", level.value("character_id", 0)},
+                    {"member_fan_level", level.value("member_fan_level", 1)},
+                    {"member_fan_experience", 0},
+                    {"d_season_fan_level", level.value("d_season_fan_level", 1)},
+                    {"d_season_fan_experience", 0},
+                    {"earn_progress_list", nlohmann::json::array()},
+                });
+            }
+            return JsonResponse({
+                {"fan_level_info_list", std::move(list)},
+                {"season_id", 0},
+                {"season_fanlevel_point_stock", 0},
+                {"season_fanlevel_point_stock_limit", 0},
+            });
         }
 
         static std::optional<MockResponse> HandleHomeGetHome(const MockRequestContext&,
@@ -669,7 +759,9 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/gacha/get_history", HandleGachaGetHistory);
             RegisterBackend(routes, "/v1/gacha/get_guarantee_point_list", HandleGachaGetGuaranteePointList);
             RegisterBackend(routes, "/v1/gacha/set_guarantee_point_exchange", HandleGachaSetGuaranteePointExchange);
-            RegisterStaticJson(routes, "/v1/home/get_custom_setting", OfflineApiMockBuiltIn::GetCustomSettingJsonView);
+            RegisterBackend(routes, "/v1/home/get_custom_setting", [](const MockRequestContext&, HttpMockBackend& backend) {
+                return ToBackendResponse(backend.GetCustomSettingResponse());
+            });
             RegisterStaticJson(routes, "/v1/webview/school_idol_connect_post/get_theme_list", OfflineApiMockBuiltIn::WebviewSchoolIdolConnectPostGetThemeListJsonView);
             RegisterStaticJson(routes, "/v1/follow/live_chat_group_list", OfflineApiMockBuiltIn::FollowLiveChatGroupListJsonView);
             RegisterStaticJson(routes, "/v1/archive/get_home", OfflineApiMockBuiltIn::ArchiveGetHomeJsonView);
@@ -732,6 +824,10 @@ namespace LinkuraLocal::HttpMock {
 
             RegisterBackend(routes, "/v1/archive/get_with_archive_data", HandleArchiveDetail);
             RegisterBackend(routes, "/v1/archive/get_fes_archive_data", HandleArchiveDetail);
+            RegisterBackend(routes, "/v1/archive/get_ranking_list", HandleArchiveGetRankingList);
+            RegisterBackend(routes, "/v1/archive/get_with_station_list", HandleArchiveGetWithStationList);
+            RegisterBackend(routes, "/v1/archive/get_fes_timeline_data", HandleArchiveGetFesTimelineData);
+            RegisterBackend(routes, "/v1/profile/get_fan_level_info", HandleProfileGetFanLevelInfo);
 
             // Chapter RANK (season pass). ChapterHomeResponse per 5.1 metadata:
             // chapter_id, rank_info{current_rank,current_point,is_max_rank},
@@ -762,6 +858,12 @@ namespace LinkuraLocal::HttpMock {
                         [](HttpMockBackend& b, std::string_view p) { return b.SetMyDesign(false, p); });
             designRoute("/v1/profile/set_my_design_icon",
                         [](HttpMockBackend& b, std::string_view p) { return b.SetMyDesign(true, p); });
+            designRoute("/v1/follow/set_friend_card",
+                        [](HttpMockBackend& b, std::string_view p) { return b.SetFriendCard(p); });
+            designRoute("/v1/profile/set_name",
+                        [](HttpMockBackend& b, std::string_view p) { return b.SetProfileName(p); });
+            designRoute("/v1/profile/set_comment",
+                        [](HttpMockBackend& b, std::string_view p) { return b.SetProfileComment(p); });
             designRoute("/v1/profile/set_my_design_name",
                         [](HttpMockBackend& b, std::string_view p) { return b.SetMyDesignName(p); });
             designRoute("/v1/profile/set_profile_card",

@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import generate_archive_detail_sql as archive_detail
 import generate_card_detail_sql as card_detail
+import generate_cheer_rankings as cheer_rankings
 import generate_character_info_sql as character_info
 import generate_custom_setting as custom_setting
 import generate_daily_quest_stage_sql as daily_quest_stage
@@ -42,6 +43,7 @@ def main() -> None:
     home.generate_json()
     mission_list.generate_json()
     rhythm_total_missions.generate_json()
+    cheer_rankings.generate_json()
     item_exchange_catalog.generate_json()
     shop_list.generate_json()
     music_list.generate_json()

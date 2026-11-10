@@ -26,9 +26,13 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetHomeResponse();
         std::optional<MockStoredResponse> GetMissionListResponse();
         std::optional<MockStoredResponse> GetProfileInfoResponse();
+        std::optional<MockStoredResponse> GetCustomSettingResponse();
+        std::optional<MockStoredResponse> SetFriendCard(std::string_view payloadJson);
         std::optional<MockStoredResponse> GetMyDesignList(bool icon);
         std::optional<MockStoredResponse> SetMyDesign(bool icon, std::string_view payloadJson);
         std::optional<MockStoredResponse> SetMyDesignName(std::string_view payloadJson);
+        std::optional<MockStoredResponse> SetProfileName(std::string_view payloadJson);
+        std::optional<MockStoredResponse> SetProfileComment(std::string_view payloadJson);
         std::optional<MockStoredResponse> SetProfileDesign(bool icon, std::string_view payloadJson);
         std::string ApplyLiveWalletHeaders(std::string headers);
         std::optional<MockStoredResponse> GetGachaSeriesListResponse();

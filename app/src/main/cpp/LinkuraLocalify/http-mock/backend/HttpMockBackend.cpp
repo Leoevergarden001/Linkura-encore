@@ -244,6 +244,8 @@ namespace LinkuraLocal::HttpMock {
                                       int amount = 1, int detail = 0);
         std::optional<nlohmann::json> BuildProfileInfoLocked();
         std::optional<MockStoredResponse> GetProfileInfoResponseLocked();
+        std::optional<MockStoredResponse> GetCustomSettingResponseLocked();
+        std::optional<MockStoredResponse> SetFriendCardLocked(std::string_view payloadJson);
         struct CardGrowthState {
             std::string dCardDatasId;
             int baseCardId = 0;
@@ -266,6 +268,8 @@ namespace LinkuraLocal::HttpMock {
         bool EnsureMyDesignTableLocked();
         std::optional<MockStoredResponse> GetMyDesignListLocked(int designType);
         std::optional<MockStoredResponse> SetMyDesignLocked(int designType, std::string_view payloadJson);
+        std::optional<MockStoredResponse> SetProfileTextLocked(const char* requestField, const char* profileField,
+                                                               std::string_view payloadJson);
         std::optional<MockStoredResponse> SetMyDesignNameLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> SetProfileDesignLocked(int designType, std::string_view payloadJson);
         struct GachaState {
@@ -1250,6 +1254,49 @@ namespace LinkuraLocal::HttpMock {
             profile[sqlite3_column_name(counts, index)] = sqlite3_column_int64(counts, index);
         }
         sqlite3_finalize(counts);
+        // Player-edited name / comment (profile/set_name, set_comment).
+        if (ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_profile_text (field TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL);")) {
+            sqlite3_stmt* text = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT field, value FROM offline_profile_text;", -1, &text, nullptr) == SQLITE_OK &&
+                text) {
+                while (sqlite3_step(text) == SQLITE_ROW) {
+                    const auto* field = reinterpret_cast<const char*>(sqlite3_column_text(text, 0));
+                    const auto* value = reinterpret_cast<const char*>(sqlite3_column_text(text, 1));
+                    if (field && value) profile[field] = value;
+                }
+            }
+            if (text) sqlite3_finalize(text);
+        }
+        // Profile フレンドカード (follow/set_friend_card): card_type 1 = School
+        // Idol Stage, 2 = SHOW (FollowCardType enum in 5.0.1 metadata);
+        // user_card_info is the card as user/card/get_list reports it.
+        if (ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_friend_card (card_type INTEGER NOT NULL PRIMARY KEY, d_card_datas_id TEXT NOT NULL);")) {
+            std::vector<std::pair<int, std::string>> selected;
+            sqlite3_stmt* friendCards = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT card_type, d_card_datas_id FROM offline_friend_card ORDER BY card_type;",
+                                   -1, &friendCards, nullptr) == SQLITE_OK && friendCards) {
+                while (sqlite3_step(friendCards) == SQLITE_ROW) {
+                    const auto* id = reinterpret_cast<const char*>(sqlite3_column_text(friendCards, 1));
+                    if (id && *id) selected.emplace_back(sqlite3_column_int(friendCards, 0), id);
+                }
+            }
+            if (friendCards) sqlite3_finalize(friendCards);
+            nlohmann::json friendCardInfo = nlohmann::json::array();
+            if (!selected.empty()) {
+                const auto cards = GetCardListResponseLocked();
+                const auto parsed = cards ? nlohmann::json::parse(cards->body, nullptr, false) : nlohmann::json();
+                const auto list = parsed.is_object() ? parsed.value("user_card_data_list", nlohmann::json::array())
+                                                     : nlohmann::json::array();
+                for (const auto& [cardType, id] : selected) {
+                    for (const auto& card : list) {
+                        if (card.value("d_card_datas_id", std::string{}) != id) continue;
+                        friendCardInfo.push_back({{"card_type", cardType}, {"user_card_info", card}});
+                        break;
+                    }
+                }
+            }
+            profile["friend_card_info"] = std::move(friendCardInfo);
+        }
         // Show the selected card/icon designs, when the player has any.
         if (EnsureMyDesignTableLocked()) {
             sqlite3_stmt* design = nullptr;
@@ -1312,6 +1359,64 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_finalize(stmt);
         return MockStoredResponse{nlohmann::json{{"my_design_list", std::move(list)}}.dump(),
                                   {}, 200, "OK (offline mock)"};
+    }
+
+    // profile/set_name {"name"} and profile/set_comment {"comment"}; the
+    // client validates length and NG words before sending. Response
+    // ProfileSet*Response { result }.
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::SetProfileTextLocked(
+            const char* requestField, const char* profileField, std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        if (!payload.is_object() || !payload.contains(requestField) || !payload[requestField].is_string()) {
+            return std::nullopt;
+        }
+        if (!ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_profile_text (field TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL);")) {
+            return std::nullopt;
+        }
+        sqlite3_stmt* save = nullptr;
+        const bool ok = sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO offline_profile_text(field,value) VALUES(?,?);",
+                                           -1, &save, nullptr) == SQLITE_OK && save &&
+                        BindText(save, 1, profileField) &&
+                        BindText(save, 2, payload[requestField].get<std::string>()) &&
+                        sqlite3_step(save) == SQLITE_DONE;
+        if (save) sqlite3_finalize(save);
+        if (!ok) return std::nullopt;
+        return MockStoredResponse{R"({"result":true})", {}, 200, "OK (offline mock)"};
+    }
+
+    // follow/set_friend_card {school_idol_stage_card_id, rhythm_game_card_id}
+    // (d_card_datas_id; empty = no card). Response { result }.
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::SetFriendCardLocked(std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        if (!payload.is_object()) return std::nullopt;
+        if (!ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_friend_card (card_type INTEGER NOT NULL PRIMARY KEY, d_card_datas_id TEXT NOT NULL);")) {
+            return std::nullopt;
+        }
+        sqlite3_stmt* save = nullptr;
+        if (sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO offline_friend_card(card_type,d_card_datas_id) VALUES(?,?);",
+                               -1, &save, nullptr) != SQLITE_OK || !save) {
+            if (save) sqlite3_finalize(save);
+            return std::nullopt;
+        }
+        bool ok = true;
+        for (const auto& [cardType, field] : {std::pair<int, const char*>{1, "school_idol_stage_card_id"},
+                                              std::pair<int, const char*>{2, "rhythm_game_card_id"}}) {
+            if (!payload.contains(field)) continue;
+            const auto& value = payload[field];
+            const std::string id = value.is_string() ? value.get<std::string>() : (value.is_null() ? "" : value.dump());
+            sqlite3_reset(save);
+            sqlite3_clear_bindings(save);
+            ok = sqlite3_bind_int(save, 1, cardType) == SQLITE_OK && BindText(save, 2, id) &&
+                 sqlite3_step(save) == SQLITE_DONE;
+            if (!ok) break;
+        }
+        sqlite3_finalize(save);
+        if (!ok) return std::nullopt;
+        return MockStoredResponse{R"({"result":true})", {}, 200, "OK (offline mock)"};
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::SetMyDesignLocked(
@@ -1781,6 +1886,24 @@ namespace LinkuraLocal::HttpMock {
                 ? GachaHeaders(gachaState->freeJewels, gachaState->paidJewels)
                 : std::string{};
         return MockStoredResponse{result.dump(), std::move(headers), 200, "OK (offline mock)"};
+    }
+
+    // home/get_custom_setting carries its own copy of ProfileInfo (the Home
+    // header NAME reads it). Keep that copy in step with the live profile
+    // (edited name/comment, designs, counts) instead of the static template.
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetCustomSettingResponseLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        nlohmann::json result = OfflineApiMockBuiltIn::GetCustomSettingJsonObj();
+        if (!result.is_object()) return std::nullopt;
+        auto profile = BuildProfileInfoLocked();
+        if (!profile) return std::nullopt;
+        auto& target = result["profile_info"];
+        if (!target.is_object()) target = nlohmann::json::object();
+        for (auto it = target.begin(); it != target.end(); ++it) {
+            if (profile->contains(it.key())) it.value() = (*profile)[it.key()];
+        }
+        return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetHomeResponseLocked() {
@@ -6712,6 +6835,37 @@ namespace LinkuraLocal::HttpMock {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         if (!impl_->initialized && !impl_->EnsureReadyLocked()) return headers;
         if (!impl_->db) return headers;
+        // Common header "name" (base64 player name) feeds the Home header NAME
+        // (CommonApiCache.UpdateFromCommonHeader); follow profile/set_name.
+        {
+            sqlite3_stmt* nameStmt = nullptr;
+            if (sqlite3_prepare_v2(impl_->db, "SELECT value FROM offline_profile_text WHERE field='player_name';",
+                                   -1, &nameStmt, nullptr) == SQLITE_OK && nameStmt &&
+                sqlite3_step(nameStmt) == SQLITE_ROW) {
+                const auto* raw = reinterpret_cast<const char*>(sqlite3_column_text(nameStmt, 0));
+                const std::string name = raw ? raw : "";
+                static constexpr char kAlphabet[] =
+                        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                std::string encoded;
+                for (size_t i = 0; i < name.size(); i += 3) {
+                    const uint32_t chunk = (static_cast<uint8_t>(name[i]) << 16) |
+                            (i + 1 < name.size() ? static_cast<uint8_t>(name[i + 1]) << 8 : 0) |
+                            (i + 2 < name.size() ? static_cast<uint8_t>(name[i + 2]) : 0);
+                    encoded += kAlphabet[(chunk >> 18) & 63];
+                    encoded += kAlphabet[(chunk >> 12) & 63];
+                    encoded += i + 1 < name.size() ? kAlphabet[(chunk >> 6) & 63] : '=';
+                    encoded += i + 2 < name.size() ? kAlphabet[chunk & 63] : '=';
+                }
+                const std::string key = "name: ";
+                if (const auto pos = headers.find(key); pos != std::string::npos && (pos == 0 || headers[pos - 1] == '\n')) {
+                    const size_t valueStart = pos + key.size();
+                    size_t valueEnd = headers.find_first_of("\r\n", valueStart);
+                    if (valueEnd == std::string::npos) valueEnd = headers.size();
+                    headers.replace(valueStart, valueEnd - valueStart, encoded);
+                }
+            }
+            if (nameStmt) sqlite3_finalize(nameStmt);
+        }
         std::optional<std::pair<int64_t, int64_t>> wallet;
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(impl_->db,
@@ -6761,6 +6915,26 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::SetMyDesign(bool icon, std::string_view payloadJson) {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->SetMyDesignLocked(icon ? kMyDesignTypeIcon : kMyDesignTypeCard, payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetCustomSettingResponse() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetCustomSettingResponseLocked();
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::SetFriendCard(std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->SetFriendCardLocked(payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::SetProfileName(std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->SetProfileTextLocked("name", "player_name", payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::SetProfileComment(std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->SetProfileTextLocked("comment", "comment", payloadJson);
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::SetMyDesignName(std::string_view payloadJson) {
