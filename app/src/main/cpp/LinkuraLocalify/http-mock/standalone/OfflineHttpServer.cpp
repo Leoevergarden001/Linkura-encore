@@ -70,8 +70,23 @@ namespace LinkuraLocal::Standalone {
             return root / (path.substr(1) + suffix);
         }
 
+        // The iOS client reads its paid balance from jewel_paid_apple; the
+        // backend keeps the wallet in jewel_paid_google. Mirror the value.
+        void MirrorAppleWallet(std::string& headers) {
+            const std::string google = "jewel_paid_google: ";
+            const std::string apple = "jewel_paid_apple: ";
+            const auto g = headers.find(google);
+            const auto a = headers.find(apple);
+            if (g == std::string::npos || a == std::string::npos) return;
+            const auto gEnd = headers.find('\n', g);
+            const auto value = headers.substr(g + google.size(), gEnd - g - google.size());
+            const auto aEnd = headers.find('\n', a);
+            headers.replace(a + apple.size(), aEnd - a - apple.size(), value);
+        }
+
         // Header template expansion, as the Android HttpMock glue does.
         std::string ExpandHeaders(std::string headers, const ServerConfig& config) {
+            MirrorAppleWallet(headers);
             ReplaceAll(headers, "${DATE_GMT}", HttpDateNow());
             if (!config.resVersion.empty()) {
                 ReplaceAll(headers, "${RES_VERSION}", config.resVersion);

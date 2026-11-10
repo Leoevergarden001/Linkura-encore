@@ -1904,6 +1904,21 @@ namespace LinkuraLocal::HttpMock {
             return 0;
         };
 
+#if defined(LINKURA_MOCK_STANDALONE)
+        // The 5.0.1 (iOS) client indexes the achieve-prize list while building
+        // the Daily/Weekly pages and throws on an empty one, which freezes the
+        // scene change. 5.1.0 (Android) hides the Weekly/Main tabs when the
+        // list is present, so it keeps the empty list.
+        {
+            const auto& tiers = OfflineApiMockBuiltIn::MissionAchieveRewardsJsonObj();
+            for (auto& group : result["mission_list"]) {
+                const auto key = std::to_string(group.value("mission_type", 0));
+                if (tiers.contains(key) && group["achieve_reward_list"].empty()) {
+                    group["achieve_reward_list"] = tiers[key];
+                }
+            }
+        }
+#endif
         for (auto& group : result["mission_list"]) {
             const int missionType = group.value("mission_type", 0);
             const std::string period = periodKey(missionType);

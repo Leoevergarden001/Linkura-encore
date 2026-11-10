@@ -9,6 +9,7 @@
 // dylib flow; it does nothing unless a command file appears.
 
 #import <UIKit/UIKit.h>
+#include <unistd.h>
 
 extern void LinkuraOfflineLog(const char* level, const char* message);
 
@@ -96,8 +97,11 @@ void LinkuraRemoteStart(NSURL* directory) {
     static dispatch_source_t timer;
     NSURL* command = [directory URLByAppendingPathComponent:@"cmd.json"];
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), NSEC_PER_SEC / 3, NSEC_PER_SEC / 10);
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), NSEC_PER_SEC / 2, NSEC_PER_SEC / 5);
     dispatch_source_set_event_handler(timer, ^{
+        // Cheap existence check only; nothing else runs on the main thread
+        // unless a command is waiting (keeps frame pacing untouched).
+        if (access(command.fileSystemRepresentation, F_OK) != 0) return;
         NSData* raw = [NSData dataWithContentsOfURL:command];
         if (!raw) return;
         [NSFileManager.defaultManager removeItemAtURL:command error:nil];

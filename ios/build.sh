@@ -57,8 +57,9 @@ done
 if [ "$TARGET" = ios ]; then
     "${CXX[@]}" "${CXXFLAGS[@]}" -fobjc-arc "${INCLUDES[@]}" -c "$HERE/LinkuraOffline.mm" -o "$OBJ/LinkuraOffline.o"
     "${CXX[@]}" "${CXXFLAGS[@]}" -fobjc-arc "${INCLUDES[@]}" -c "$HERE/LinkuraRemote.mm" -o "$OBJ/LinkuraRemote.o"
+    "${CXX[@]}" "${CXXFLAGS[@]}" -fobjc-arc "${INCLUDES[@]}" -c "$HERE/LinkuraPush.mm" -o "$OBJ/LinkuraPush.o"
     "${CXX[@]}" -dynamiclib -install_name @executable_path/Frameworks/LinkuraOffline.dylib \
-        -framework Foundation -framework UIKit -framework CoreGraphics "${OBJECTS[@]}" "$OBJ/LinkuraOffline.o" "$OBJ/LinkuraRemote.o" -o "$OUT/LinkuraOffline.dylib"
+        -framework Foundation -framework UIKit -framework CoreGraphics "${OBJECTS[@]}" "$OBJ/LinkuraOffline.o" "$OBJ/LinkuraRemote.o" "$OBJ/LinkuraPush.o" -o "$OUT/LinkuraOffline.dylib"
     echo "built $OUT/LinkuraOffline.dylib"
 else
     "${CXX[@]}" "${CXXFLAGS[@]}" "${INCLUDES[@]}" -c "$HERE/host/main.cpp" -o "$OBJ/main.o"

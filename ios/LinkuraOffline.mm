@@ -91,6 +91,7 @@ static void SeedPlayerPrefs(NSURL* visible) {
 }
 
 void LinkuraRemoteStart(NSURL* directory);
+void LinkuraPushStart();
 void LinkuraOfflineLog(const char* level, const char* message) { LogSink(level, message); }
 
 __attribute__((constructor))
@@ -128,6 +129,7 @@ static void LinkuraOfflineStart() {
         }
         if (visible) SeedPlayerPrefs(visible);
         if (visible) LinkuraRemoteStart(visible);
+        LinkuraPushStart();
         NSString* version = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
         char banner[256];
         std::snprintf(banner, sizeof(banner), "LinkuraOffline start: client %s, port %u, resVersion '%s'",
