@@ -532,6 +532,23 @@ namespace LinkuraLocal::HttpMock {
             };
         }
 
+        static std::optional<MockResponse> HandleRhythmGameReceiveTotalMission(const MockRequestContext&,
+                                                                                 HttpMockBackend& backend) {
+            auto record = backend.RhythmGameReceiveTotalMission();
+            if (!record.has_value()) {
+                Log::WarnFmt("[HttpMockRouteRegistry] rhythm_game/receive_total_mission failed backend=%s",
+                             backend.GetStatusSummary().c_str());
+                return std::nullopt;
+            }
+            if (record->headersText.empty()) {
+                record->headersText = std::string(OfflineApiMockBuiltIn::DefaultHeadersView);
+            }
+            return MockResponse{
+                std::move(record->body), std::move(record->headersText),
+                record->statusCode, std::move(record->statusDescription),
+            };
+        }
+
         static std::optional<MockResponse> HandleRhythmGameSetFinish(const MockRequestContext& request,
                                                                       HttpMockBackend& backend) {
             auto record = backend.RhythmGameSetFinish(request.payloadJson);
@@ -766,6 +783,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/rhythm_game_live/set_start", HandleRhythmGameSetStart);
             RegisterBackend(routes, "/v1/rhythm_game_live/set_finish", HandleRhythmGameSetFinish);
             RegisterBackend(routes, "/v1/rhythm_game_deck/modify_deck_list", HandleRhythmGameDeckModify);
+            RegisterBackend(routes, "/v1/rhythm_game/receive_total_mission", HandleRhythmGameReceiveTotalMission);
             RegisterStaticJson(routes, "/v1/rhythm_game/receive_class_mission", "null");
             RegisterStaticJson(routes, "/v1/rhythm_game_live/set_retire", "null");
             // Giving up a stage live: nothing to settle. What the session

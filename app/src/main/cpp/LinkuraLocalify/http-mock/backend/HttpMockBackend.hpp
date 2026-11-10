@@ -63,6 +63,7 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> RhythmGameSetStart(std::string_view payloadJson);
         std::optional<MockStoredResponse> RhythmGameSetFinish(std::string_view payloadJson);
         std::optional<MockStoredResponse> ModifyRhythmGameDeckList(std::string_view payloadJson);
+        std::optional<MockStoredResponse> RhythmGameReceiveTotalMission();
 
         std::optional<MockStoredResponse> GetCharacterInfoById(std::string_view characterId);
         std::optional<MockStoredResponse> LookupCharacterInfoFromPayload(std::string_view payloadJson);

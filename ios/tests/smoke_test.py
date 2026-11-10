@@ -12,6 +12,7 @@ from __future__ import annotations
 import http.client
 import json
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -102,6 +103,32 @@ def main() -> int:
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
             status, _, _ = post(conn, "/v1/home/get_home", {})
             check("home after restart", status == 200)
+
+            # SHOW total mission: nothing until all three class missions reach D2.
+            db_path = data / "HasuKikaisann.sqlite3"
+            status, _, body = post(conn, "/v1/rhythm_game/home", {})
+            check("rhythm home total order 0", status == 200 and json.loads(body)["received_total_mission_order"] == 0)
+            status, _, body = post(conn, "/v1/rhythm_game/receive_total_mission", {})
+            check("receive total mission, not reached", status == 200 and json.loads(body) ==
+                  {"received_total_mission_ids": [], "received_total_mission_order": 0}, body[:200].decode())
+
+            def gp() -> int:
+                with sqlite3.connect(db_path) as db:
+                    row = db.execute("SELECT COALESCE(SUM(i.item_num),0) FROM item JOIN museum_item_inventory i "
+                                     "USING(d_item_datas_id) WHERE item.item_id=3011001").fetchone()
+                return row[0]
+            before = gp()
+            with sqlite3.connect(db_path) as db:
+                db.execute("INSERT OR REPLACE INTO rhythm_music_score(music_id,clear_count,total_score_accumulated,"
+                           "high_score) VALUES(1,3,1000000,1000000)")
+            status, _, body = post(conn, "/v1/rhythm_game/receive_total_mission", {})
+            check("receive total mission D2", status == 200 and json.loads(body) ==
+                  {"received_total_mission_ids": [10001], "received_total_mission_order": 1}, body[:200].decode())
+            check("total mission reward granted", gp() == before + 100, f"{before} -> {gp()}")
+            status, _, body = post(conn, "/v1/rhythm_game/receive_total_mission", {})
+            check("receive total mission is idempotent", json.loads(body)["received_total_mission_ids"] == [])
+            status, _, body = post(conn, "/v1/rhythm_game/home", {})
+            check("rhythm home total order 1", json.loads(body)["received_total_mission_order"] == 1)
             conn.close()
         finally:
             log += stop(proc)

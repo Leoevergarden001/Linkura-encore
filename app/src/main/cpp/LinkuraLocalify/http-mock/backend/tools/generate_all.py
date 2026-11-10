@@ -23,6 +23,7 @@ import generate_shop_get_list as shop_list
 import generate_music_sql as music_db
 import generate_quest_stage_sql as quest_stage
 import generate_rhythm_game_sql as rhythm_game
+import generate_rhythm_total_missions as rhythm_total_missions
 import generate_sticker_list as sticker_list
 import generate_user_items as item
 
@@ -40,6 +41,7 @@ def main() -> None:
     custom_setting.generate_json()
     home.generate_json()
     mission_list.generate_json()
+    rhythm_total_missions.generate_json()
     item_exchange_catalog.generate_json()
     shop_list.generate_json()
     music_list.generate_json()

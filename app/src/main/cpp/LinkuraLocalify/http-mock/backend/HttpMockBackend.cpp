@@ -9,6 +9,7 @@
 #include <array>
 #include <charconv>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -386,6 +387,8 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> RhythmGameSetStartLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> RhythmGameSetFinishLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> ModifyRhythmGameDeckListLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> RhythmGameReceiveTotalMissionLocked();
+        int GetRhythmTotalMissionReceivedOrderLocked();
     };
 
     namespace {
@@ -3355,7 +3358,9 @@ namespace LinkuraLocal::HttpMock {
             {{"condition_type", 2}, {"progress_num", totalScoreAccum}, {"received_order", 99}},
             {{"condition_type", 3}, {"progress_num", totalHighScore}, {"received_order", 99}},
         });
-        result["received_total_mission_order"] = 99;
+        // OrderId of the last received total mission (0 = none). The client
+        // shows the mission at OrderId+1; an unknown value restarts at 1.
+        result["received_total_mission_order"] = GetRhythmTotalMissionReceivedOrderLocked();
         result["rhythm_game_star_total_count"] = starTotal;
         result["member_fanlevel_list"] = std::move(memberFanlevelList);
         result["friend_card_list"] = nlohmann::json::array();
@@ -3371,6 +3376,122 @@ namespace LinkuraLocal::HttpMock {
             }
         }
 
+        MockStoredResponse response;
+        response.body = result.dump();
+        return response;
+    }
+
+    namespace {
+        constexpr const char* kRhythmTotalMissionOrderKey = "rhythm_total_mission_received_order";
+
+        // Highest class OrderId whose GoalCount the progress has reached.
+        int RhythmClassOrderReached(const nlohmann::json& goals, int64_t progress) {
+            int reached = 0;
+            if (!goals.is_array()) return reached;
+            for (const auto& row : goals) {
+                if (!row.is_array() || row.size() != 2) continue;
+                if (row[1].get<int64_t>() <= progress) reached = std::max(reached, row[0].get<int>());
+            }
+            return reached;
+        }
+    }
+
+    int HttpMockBackend::Impl::GetRhythmTotalMissionReceivedOrderLocked() {
+        int order = 0;
+        sqlite3_stmt* stmt = nullptr;
+        if (db && sqlite3_prepare_v2(db, "SELECT value FROM offline_mission_meta WHERE key=?;", -1, &stmt,
+                                     nullptr) == SQLITE_OK && stmt) {
+            if (BindText(stmt, 1, kRhythmTotalMissionOrderKey) && sqlite3_step(stmt) == SQLITE_ROW) {
+                const auto* text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                if (text) order = std::atoi(text);
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return std::max(order, 0);
+    }
+
+    // SHOW class mission "総合ミッション": receive every total mission whose
+    // class condition all three class missions (clear count, accumulated
+    // score, high score total) have reached, in OrderId sequence, and grant its
+    // rewards. Thresholds and rewards come from the preserved Master
+    // (builtin/rhythm_total_missions.json).
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::RhythmGameReceiveTotalMissionLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const auto& catalog = OfflineApiMockBuiltIn::RhythmTotalMissionsJsonObj();
+        if (!catalog.is_object() || !catalog.contains("total_missions") || !catalog.contains("class_goals")) {
+            return std::nullopt;
+        }
+
+        std::array<int64_t, 3> progress{0, 0, 0};
+        {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "SELECT COALESCE(SUM(clear_count),0), COALESCE(SUM(total_score_accumulated),0), "
+                    "COALESCE(SUM(high_score),0) FROM rhythm_music_score;", -1, &stmt, nullptr) == SQLITE_OK &&
+                stmt && sqlite3_step(stmt) == SQLITE_ROW) {
+                for (int i = 0; i < 3; ++i) progress[i] = sqlite3_column_int64(stmt, i);
+            }
+            if (stmt) sqlite3_finalize(stmt);
+        }
+        int classReached = std::numeric_limits<int>::max();
+        const auto& goals = catalog["class_goals"];
+        for (int i = 0; i < 3; ++i) {
+            const auto key = std::to_string(i + 1);
+            classReached = std::min(classReached,
+                                    goals.contains(key) ? RhythmClassOrderReached(goals[key], progress[i]) : 0);
+        }
+
+        const int receivedBefore = GetRhythmTotalMissionReceivedOrderLocked();
+        int receivedAfter = receivedBefore;
+        nlohmann::json receivedIds = nlohmann::json::array();
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        sqlite3_stmt* grant = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT INTO museum_item_inventory(d_item_datas_id,item_num) "
+                "SELECT d_item_datas_id,?1 FROM item WHERE item_id=?2 LIMIT 1 "
+                "ON CONFLICT(d_item_datas_id) DO UPDATE SET item_num=item_num+excluded.item_num;",
+                -1, &grant, nullptr) != SQLITE_OK || !grant) {
+            if (grant) sqlite3_finalize(grant);
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        bool ok = true;
+        for (const auto& mission : catalog["total_missions"]) {
+            const int order = mission.value("order_id", 0);
+            if (order != receivedAfter + 1) continue;  // catalog is sorted by OrderId
+            if (mission.value("condition_class_order_id", std::numeric_limits<int>::max()) > classReached) break;
+            for (const auto& reward : mission.value("rewards", nlohmann::json::array())) {
+                sqlite3_reset(grant);
+                sqlite3_clear_bindings(grant);
+                ok = sqlite3_bind_int64(grant, 1, reward.value("num", int64_t{0})) == SQLITE_OK &&
+                     sqlite3_bind_int(grant, 2, reward.value("item_id", 0)) == SQLITE_OK &&
+                     sqlite3_step(grant) == SQLITE_DONE;
+                if (!ok) break;
+            }
+            if (!ok) break;
+            receivedIds.push_back(mission.value("id", 0));
+            receivedAfter = order;
+        }
+        sqlite3_finalize(grant);
+        if (ok && receivedAfter != receivedBefore) {
+            sqlite3_stmt* save = nullptr;
+            ok = sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO offline_mission_meta(key,value) VALUES(?,?);",
+                                    -1, &save, nullptr) == SQLITE_OK && save &&
+                 BindText(save, 1, kRhythmTotalMissionOrderKey) &&
+                 BindText(save, 2, std::to_string(receivedAfter)) && sqlite3_step(save) == SQLITE_DONE;
+            if (save) sqlite3_finalize(save);
+        }
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        Log::InfoFmt("[HttpMockBackend] rhythm total mission received %d -> %d (class reached %d)",
+                     receivedBefore, receivedAfter, classReached);
+        nlohmann::json result = {
+            {"received_total_mission_ids", std::move(receivedIds)},
+            {"received_total_mission_order", receivedAfter},
+        };
         MockStoredResponse response;
         response.body = result.dump();
         return response;
@@ -6795,6 +6916,11 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GetRhythmGameHome() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetRhythmGameHomeLocked();
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::RhythmGameReceiveTotalMission() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->RhythmGameReceiveTotalMissionLocked();
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::RhythmGameSetStart(std::string_view payloadJson) {
