@@ -18,9 +18,9 @@ mkdir -p "$OUT" "$GEN"
 CMAKE="${CMAKE:-$(command -v cmake || ls -d "$HOME"/Library/Android/sdk/cmake/*/bin/cmake 2>/dev/null | tail -1)}"
 [ -x "$CMAKE" ] || { echo "cmake not found (set CMAKE=...)" >&2; exit 1; }
 "$CMAKE" -DINPUT_DIR="$MOCK/builtin" -DOUTPUT_HEADER="$GEN/offline_api_mock_builtin.hpp" \
-    -P "$CPP/cmake/generate_builtin_json_header.cmake"
+    -P "$CPP/cmake/generate_builtin_json_header.cmake" >/dev/null
 "$CMAKE" -DINPUT_DIR="$MOCK/backend" -DOUTPUT_HEADER="$GEN/http_mock_backend_builtin_sql.hpp" \
-    -P "$CPP/cmake/generate_builtin_sql_header.cmake"
+    -P "$CPP/cmake/generate_builtin_sql_header.cmake" >/dev/null
 
 CXX_SOURCES=(
     "$MOCK/RouteRegistry.cpp"
@@ -56,8 +56,9 @@ done
 
 if [ "$TARGET" = ios ]; then
     "${CXX[@]}" "${CXXFLAGS[@]}" -fobjc-arc "${INCLUDES[@]}" -c "$HERE/LinkuraOffline.mm" -o "$OBJ/LinkuraOffline.o"
+    "${CXX[@]}" "${CXXFLAGS[@]}" -fobjc-arc "${INCLUDES[@]}" -c "$HERE/LinkuraRemote.mm" -o "$OBJ/LinkuraRemote.o"
     "${CXX[@]}" -dynamiclib -install_name @executable_path/Frameworks/LinkuraOffline.dylib \
-        -framework Foundation "${OBJECTS[@]}" "$OBJ/LinkuraOffline.o" -o "$OUT/LinkuraOffline.dylib"
+        -framework Foundation -framework UIKit -framework CoreGraphics "${OBJECTS[@]}" "$OBJ/LinkuraOffline.o" "$OBJ/LinkuraRemote.o" -o "$OUT/LinkuraOffline.dylib"
     echo "built $OUT/LinkuraOffline.dylib"
 else
     "${CXX[@]}" "${CXXFLAGS[@]}" "${INCLUDES[@]}" -c "$HERE/host/main.cpp" -o "$OBJ/main.o"

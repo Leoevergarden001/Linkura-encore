@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
         else if (key == "--port") config.port = static_cast<std::uint16_t>(std::atoi(value.c_str()));
         else if (key == "--res-version") config.resVersion = value;
         else if (key == "--mock-root") config.mockRoot = value;
+        else if (key == "--asset-root") config.assetRoot = value;
         else {
             std::fprintf(stderr, "unknown option %s\n", key.c_str());
             return 2;

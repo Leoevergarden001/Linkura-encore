@@ -148,9 +148,18 @@ namespace LinkuraLocal::Standalone {
         HttpResponse response;
         const std::string& path = request.path;
 
-        // Asset requests (the IPA's asset base URLs may also point here):
-        // nothing is served yet; log them so the needed files can be found.
+        // Asset requests (the IPA's asset base URLs point here): serve
+        // <assetRoot>/<path after /a/> when present, otherwise log the miss.
         if (path.rfind("/a/", 0) == 0) {
+            const auto file = MockFile(config.assetRoot, path.substr(2), "");
+            std::string content = ReadFile(file);
+            std::error_code ec;
+            if (!file.empty() && std::filesystem::is_regular_file(file, ec)) {
+                Log::InfoFmt("[OfflineServer] asset %s -> %zu bytes", path.c_str(), content.size());
+                response.headersText = "content-type: application/octet-stream\n";
+                response.body = std::move(content);
+                return response;
+            }
             Log::WarnFmt("[OfflineServer] asset request not served: %s", request.target.c_str());
             response.status = 404;
             response.reason = "Not Found";

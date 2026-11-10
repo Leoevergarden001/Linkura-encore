@@ -55,6 +55,44 @@ namespace {
     }
 }
 
+// The game keeps its local-storage key (and other state) in encrypted Unity
+// PlayerPrefs, which iOS stores in NSUserDefaults under the same hashed key
+// names as Android. Documents/LinkuraOffline/storage-key.json uses the
+// Android resource-pack format ({"entries": {"<url-encoded name>": "<url-
+// encoded value>"}}); seed those entries before Unity reads PlayerPrefs so an
+// imported Documents/D, Documents/M cache is recognised.
+static void SeedPlayerPrefs(NSURL* visible) {
+    NSURL* file = [visible URLByAppendingPathComponent:@"storage-key.json"];
+    NSData* raw = [NSData dataWithContentsOfURL:file];
+    if (!raw) return;
+    id parsed = [NSJSONSerialization JSONObjectWithData:raw options:0 error:nil];
+    NSDictionary* entries = [parsed isKindOfClass:NSDictionary.class] ? parsed[@"entries"] : nil;
+    if (![entries isKindOfClass:NSDictionary.class]) {
+        LogSink("E", "storage-key.json has no entries");
+        return;
+    }
+    NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+    int changed = 0;
+    for (NSString* name in entries) {
+        id value = entries[name];
+        if (![name isKindOfClass:NSString.class] || ![value isKindOfClass:NSString.class]) continue;
+        NSString* key = [name stringByRemovingPercentEncoding] ?: name;
+        NSString* decoded = [(NSString*)value stringByRemovingPercentEncoding] ?: value;
+        if (![[defaults stringForKey:key] isEqualToString:decoded]) {
+            [defaults setObject:decoded forKey:key];
+            changed++;
+        }
+    }
+    if (changed) [defaults synchronize];
+    char line[128];
+    std::snprintf(line, sizeof(line), "PlayerPrefs seed: %lu entries, %d updated",
+                  static_cast<unsigned long>(entries.count), changed);
+    LogSink("I", line);
+}
+
+void LinkuraRemoteStart(NSURL* directory);
+void LinkuraOfflineLog(const char* level, const char* message) { LogSink(level, message); }
+
 __attribute__((constructor))
 static void LinkuraOfflineStart() {
     @autoreleasepool {
@@ -75,6 +113,7 @@ static void LinkuraOfflineStart() {
         LinkuraLocal::Standalone::ServerConfig config;
         if (visible) {
             config.mockRoot = [visible URLByAppendingPathComponent:@"mock_api"].path.fileSystemRepresentation;
+            config.assetRoot = [visible URLByAppendingPathComponent:@"assets"].path.fileSystemRepresentation;
             NSData* raw = [NSData dataWithContentsOfURL:[visible URLByAppendingPathComponent:@"config.json"]];
             id parsed = raw ? [NSJSONSerialization JSONObjectWithData:raw options:0 error:nil] : nil;
             if ([parsed isKindOfClass:NSDictionary.class]) {
@@ -87,6 +126,8 @@ static void LinkuraOfflineStart() {
                 }
             }
         }
+        if (visible) SeedPlayerPrefs(visible);
+        if (visible) LinkuraRemoteStart(visible);
         NSString* version = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
         char banner[256];
         std::snprintf(banner, sizeof(banner), "LinkuraOffline start: client %s, port %u, resVersion '%s'",

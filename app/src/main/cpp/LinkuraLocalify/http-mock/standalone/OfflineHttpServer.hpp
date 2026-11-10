@@ -24,6 +24,9 @@ namespace LinkuraLocal::Standalone {
         // Optional overrides: <mockRoot>/<api path>.json (and .headers),
         // e.g. mock_api/v1/user/login.json, take precedence over routes.
         std::filesystem::path mockRoot;
+        // Asset files served for /a/<path> (the rewritten asset base URLs),
+        // e.g. assets/raw/oj/oj4rf2oo3u37dl5nkqrn5zfcyy for a catalog.
+        std::filesystem::path assetRoot;
     };
 
     struct HttpRequest {
