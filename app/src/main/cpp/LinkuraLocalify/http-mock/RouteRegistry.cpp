@@ -41,14 +41,11 @@ namespace LinkuraLocal::HttpMock {
             // that still identifies the single local save; treating it as a new
             // online account sends the client into the LinkLike ID flow and makes
             // an offline cold start impossible.
-            const auto payload = nlohmann::json::parse(request.payloadJson, nullptr, false);
-            if (payload.is_object() && payload.contains("player_id") &&
-                payload["player_id"].is_string()) {
-                // The title screen reads this local ID from PlayerPrefs. Use
-                // the same ID in ProfileInfo without embedding a device's
-                // private player ID in checked-in templates or logs.
-                backend.RememberLoginPlayerId(payload["player_id"].get<std::string>());
-            }
+            // The client's PlayerPrefs player ID belongs to the account whose
+            // cache was imported, not to this offline save; it is not echoed
+            // into ProfileInfo (the iOS title label is hidden as well).
+            (void)request;
+            (void)backend;
             const auto& jsonBody = OfflineApiMockBuiltIn::UserLoginJsonView;
             return MockResponse{
                 std::string(jsonBody),
@@ -873,6 +870,10 @@ namespace LinkuraLocal::HttpMock {
                         [](HttpMockBackend& b, std::string_view p) { return b.SetMyDesign(false, p); });
             designRoute("/v1/profile/set_my_design_icon",
                         [](HttpMockBackend& b, std::string_view p) { return b.SetMyDesign(true, p); });
+            designRoute("/v1/out_quest_live/get_stamina_recovery_info",
+                        [](HttpMockBackend& b, std::string_view) { return b.GetStaminaRecoveryInfo(); });
+            designRoute("/v1/out_quest_live/recovery_stamina",
+                        [](HttpMockBackend& b, std::string_view p) { return b.RecoverStamina(p); });
             designRoute("/v1/follow/set_friend_card",
                         [](HttpMockBackend& b, std::string_view p) { return b.SetFriendCard(p); });
             designRoute("/v1/profile/set_name",

@@ -359,6 +359,8 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> DailyQuestStageSelectLocked();
         int64_t CurrentStaminaLocked(std::time_t* fullAt = nullptr);
         nlohmann::json StaminaJsonLocked();
+        std::optional<MockStoredResponse> GetStaminaRecoveryInfoLocked();
+        std::optional<MockStoredResponse> RecoverStaminaLocked(std::string_view payloadJson);
         void ConsumeStaminaLocked(int64_t amount);
         int StageStaminaCostLocked(int questLiveType, int stageId);
         int64_t GrandPrixTotalPointLocked(int grandPrixId);
@@ -1266,7 +1268,11 @@ namespace LinkuraLocal::HttpMock {
                 while (sqlite3_step(text) == SQLITE_ROW) {
                     const auto* field = reinterpret_cast<const char*>(sqlite3_column_text(text, 0));
                     const auto* value = reinterpret_cast<const char*>(sqlite3_column_text(text, 1));
-                    if (field && value) profile[field] = value;
+                    // Only player-edited text; an older build stored player_id here.
+                    if (field && value && (std::string_view(field) == "player_name" ||
+                                           std::string_view(field) == "comment")) {
+                        profile[field] = value;
+                    }
                 }
             }
             if (text) sqlite3_finalize(text);
@@ -3970,10 +3976,12 @@ namespace LinkuraLocal::HttpMock {
             }
         }
 
-        // A SHOW live is cleared when MENTAL is left at the end (the client
-        // plays on at 0 and reports remain_mental). NotesJudgementType (5.0.1
-        // metadata): Miss=0 Bad=1 Good=2 Great=3 Perfect=4 PerfectPlus=5.
-        const bool liveCleared = payload.value("remain_mental", 1) > 0;
+        // SHOW has no fail state: at MENTAL 0 the 5.0.1 client plays on and
+        // shows LIVE CLEAR with the clear lamp lit (verified on device with an
+        // all-MISS run), so every finished live is a clear here as well.
+        // NotesJudgementType (5.0.1 metadata): Miss=0 Bad=1 Good=2 Great=3
+        // Perfect=4 PerfectPlus=5.
+        const bool liveCleared = true;
         int maxComboThisPlay = 0;
         int noteCount = 0;
         int brokenNotes = 0;      // Miss / Bad
@@ -4094,11 +4102,24 @@ namespace LinkuraLocal::HttpMock {
         }
 
         nlohmann::json result;
+        // SHOW mastery: level +1 per play (rhythm_music_score), reported as
+        // the cumulative experience of that level (Master MusicLevels,
+        // ExperienceType 1; Lv1 = 0). MusicOwnStatus (5.0.1 metadata):
+        // NotOwned=0 OwnedThisTime=1 Owned=2 -- every song is held offline,
+        // and 0 made the result page show 未習得 0%.
+        static constexpr int64_t kMusicLevelCumulativeExp[] = {
+            0, 400, 1010, 1830, 2860, 4100, 5550, 7210, 9080, 11160, 13450, 15950, 18660, 21580, 24710,
+            28050, 31600, 35360, 39370, 43630, 48140, 52900, 57910, 63170, 68680, 74440, 80450, 86710,
+            93220, 100000, 106850, 113770, 120760, 127820, 134950, 142150, 149420, 156760, 164170,
+            171650, 179200, 186820, 194510, 202270, 210100, 218000, 225970, 234010, 242120, 250300};
+        const auto levelExp = [](int level) {
+            return kMusicLevelCumulativeExp[std::clamp(level, 1, 50) - 1];
+        };
         result["music_mastery_level_result"] = {
             {"music_id", musicId},
-            {"music_mastery_exp_before", 0},
-            {"music_mastery_exp_after", 0},
-            {"own_status", 0},
+            {"music_mastery_exp_before", levelExp(masteryLevelBefore)},
+            {"music_mastery_exp_after", levelExp(masteryLevelAfter)},
+            {"own_status", 2},
         };
         result["drop_reward_list"] = nlohmann::json::array();
         result["music_score_mission_result"] = {
@@ -4151,7 +4172,7 @@ namespace LinkuraLocal::HttpMock {
         }
         sqlite3_finalize(finish);
         // A live that runs out of mental is a failure, not a clear.
-        const bool showCleared = payload.value("remain_mental", 1) > 0;
+        const bool showCleared = true;  // no fail state in SHOW (see set_finish)
         if (showCleared && !RecordMissionEventLocked("rhythm:" + missionSourceId, "SHOW_CLEAR")) {
             ExecSql(db, "ROLLBACK;");
             return std::nullopt;
@@ -5352,6 +5373,101 @@ namespace LinkuraLocal::HttpMock {
             sqlite3_step(stmt);
         }
         if (stmt) sqlite3_finalize(stmt);
+    }
+
+    // プレイPt. "+" (out_quest_live/get_stamina_recovery_info, recovery_stamina).
+    // UseRecoveryType (5.0.1 metadata): Jewel=1, Item=2. Charge tickets are
+    // Items 3001001 (+50) / 3001002 (+100). The original SIsCa price was a
+    // server setting that was not preserved; offline the SIsCa refill is free
+    // and restores the cap.
+    namespace {
+        constexpr int64_t kStaminaHoldLimit = 9999;
+        struct ChargeTicket { int itemId; int64_t effect; };
+        constexpr ChargeTicket kChargeTickets[] = {{3001001, 50}, {3001002, 100}};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetStaminaRecoveryInfoLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        nlohmann::json items = nlohmann::json::array();
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT item.d_item_datas_id, inventory.item_num FROM item "
+                "JOIN museum_item_inventory AS inventory USING(d_item_datas_id) WHERE item.item_id=?;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            for (const auto& ticket : kChargeTickets) {
+                sqlite3_reset(stmt);
+                sqlite3_bind_int(stmt, 1, ticket.itemId);
+                if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int64(stmt, 1) > 0) {
+                    const auto* id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                    items.push_back({{"d_item_datas_id", id ? id : ""}, {"item_id", ticket.itemId},
+                                     {"item_num", sqlite3_column_int64(stmt, 1)}, {"limit_date_time", nullptr}});
+                }
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        nlohmann::json result = {
+            {"user_stamina", StaminaJsonLocked()},
+            {"stamina_limit", kStaminaHoldLimit},
+            {"item_list", std::move(items)},
+            {"use_jewel_settings", nlohmann::json::array({
+                {{"price", 0}, {"effect_value", kStaminaMax}, {"jewel_st_recovery_count_limit", 99}},
+            })},
+            {"jewel_st_recovery_count", 0},
+            {"max_st_recovery_count", 99},
+        };
+        MockStoredResponse response;
+        response.body = result.dump();
+        return response;
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::RecoverStaminaLocked(std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+        if (!payload.is_object()) return std::nullopt;
+        const int64_t current = CurrentStaminaLocked();
+        int64_t target = current;
+        if (payload.value("use_recovery_type", 1) == 2) {
+            if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+            sqlite3_stmt* use = nullptr;
+            bool ok = sqlite3_prepare_v2(db,
+                "UPDATE museum_item_inventory SET item_num=item_num-?1 WHERE item_num>=?1 AND d_item_datas_id="
+                "(SELECT d_item_datas_id FROM item WHERE item_id=?2 LIMIT 1);", -1, &use, nullptr) == SQLITE_OK && use;
+            for (const auto& item : payload.value("use_item_list", nlohmann::json::array())) {
+                if (!ok) break;
+                const int itemId = item.value("item_id", 0);
+                const int64_t num = item.value("item_num", int64_t{0});
+                const auto* ticket = std::find_if(std::begin(kChargeTickets), std::end(kChargeTickets),
+                                                  [itemId](const ChargeTicket& t) { return t.itemId == itemId; });
+                if (ticket == std::end(kChargeTickets) || num <= 0) { ok = false; break; }
+                sqlite3_reset(use);
+                sqlite3_bind_int64(use, 1, num);
+                sqlite3_bind_int(use, 2, itemId);
+                ok = sqlite3_step(use) == SQLITE_DONE && sqlite3_changes(db) == 1;
+                target += ticket->effect * num;
+            }
+            if (use) sqlite3_finalize(use);
+            if (!ok) { ExecSql(db, "ROLLBACK;"); return std::nullopt; }
+            if (!ExecSql(db, "COMMIT;")) return std::nullopt;
+        } else {
+            target = std::max<int64_t>(current, kStaminaMax);
+        }
+        target = std::min(target, kStaminaHoldLimit);
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT INTO offline_player_stamina(singleton_id, stamina, updated_at) VALUES(1, ?1, ?2) "
+                "ON CONFLICT(singleton_id) DO UPDATE SET stamina=excluded.stamina, updated_at=excluded.updated_at;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int64(stmt, 1, target);
+            sqlite3_bind_int64(stmt, 2, static_cast<int64_t>(std::time(nullptr)));
+            sqlite3_step(stmt);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        nlohmann::json result = {{"user_stamina", StaminaJsonLocked()}, {"stamina_present", 0}};
+        MockStoredResponse response;
+        response.body = result.dump();
+        return response;
     }
 
     int HttpMockBackend::Impl::StageStaminaCostLocked(int questLiveType, int stageId) {
@@ -7116,6 +7232,16 @@ namespace LinkuraLocal::HttpMock {
         return impl_->SetMyDesignLocked(icon ? kMyDesignTypeIcon : kMyDesignTypeCard, payloadJson);
     }
 
+    std::optional<MockStoredResponse> HttpMockBackend::GetStaminaRecoveryInfo() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetStaminaRecoveryInfoLocked();
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::RecoverStamina(std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->RecoverStaminaLocked(payloadJson);
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::GetCustomSettingResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetCustomSettingResponseLocked();
@@ -7149,28 +7275,6 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GetProfileInfoResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetProfileInfoResponseLocked();
-    }
-
-    bool HttpMockBackend::RememberLoginPlayerId(std::string_view playerId) {
-        // Player IDs are nine printable alphanumeric characters. Ignore a
-        // fresh install's empty ID and malformed input; never log the value.
-        if (playerId.size() != 9 ||
-            !std::all_of(playerId.begin(), playerId.end(), [](unsigned char c) {
-                return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z');
-            })) return false;
-        std::lock_guard<std::mutex> lock(impl_->mutex);
-        if (!impl_->initialized && !impl_->EnsureReadyLocked()) return false;
-        if (!impl_->db || !ExecSql(impl_->db,
-                "CREATE TABLE IF NOT EXISTS offline_profile_text ("
-                "field TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL);")) return false;
-        sqlite3_stmt* stmt = nullptr;
-        const bool prepared = sqlite3_prepare_v2(impl_->db,
-            "INSERT OR REPLACE INTO offline_profile_text(field,value) VALUES('player_id',?);",
-            -1, &stmt, nullptr) == SQLITE_OK && stmt;
-        const bool saved = prepared && BindText(stmt, 1, playerId) &&
-                           sqlite3_step(stmt) == SQLITE_DONE;
-        if (stmt) sqlite3_finalize(stmt);
-        return saved;
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GetGachaSeriesListResponse() {

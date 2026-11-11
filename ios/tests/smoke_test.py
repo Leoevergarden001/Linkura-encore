@@ -186,7 +186,7 @@ def main() -> int:
             check("daily paid draw used up", not first["is_paid_enable"] and first["remaining_limited_paid_gacha_count"] == 0)
             status, _, body = post(conn, "/v1/follow/search_id", {"player_id": "ABCDEFGHJ"})
             check("friend id search says not found", status == 200 and json.loads(body) == {"result_code": 1})
-            # SHOW clear status: NotClear when MENTAL ran out, AllPerfect when every note is Perfect+.
+            # SHOW clear status: no fail state (the client shows LIVE CLEAR at MENTAL 0); AllPerfect when every note is Perfect+.
             def show_play(remain_mental, judgement):
                 post(conn, "/v1/rhythm_game_live/set_start", {"music_id": 103101, "music_score_difficulty": 3})
                 status, _, body = post(conn, "/v1/rhythm_game_live/set_finish", {
@@ -194,13 +194,25 @@ def main() -> int:
                     "notes_result_list": [{"judgement_result": judgement, "timing_msec": 0}] * 30, "play_data": ""})
                 return status, json.loads(body)
             status, failed = show_play(0, 0)
-            check("SHOW fail is NotClear", status == 200 and failed["clear_status"] == 0, str(failed.get("clear_status")))
-            check("SHOW fail not counted as clear", failed["class_mission_progress_list"][0]["progress_before"] ==
-                  failed["class_mission_progress_list"][0]["progress_after"])
+            check("SHOW at MENTAL 0 is still Clear", status == 200 and failed["clear_status"] == 1, str(failed.get("clear_status")))
+            check("SHOW at MENTAL 0 counted as clear", failed["class_mission_progress_list"][0]["progress_after"] ==
+                  failed["class_mission_progress_list"][0]["progress_before"] + 1)
             status, perfect = show_play(100, 5)
             check("SHOW all perfect", perfect["clear_status"] == 3, str(perfect.get("clear_status")))
+            mastery = perfect["music_mastery_level_result"]
+            check("SHOW mastery owned with level exp", mastery["own_status"] == 2 and
+                  mastery["music_mastery_exp_after"] > mastery["music_mastery_exp_before"], json.dumps(mastery))
             check("SHOW clear counted", perfect["class_mission_progress_list"][0]["progress_after"] ==
                   perfect["class_mission_progress_list"][0]["progress_before"] + 1)
+            status, _, body = post(conn, "/v1/out_quest_live/get_stamina_recovery_info", {})
+            info = json.loads(body)
+            check("stamina recovery info", status == 200 and info["user_stamina"]["stamina_max"] == 999, body[:200].decode())
+            status, _, body = post(conn, "/v1/out_quest_live/recovery_stamina", {"use_recovery_type": 1, "recovery_count": 1, "use_item_list": []})
+            check("stamina refill", status == 200 and json.loads(body)["user_stamina"]["stamina_now"] >= 999, body[:200].decode())
+            post(conn, "/v1/user/login", {"player_id": "ABCDEFGHJ", "device_specific_id": "", "version": 1})
+            status, _, body = post(conn, "/v1/profile/get_info", {})
+            check("login player id not echoed into profile",
+                  json.loads(body)["profile_info"]["player_id"] == "000000000")
             status, _, body = post(conn, "/v1/profile/get_fan_level_info", {"player_id": profile["player_id"]})
             fan = json.loads(body)
             check("fan level info", status == 200 and len(fan["fan_level_info_list"]) == len(profile["fan_level_list"]) > 0,

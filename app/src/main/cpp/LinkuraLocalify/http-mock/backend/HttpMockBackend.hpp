@@ -27,8 +27,9 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetMissionListResponse();
         std::optional<MockStoredResponse> ReceiveCommonMissionReward();
         std::optional<MockStoredResponse> GetProfileInfoResponse();
-        bool RememberLoginPlayerId(std::string_view playerId);
         std::optional<MockStoredResponse> GetCustomSettingResponse();
+        std::optional<MockStoredResponse> GetStaminaRecoveryInfo();
+        std::optional<MockStoredResponse> RecoverStamina(std::string_view payloadJson);
         std::optional<MockStoredResponse> SetFriendCard(std::string_view payloadJson);
         std::optional<MockStoredResponse> GetMyDesignList(bool icon);
         std::optional<MockStoredResponse> SetMyDesign(bool icon, std::string_view payloadJson);
