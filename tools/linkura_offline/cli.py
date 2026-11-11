@@ -17,7 +17,7 @@ from pathlib import Path
 from .android_repack import AndroidRepackError, repack_android_client
 from .android_resource_pack import ResourcePackError, build_resource_pack, install_resource_pack
 from .android_storage_key import StorageKeyError, export_storage_key
-from .cache_rekey import RekeyError, rekey_catalog
+from .cache_rekey import RekeyError, rekey_cache
 from .ios_macho import IosError
 from .ios_offline import DEFAULT_PORT, DEFAULT_RES_VERSION, OFFLINE_PLAYER_ID, stage_offline_ios_client
 from .ios_symbols import write_symbols
@@ -89,8 +89,11 @@ def _android_storage_key(args: argparse.Namespace) -> int:
 
 
 def _cache_rekey(args: argparse.Namespace) -> int:
-    result = rekey_catalog(args.m_dir, args.storage_key, args.output, sqlcipher=args.sqlcipher)
-    print(f"OK  catalog database: {result.database} ({result.tables} tables)")
+    result = rekey_cache(args.m_dir, args.storage_key, args.output, sqlcipher=args.sqlcipher)
+    for domain, database in result.databases.items():
+        print(f"OK  {domain} database: {database}")
+    for domain in result.skipped:
+        print(f"WARN no {domain} database/entry: the client will not rebuild it from the cache")
     print(f"OK  fresh storage key: {result.storage_key} (replace the cache's M/ and storage-key.json with these)")
     return 0
 
@@ -164,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=_android_storage_key)
 
-    p = sub.add_parser("cache-rekey", help="copy a cache's catalog database under a fresh storage key")
+    p = sub.add_parser("cache-rekey", help="copy a cache's catalog and master databases under fresh storage keys")
     p.add_argument("--m-dir", type=Path, required=True, help="the cache's M/ directory")
     p.add_argument("--storage-key", type=Path, required=True, help="storage-key.json that pairs with it")
     p.add_argument("--output", type=Path, required=True, help="new directory: M/<catalog> + storage-key.json")
@@ -179,7 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true")
     p.add_argument("--keep-source-key", action="store_true",
                    help="keep all M/ databases and the source install's storage key (default: only the catalog "
-                        "database, re-keyed to a fresh key; needs the sqlcipher tool)")
+                        "and master databases, re-keyed to fresh keys; needs the sqlcipher tool)")
     p.set_defaults(func=_pack_build)
 
     p = sub.add_parser("android-resource-pack-install", help="push a resource pack to a device with plain adb")

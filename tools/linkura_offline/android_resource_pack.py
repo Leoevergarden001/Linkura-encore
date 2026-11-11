@@ -34,7 +34,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, Sequence
 
 from .android_storage_key import export_storage_key
-from .cache_rekey import RekeyError, rekey_catalog
+from .cache_rekey import RekeyError, rekey_cache
 
 PACKAGE = "com.oddno.lovelive"
 ACTIVITY = f"{PACKAGE}/com.unity3d.player.UnityPlayerActivity"
@@ -134,14 +134,15 @@ def build_resource_pack(
         key_path = files_root / "linkura-local" / "storage-key.json"
         export_storage_key(prefs, key_path)
         if fresh_key:
-            # Keep only the catalog database, under a key no install ever had.
+            # Keep the catalog and master databases, under keys no install ever had.
             try:
-                result = rekey_catalog(files_root / "M", key_path, Path(tmp) / "rekeyed", sqlcipher=sqlcipher)
+                result = rekey_cache(files_root / "M", key_path, Path(tmp) / "rekeyed", sqlcipher=sqlcipher)
             except RekeyError as error:
                 raise ResourcePackError(str(error)) from error
             shutil.rmtree(files_root / "M")
             (files_root / "M").mkdir()
-            shutil.move(str(result.database), files_root / "M" / result.database.name)
+            for database in result.databases.values():
+                shutil.move(str(database), files_root / "M" / database.name)
             key_path.unlink()
             shutil.move(str(result.storage_key), key_path)
     summary = summarize(output)

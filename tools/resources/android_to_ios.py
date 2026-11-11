@@ -13,9 +13,9 @@ fixes every UnityFS bundle:
   parsed with UnityPy.
 
 Other files (raw audio/video/text) are copied unchanged. With --storage-key,
-the catalog database is copied under a freshly generated storage key and the
-other M/ databases (master data the client rebuilds, and the source install's
-own identity and settings) are left out, so the output carries no key of the
+the catalog and master databases are copied under freshly generated storage
+keys and the source install's own "app" database (identity, settings) is left
+out, so the output carries no key of the
 source install (--keep-source-key copies M/ and the key unchanged; needs the
 sqlcipher tool otherwise).
 The output is a ``container/`` tree that tools/ios_device_setup.py installs:
@@ -43,7 +43,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from unityfs_retarget import retarget  # noqa: E402
-from tools.linkura_offline.cache_rekey import rekey_catalog  # noqa: E402
+from tools.linkura_offline.cache_rekey import rekey_cache  # noqa: E402
 
 
 def convert_cache(cache: Path, output: Path, storage_key: Path | None, ipa: Path | None,
@@ -90,12 +90,14 @@ def convert_cache(cache: Path, output: Path, storage_key: Path | None, ipa: Path
     if storage_key and fresh_key:
         if not key_out.exists():  # re-runs keep the key generated the first time
             with tempfile.TemporaryDirectory(dir=output) as tmp:
-                result = rekey_catalog(cache / "M", storage_key, Path(tmp) / "rekeyed")
+                result = rekey_cache(cache / "M", storage_key, Path(tmp) / "rekeyed")
                 (documents / "M").mkdir(parents=True, exist_ok=True)
                 key_out.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(result.database), documents / "M" / result.database.name)
+                for database in result.databases.values():
+                    shutil.move(str(database), documents / "M" / database.name)
                 shutil.move(str(result.storage_key), key_out)
-            print(f"catalog database re-keyed: M/{result.database.name}", flush=True)
+            print(f"re-keyed: {', '.join(result.databases)}"
+                  + (f" (no {', '.join(result.skipped)} database)" if result.skipped else ""), flush=True)
         return stats
     if (cache / "M").is_dir():
         shutil.copytree(cache / "M", documents / "M", dirs_exist_ok=True,

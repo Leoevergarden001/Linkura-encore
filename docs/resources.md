@@ -16,14 +16,14 @@
 | 存储域 | PlayerPrefs 名 | `M/` 里的数据库 | 离线版是否需要 |
 |---|---|---|---|
 | `//catalog` | `JWbAatNSI1NpHhCdU%2BgJllY0BTU%3D` | 资源目录（哪个资源对应 `D/` 里哪个文件） | 需要 |
-| `//master` | — | 主数据，两个约 57 MB 的库 | 不需要，客户端会重新生成 |
+| `//master` | `Dr%2BcmYmVx%2B1kQ8uTmoYADAduWVk%3D` | 主数据（约 57 MB） | 需要：客户端不会从缓存重新生成空的主数据库 |
 | `app` | — | 玩家 ID、本地设置等 | 不需要，而且含原账号身份，不要带 |
 
 - 数据库文件名 = 小写、无填充的 Base32(MD5(seed))。
-- SQLCipher 4 原始密钥 = SHA-256(seed)。
+- SQLCipher 4 原始密钥 = SHA-256(seed)（两个库都是）。
 - `D/` 的资源用资源清单里每个文件自己的 seed 加密，和存储密钥无关。
 
-把缓存搬到另一台设备时，要带上资源目录库和它的存储密钥，模块会在 Unity 读取 PlayerPrefs 之前写入。打包工具默认会**换一个新生成的存储密钥**：把资源目录库用新 seed 重新加密、改名，其他 `M/` 数据库不带。这样包里的密钥不属于任何一次安装。
+把缓存搬到另一台设备时，要带上资源目录库、主数据库和它们的存储密钥，模块会在 Unity 读取 PlayerPrefs 之前写入。打包工具默认会**换成新生成的存储密钥**：两个库各用一个新 seed 重新加密、改名，`app` 库不带。这样包里的密钥不属于任何一次安装。
 
 ## Android：制作资源包
 
@@ -43,7 +43,7 @@ python3 -m tools.linkura_offline android-resource-pack-build \
   --private game-private.tar --output <资源包目录>
 ```
 
-资源包包含 `D/`、换了新密钥的资源目录库（`M/` 里只有这一个文件）和对应的存储密钥（`files/linkura-local/storage-key.json`），并带一份 `MANIFEST.json`。换密钥需要 SQLCipher 4 命令行工具（`brew install sqlcipher`）；`--keep-source-key` 保留原来的全部 `M/` 和原安装的密钥。输出目录不要放在 exFAT 上（macOS 会生成 `._*` 文件）。导入见 [Android](android.md#4-导入资源)。
+资源包包含 `D/`、换了新密钥的资源目录库和主数据库（`M/` 里只有这两个文件）和对应的存储密钥（`files/linkura-local/storage-key.json`），并带一份 `MANIFEST.json`。换密钥需要 SQLCipher 4 命令行工具（`brew install sqlcipher`）；`--keep-source-key` 保留原来的全部 `M/` 和原安装的密钥。输出目录不要放在 exFAT 上（macOS 会生成 `._*` 文件）。导入见 [Android](android.md#4-导入资源)。
 
 只想导出存储密钥：`python3 -m tools.linkura_offline android-storage-key --prefs <playerprefs.xml> --output storage-key.json`。
 
@@ -54,7 +54,7 @@ python3 -m tools.linkura_offline cache-rekey \
   --m-dir <缓存的 M/> --storage-key <对应的 storage-key.json> --output <新目录>
 ```
 
-输出 `<新目录>/M/<新文件名>` 和 `<新目录>/storage-key.json`，用它们替换原来的 `M/` 和 storage-key.json。
+输出 `<新目录>/M/` 下的两个库和 `<新目录>/storage-key.json`，用它们替换原来的 `M/` 和 storage-key.json。storage-key.json 里没有主数据库那一项（比如 iOS 设备上导出的）时只处理资源目录库，并给出警告：这样的缓存在新设备上没有主数据。
 
 ## iOS：从 Android 缓存转换
 
@@ -70,7 +70,7 @@ python3 tools/resources/android_to_ios.py \
 
 - 所有 UnityFS 资源包的平台标记从 Android（13）改成 iOS（9）；
 - 给了 `--ipa` 时，资源包里的着色器换成 IPA 中同名的 Metal 着色器，或者一个近似的替代着色器（否则材质显示为洋红色）。这一步要用 UnityPy 解析每个资源包，比较慢；
-- 其他文件原样复制；资源目录库换成新密钥（同上，`--keep-source-key` 关闭）；中断后重跑会跳过已转换的文件，并沿用第一次生成的密钥。
+- 其他文件原样复制；资源目录库和主数据库换成新密钥（同上，`--keep-source-key` 关闭）；中断后重跑会跳过已转换的文件，并沿用第一次生成的密钥。
 
 输出的 `container/` 可以直接交给 `tools/ios_device_setup.py --backup`。
 

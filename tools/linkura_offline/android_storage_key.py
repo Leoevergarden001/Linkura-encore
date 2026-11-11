@@ -8,7 +8,7 @@ cache. The Localify module seeds the
 entry written here (linkura-local/storage-key.json next to D/ and M/) before
 Unity reads PlayerPrefs.
 
-Only the storage-key entry is exported. Other entries in the same file hold
+Only the catalog and master storage-key entries are exported. Other entries in the same file hold
 account identity (for example the player id) and must not travel with a
 resource pack. The exported value still comes from a real install, so treat
 the output as private; resource packs replace it with a fresh key
@@ -28,6 +28,9 @@ PREFS_NAME = "com.oddno.lovelive.v2.playerprefs"
 # one: only this entry made the imported cache load, and it did not carry the
 # player id.
 STORAGE_KEY_NAMES = ("JWbAatNSI1NpHhCdU%2BgJllY0BTU%3D",)
+# The master database's seed ("//master" domain); exported when present so the
+# master database travels with the cache (the client does not rebuild it).
+OPTIONAL_STORAGE_KEY_NAMES = ("Dr%2BcmYmVx%2B1kQ8uTmoYADAduWVk%3D",)
 
 
 class StorageKeyError(RuntimeError):
@@ -50,8 +53,8 @@ def read_storage_key_entries(
     found: dict[str, str] = {}
     for element in root:
         name = element.get("name")
-        if element.tag == "string" and name in names:
-            found[name] = element.text or ""
+        if element.tag == "string" and (name in names or name in OPTIONAL_STORAGE_KEY_NAMES) and element.text:
+            found[name] = element.text
     missing = [name for name in names if name not in found or not found[name]]
     if missing:
         raise StorageKeyError(f"PlayerPrefs XML lacks storage key entries: {', '.join(missing)}")

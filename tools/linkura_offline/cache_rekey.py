@@ -3,18 +3,20 @@
 The 5.x client keeps one random 256-byte seed per storage domain in
 PlayerPrefs (LocalDataStorageProvider, Core.dll):
 
-- PlayerPrefs name: base64(HMAC-SHA1(<static key>, domain)), URL-encoded on disk.
-  The catalog domain ("//catalog") is ``CATALOG_PREFS_KEY`` on every install.
+- PlayerPrefs name: base64(HMAC-SHA1(<static key>, domain)), URL-encoded on disk,
+  the same on every install: ``CATALOG_PREFS_KEY`` ("//catalog"),
+  ``MASTER_PREFS_KEY`` ("//master"); the "app" domain is left alone.
 - value: base64(seed), seed = 256 bytes from RNGCryptoServiceProvider.
 - database file: ``M/`` + lowercase unpadded Base32(MD5(seed)).
-- SQLCipher 4 raw key: SHA-256(seed) (Hailstorm.CatalogDBInitializer).
+- SQLCipher 4 raw key: SHA-256(seed) (catalog and master databases alike).
 
-Only the catalog database is needed to reuse a cache: D/ files are encrypted
-with per-asset catalog seeds, the master databases are rebuilt by the client,
-and the "app" storage holds the source install's identity (player id) and
-settings. ``rekey_catalog`` copies the catalog database under a newly
-generated seed, so the output pairs with a storage key that never belonged to
-any install. Needs the ``sqlcipher`` command line tool (SQLCipher 4).
+A cache needs the catalog database and the master database: D/ files are
+encrypted with per-asset catalog seeds, and the client does not rebuild an
+empty master database from the cache. The "app" storage holds the source
+install's identity (player id) and settings and is not copied. ``rekey_cache``
+copies both databases under newly generated seeds, so the output pairs with
+storage keys that never belonged to any install. Needs the ``sqlcipher``
+command line tool (SQLCipher 4).
 """
 from __future__ import annotations
 
@@ -30,6 +32,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 CATALOG_PREFS_KEY = "JWbAatNSI1NpHhCdU%2BgJllY0BTU%3D"
+MASTER_PREFS_KEY = "Dr%2BcmYmVx%2B1kQ8uTmoYADAduWVk%3D"
+# (domain, PlayerPrefs name, required)
+DOMAINS = (("catalog", CATALOG_PREFS_KEY, True), ("master", MASTER_PREFS_KEY, False))
 SEED_BYTES = 256
 
 
@@ -57,20 +62,21 @@ def decode_seed(value: str) -> bytes:
     return seed
 
 
-def read_catalog_seed(storage_key: Path) -> tuple[bytes, dict]:
+def read_storage_key(storage_key: Path) -> dict:
     try:
         payload = json.loads(storage_key.read_text(encoding="utf-8"))
-        value = payload["entries"][CATALOG_PREFS_KEY]
+        if not isinstance(payload["entries"], dict):
+            raise TypeError
     except (OSError, ValueError, KeyError, TypeError) as error:
-        raise RekeyError(f"{storage_key} has no catalog storage key entry") from error
-    return decode_seed(value), payload
+        raise RekeyError(f"{storage_key} is not a storage-key.json") from error
+    return payload
 
 
 @dataclass(frozen=True)
 class RekeyResult:
-    database: Path
+    databases: dict[str, Path]     # domain -> re-keyed database
     storage_key: Path
-    tables: int
+    skipped: tuple[str, ...]       # optional domains without entry or database
 
 
 def _sqlcipher(binary: str, database: Path, script: str) -> str:
@@ -89,46 +95,61 @@ def _count_tables(binary: str, database: Path, seed: bytes) -> int:
     for line in out.splitlines():
         if line.startswith("tables="):
             return int(line.split("=", 1)[1])
-    raise RekeyError("the catalog database does not open with its storage key")
+    raise RekeyError(f"{database.name} does not open with its storage key")
 
 
-def rekey_catalog(m_dir: Path, storage_key: Path, output: Path, *, sqlcipher: str = "sqlcipher",
-                  new_seed: bytes | None = None) -> RekeyResult:
-    """Write ``output/M/<name>`` and ``output/storage-key.json`` for a fresh seed."""
+def _rekey_one(binary: str, source: Path, old_seed: bytes, new_seed: bytes, target: Path, tmp: Path) -> None:
+    work = tmp / source.name
+    shutil.copy2(source, work)
+    journal = source.with_name(source.name + "-journal")
+    if journal.is_file():  # a hot journal is rolled back on open; keep it with the copy
+        shutil.copy2(journal, work.with_name(work.name + "-journal"))
+    tables = _count_tables(binary, work, old_seed)
+    _sqlcipher(binary, work,
+               f"PRAGMA key = \"x'{sqlcipher_key(old_seed)}'\";\n"
+               f"PRAGMA rekey = \"x'{sqlcipher_key(new_seed)}'\";\n")
+    leftover = work.with_name(work.name + "-journal")
+    if leftover.exists():
+        leftover.unlink()  # journal_mode=DELETE: a cold journal is only an empty header
+    if _count_tables(binary, work, new_seed) != tables:
+        raise RekeyError(f"the re-keyed {source.name} lost tables")
+    shutil.move(str(work), target)
+    target.chmod(0o644)
+
+
+def rekey_cache(m_dir: Path, storage_key: Path, output: Path, *, sqlcipher: str = "sqlcipher",
+                new_seeds: dict[str, bytes] | None = None) -> RekeyResult:
+    """Write ``output/M/<names>`` and ``output/storage-key.json`` under fresh seeds."""
     if shutil.which(sqlcipher) is None:
         raise RekeyError(f"{sqlcipher!r} not found; install SQLCipher 4 (e.g. brew install sqlcipher)")
-    old_seed, payload = read_catalog_seed(storage_key)
-    source = m_dir / storage_name(old_seed)
-    if not source.is_file():
-        raise RekeyError(f"catalog database {source.name} for this storage key is not in {m_dir}")
-    seed = new_seed if new_seed is not None else os.urandom(SEED_BYTES)
-    if len(seed) != SEED_BYTES or seed == old_seed:
-        raise RekeyError("the new seed must be 256 fresh bytes")
-    target_dir = output / "M"
-    target = target_dir / storage_name(seed)
+    payload = read_storage_key(storage_key)
     key_out = output / "storage-key.json"
-    if key_out.exists() or target.exists():
+    if key_out.exists() or (output / "M").exists():
         raise RekeyError(f"{output} already holds a re-keyed cache")
+    plan, skipped = [], []
+    for domain, prefs_key, required in DOMAINS:
+        value = payload["entries"].get(prefs_key)
+        source = m_dir / storage_name(decode_seed(value)) if value else None
+        if source is None or not source.is_file():
+            if required:
+                raise RekeyError(f"no {domain} database for this storage key in {m_dir}")
+            skipped.append(domain)
+            continue
+        old_seed = decode_seed(value)
+        seed = (new_seeds or {}).get(domain) or os.urandom(SEED_BYTES)
+        if len(seed) != SEED_BYTES or seed == old_seed:
+            raise RekeyError("a new seed must be 256 fresh bytes")
+        plan.append((domain, prefs_key, source, old_seed, seed))
 
-    with tempfile.TemporaryDirectory(prefix="rekey-", dir=output.parent if output.parent.exists() else None) as tmp:
-        work = Path(tmp) / "catalog.db"
-        shutil.copy2(source, work)
-        journal = source.with_name(source.name + "-journal")
-        if journal.is_file():  # a hot journal is rolled back on open; keep it with the copy
-            shutil.copy2(journal, work.with_name(work.name + "-journal"))
-        tables = _count_tables(sqlcipher, work, old_seed)
-        _sqlcipher(sqlcipher, work,
-                   f"PRAGMA key = \"x'{sqlcipher_key(old_seed)}'\";\n"
-                   f"PRAGMA rekey = \"x'{sqlcipher_key(seed)}'\";\n")
-        if work.with_name(work.name + "-journal").exists():
-            raise RekeyError("the re-keyed database still has a journal")
-        if _count_tables(sqlcipher, work, seed) != tables:
-            raise RekeyError("the re-keyed database lost tables")
-        target_dir.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(work), target)
-        target.chmod(0o644)
-
-    out_payload = {"prefs": payload.get("prefs"), "entries": {CATALOG_PREFS_KEY: encode_seed(seed)}}
-    key_out.write_text(json.dumps(out_payload, indent=2) + "\n", encoding="utf-8")
+    (output / "M").mkdir(parents=True)
+    databases, entries = {}, {}
+    with tempfile.TemporaryDirectory(prefix="rekey-", dir=output) as tmp:
+        for domain, prefs_key, source, old_seed, seed in plan:
+            target = output / "M" / storage_name(seed)
+            _rekey_one(sqlcipher, source, old_seed, seed, target, Path(tmp))
+            databases[domain] = target
+            entries[prefs_key] = encode_seed(seed)
+    key_out.write_text(json.dumps({"prefs": payload.get("prefs"), "entries": entries}, indent=2) + "\n",
+                       encoding="utf-8")
     key_out.chmod(0o600)
-    return RekeyResult(database=target, storage_key=key_out, tables=tables)
+    return RekeyResult(databases=databases, storage_key=key_out, skipped=tuple(skipped))
