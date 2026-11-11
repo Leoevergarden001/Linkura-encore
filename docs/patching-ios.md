@@ -46,5 +46,10 @@ alias re='python3 tools/re/il2cpp_re.py -f UnityFramework -s sym.json'
 | `STORY_PLAYBACK_PATCHES` | 剧情再生确认的 OK 改为关闭 | `--allow-story-playback` |
 | `TITLE_ID_PATCHES` | 标题页不显示玩家 ID | — |
 | `CHAPTER_PORTAL_PATCHES` | Chapter RANK 点击改为期间外提示 | `--allow-chapter-portal` |
+| `RES_VERSION_PATCHES` | 资源版本始终报告缓存的版本（`--res-version`），不读每个玩家的本地存储 | `--per-player-res-version` |
+| `CATALOG_SYNC_PATCHES` | 保留缓存里的资源目录，不下载资源清单 | `--allow-catalog-sync` |
+| `PLAYER_ID_PATCHES` | 玩家 ID 固定为 000000000（和 Android 一致），不需要原账号的 PlayerPrefs | `--keep-player-id` |
+
+后三组让 iOS 只凭资源目录库的存储密钥就能运行。需要返回一个字符串时，借用一个运行时不会用到的字符串常量（Mono BTLS 的报错信息），改写成需要的值，再把方法的元数据初始化指向它的槽位。
 
 metadata 字符串（API 地址、BGM 名等）的改写也在同一个文件里（`rewrite_literals`、`rewrite_default_values`），原理是原地缩短字符串，不移动任何偏移。

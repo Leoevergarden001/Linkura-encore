@@ -1,16 +1,18 @@
 """Export the local-storage key entry that pairs with an Android asset cache.
 
-The 5.1.0 client names and encrypts its external cache (files/D and files/M)
-with a per-install local-storage key kept in its encrypted Unity PlayerPrefs
-(shared_prefs/com.oddno.lovelive.v2.playerprefs.xml). A fresh install creates
-its own key and ignores an imported cache. The Localify module seeds the
+The 5.1.0 client names and encrypts its catalog database (files/M) with a
+per-install local-storage seed kept in its Unity PlayerPrefs
+(shared_prefs/com.oddno.lovelive.v2.playerprefs.xml; see cache_rekey for the
+derivation). A fresh install creates its own seed and ignores an imported
+cache. The Localify module seeds the
 entry written here (linkura-local/storage-key.json next to D/ and M/) before
 Unity reads PlayerPrefs.
 
 Only the storage-key entry is exported. Other entries in the same file hold
 account identity (for example the player id) and must not travel with a
 resource pack. The exported value still comes from a real install, so treat
-the output as private: keep it inside the resource pack, never in git.
+the output as private; resource packs replace it with a fresh key
+(cache_rekey) unless built with --keep-source-key.
 """
 
 from __future__ import annotations
