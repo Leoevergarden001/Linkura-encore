@@ -52,7 +52,7 @@ class BuildTest(unittest.TestCase):
             delta = _tar(t / "delta.tar", {"D/cd/cd2": b"22", "M/m1": b"new"})
             private = _tar(t / "priv.tar", {"./shared_prefs/com.oddno.lovelive.v2.playerprefs.xml": PREFS})
             out = t / "pack"
-            summary = build_resource_pack(snap, private, out, [delta])
+            summary = build_resource_pack(snap, private, out, [delta], fresh_key=False)
             self.assertEqual((summary.d_files, summary.m_files), (2, 1))
             self.assertEqual((out / "files/M/m1").read_bytes(), b"new")
             self.assertFalse((out / "files/Unity").exists())
@@ -61,7 +61,7 @@ class BuildTest(unittest.TestCase):
             manifest = json.loads((out / "MANIFEST.json").read_text())
             self.assertEqual(manifest["d_files"], 2)
             with self.assertRaises(ResourcePackError):
-                build_resource_pack(snap, private, out, [delta])
+                build_resource_pack(snap, private, out, [delta], fresh_key=False)
 
 
 class InstallTest(unittest.TestCase):
@@ -71,7 +71,7 @@ class InstallTest(unittest.TestCase):
             snap = _tar(t / "snap.tar", {"./D/ab/ab1": b"1", "./M/m1": b"m"})
             private = _tar(t / "priv.tar", {"./shared_prefs/com.oddno.lovelive.v2.playerprefs.xml": PREFS})
             pack = t / "pack"
-            build_resource_pack(snap, private, pack)
+            build_resource_pack(snap, private, pack, fresh_key=False)
             calls = []
             state = {"dirs": False}
 

@@ -20,7 +20,9 @@ jobs:
           server/build-host.sh
           python3 server/tests/smoke_test.py
       - name: Tool tests
-        run: python3 -m unittest discover -s tools/tests -t . -v
+        run: |
+          brew install sqlcipher
+          python3 -m unittest discover -s tools/tests -t . -v
       - name: Generator tests
         run: |
           pip install pyyaml

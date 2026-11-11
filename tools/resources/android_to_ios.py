@@ -12,7 +12,12 @@ fixes every UnityFS bundle:
   not render magenta (see unityfs_shader_swap.py). Slower: every bundle is
   parsed with UnityPy.
 
-Other files (raw audio/video/text, the M/ databases) are copied unchanged.
+Other files (raw audio/video/text) are copied unchanged. With --storage-key,
+the catalog database is copied under a freshly generated storage key and the
+other M/ databases (master data the client rebuilds, and the source install's
+own identity and settings) are left out, so the output carries no key of the
+source install (--keep-source-key copies M/ and the key unchanged; needs the
+sqlcipher tool otherwise).
 The output is a ``container/`` tree that tools/ios_device_setup.py installs:
 
     container/Documents/D/...  container/Documents/M/...
@@ -36,10 +41,13 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from unityfs_retarget import retarget  # noqa: E402
+from tools.linkura_offline.cache_rekey import rekey_catalog  # noqa: E402
 
 
-def convert_cache(cache: Path, output: Path, storage_key: Path | None, ipa: Path | None) -> Counter:
+def convert_cache(cache: Path, output: Path, storage_key: Path | None, ipa: Path | None,
+                  fresh_key: bool = True) -> Counter:
     documents = output / "container" / "Documents"
     stats: Counter = Counter()
     swap = player = None
@@ -78,12 +86,23 @@ def convert_cache(cache: Path, output: Path, storage_key: Path | None, ipa: Path
         if index % 2000 == 0:
             print(f"{index}/{len(files)} {time.time() - started:.0f}s {dict(stats)}", flush=True)
 
+    key_out = documents / "LinkuraOffline" / "storage-key.json"
+    if storage_key and fresh_key:
+        if not key_out.exists():  # re-runs keep the key generated the first time
+            with tempfile.TemporaryDirectory(dir=output) as tmp:
+                result = rekey_catalog(cache / "M", storage_key, Path(tmp) / "rekeyed")
+                (documents / "M").mkdir(parents=True, exist_ok=True)
+                key_out.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(result.database), documents / "M" / result.database.name)
+                shutil.move(str(result.storage_key), key_out)
+            print(f"catalog database re-keyed: M/{result.database.name}", flush=True)
+        return stats
     if (cache / "M").is_dir():
         shutil.copytree(cache / "M", documents / "M", dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("._*"))
     if storage_key:
-        (documents / "LinkuraOffline").mkdir(parents=True, exist_ok=True)
-        shutil.copy2(storage_key, documents / "LinkuraOffline" / "storage-key.json")
+        key_out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(storage_key, key_out)
     return stats
 
 
@@ -93,8 +112,11 @@ def main() -> None:
     parser.add_argument("--storage-key", type=Path, help="storage-key.json of that cache (resource pack format)")
     parser.add_argument("--ipa", type=Path, help="decrypted iOS IPA; enables the Metal shader swap")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--keep-source-key", action="store_true",
+                        help="copy M/ and the storage key unchanged instead of re-keying the catalog database")
     args = parser.parse_args()
-    stats = convert_cache(args.cache, args.output, args.storage_key, args.ipa)
+    args.output.mkdir(parents=True, exist_ok=True)
+    stats = convert_cache(args.cache, args.output, args.storage_key, args.ipa, fresh_key=not args.keep_source_key)
     print(f"done: {dict(stats)} -> {args.output / 'container'}")
     if stats["errors"]:
         sys.exit(1)

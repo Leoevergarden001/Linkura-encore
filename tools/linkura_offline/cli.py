@@ -17,6 +17,7 @@ from pathlib import Path
 from .android_repack import AndroidRepackError, repack_android_client
 from .android_resource_pack import ResourcePackError, build_resource_pack, install_resource_pack
 from .android_storage_key import StorageKeyError, export_storage_key
+from .cache_rekey import RekeyError, rekey_catalog
 from .ios_macho import IosError
 from .ios_offline import DEFAULT_PORT, DEFAULT_RES_VERSION, OFFLINE_PLAYER_ID, stage_offline_ios_client
 from .ios_symbols import write_symbols
@@ -87,8 +88,16 @@ def _android_storage_key(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cache_rekey(args: argparse.Namespace) -> int:
+    result = rekey_catalog(args.m_dir, args.storage_key, args.output, sqlcipher=args.sqlcipher)
+    print(f"OK  catalog database: {result.database} ({result.tables} tables)")
+    print(f"OK  fresh storage key: {result.storage_key} (replace the cache's M/ and storage-key.json with these)")
+    return 0
+
+
 def _pack_build(args: argparse.Namespace) -> int:
-    summary = build_resource_pack(args.snapshot, args.private, args.output, args.delta, force=args.force)
+    summary = build_resource_pack(args.snapshot, args.private, args.output, args.delta, force=args.force,
+                                  fresh_key=not args.keep_source_key)
     print(f"OK  resource pack: {summary.root} D={summary.d_files} M={summary.m_files} "
           f"bytes={summary.total_bytes} (private: keep out of git)")
     return 0
@@ -155,12 +164,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=_android_storage_key)
 
+    p = sub.add_parser("cache-rekey", help="copy a cache's catalog database under a fresh storage key")
+    p.add_argument("--m-dir", type=Path, required=True, help="the cache's M/ directory")
+    p.add_argument("--storage-key", type=Path, required=True, help="storage-key.json that pairs with it")
+    p.add_argument("--output", type=Path, required=True, help="new directory: M/<catalog> + storage-key.json")
+    p.add_argument("--sqlcipher", default="sqlcipher", help="SQLCipher 4 command line tool")
+    p.set_defaults(func=_cache_rekey)
+
     p = sub.add_parser("android-resource-pack-build", help="assemble a private resource pack (D/, M/, storage key)")
     p.add_argument("--snapshot", type=Path, required=True, help="tar of the game's external files dir")
     p.add_argument("--delta", type=Path, action="append", default=[], help="later tar(s) of the same dir; later wins")
     p.add_argument("--private", type=Path, required=True, help="tar of the game's private files (storage key only)")
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--force", action="store_true")
+    p.add_argument("--keep-source-key", action="store_true",
+                   help="keep all M/ databases and the source install's storage key (default: only the catalog "
+                        "database, re-keyed to a fresh key; needs the sqlcipher tool)")
     p.set_defaults(func=_pack_build)
 
     p = sub.add_parser("android-resource-pack-install", help="push a resource pack to a device with plain adb")
@@ -175,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (IosError, AndroidRepackError, ResourcePackError, StorageKeyError,
+    except (IosError, AndroidRepackError, ResourcePackError, StorageKeyError, RekeyError,
             OSError, ValueError, zipfile.BadZipFile, subprocess.SubprocessError) as error:
         print(f"ERR {args.command}: {error}")
         return 1

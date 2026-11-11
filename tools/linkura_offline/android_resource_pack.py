@@ -34,6 +34,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, Sequence
 
 from .android_storage_key import export_storage_key
+from .cache_rekey import RekeyError, rekey_catalog
 
 PACKAGE = "com.oddno.lovelive"
 ACTIVITY = f"{PACKAGE}/com.unity3d.player.UnityPlayerActivity"
@@ -113,6 +114,8 @@ def build_resource_pack(
     output: Path,
     delta_tars: Sequence[Path] = (),
     force: bool = False,
+    fresh_key: bool = True,
+    sqlcipher: str = "sqlcipher",
 ) -> PackSummary:
     for source in (snapshot_tar, private_tar, *delta_tars):
         if not source.is_file():
@@ -128,7 +131,19 @@ def build_resource_pack(
         extracted[str(delta)] = _extract_cache(delta, files_root)
     with tempfile.TemporaryDirectory() as tmp:
         prefs = _extract_prefs(private_tar, Path(tmp))
-        export_storage_key(prefs, files_root / "linkura-local" / "storage-key.json")
+        key_path = files_root / "linkura-local" / "storage-key.json"
+        export_storage_key(prefs, key_path)
+        if fresh_key:
+            # Keep only the catalog database, under a key no install ever had.
+            try:
+                result = rekey_catalog(files_root / "M", key_path, Path(tmp) / "rekeyed", sqlcipher=sqlcipher)
+            except RekeyError as error:
+                raise ResourcePackError(str(error)) from error
+            shutil.rmtree(files_root / "M")
+            (files_root / "M").mkdir()
+            shutil.move(str(result.database), files_root / "M" / result.database.name)
+            key_path.unlink()
+            shutil.move(str(result.storage_key), key_path)
     summary = summarize(output)
     manifest = {
         "format": "linkura-android-resource-pack/1",
@@ -138,6 +153,7 @@ def build_resource_pack(
         "d_files": summary.d_files,
         "m_files": summary.m_files,
         "total_bytes": summary.total_bytes,
+        "fresh_storage_key": fresh_key,
         "private": True,
     }
     (output / "MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
