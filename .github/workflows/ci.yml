@@ -1,0 +1,50 @@
+name: CI
+
+# Builds and tests everything that does not need game files.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  server-tools-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Offline server (host build + smoke test)
+        run: |
+          server/build-host.sh
+          python3 server/tests/smoke_test.py
+      - name: Tool tests
+        run: python3 -m unittest discover -s tools/tests -t . -v
+      - name: Generator tests
+        run: |
+          pip install pyyaml
+          python3 -m unittest discover -s server/generators/tests -v
+      - name: iOS dylib
+        run: |
+          ios/build.sh
+          LINKURA_REMOTE=0 ios/build.sh
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: SDK packages
+        run: sdkmanager --install "cmake;3.22.1" "ndk;26.3.11579264"
+      - name: Build module
+        working-directory: android
+        run: ./gradlew :app:assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linkura-offline-module
+          path: android/app/build/outputs/apk/debug/app-debug.apk

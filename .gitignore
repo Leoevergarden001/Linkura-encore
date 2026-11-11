@@ -20,3 +20,8 @@ local.properties
 /app/release
 .claude/
 __pycache__/
+# build outputs outside the Gradle project
+/android/build
+/android/app/build
+/ios/build
+/server/build
