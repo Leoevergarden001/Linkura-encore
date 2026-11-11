@@ -1,0 +1,1682 @@
+#include "../HookMain.h"
+#include "../Misc.hpp"
+#include "../Local.h"
+#include "HttpMock.hpp"
+#include <re2/re2.h>
+#include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <mutex>
+#include <string_view>
+#include <unordered_set>
+
+namespace LinkuraLocal::HookShare {
+    namespace {
+        static bool EnsureOfflineIdentityForLogin(const std::string& path) {
+            if (path != "/v1/user/login") return true;
+
+            // A clean 5.1.0 install can reach user/login before account/connect and
+            // therefore sends empty player_id/device_specific_id forever.  Returning
+            // an existing-user login response is not sufficient: the title flow reads
+            // Core.Instance.Identity again before it advances to Home.  Seed only the
+            // missing values in the game's own IdentityStorage so subsequent launches
+            // follow the normal persisted-identity path.
+            static std::mutex identityMutex;
+            static bool identityReady = false;
+            std::lock_guard<std::mutex> lock(identityMutex);
+            if (identityReady) return true;
+
+            UnityResolve::ThreadAttach();
+
+            static auto* getCoreInstance = Il2cppUtils::GetMethodIl2cpp(
+                    "Core.dll", "", "Core", "get_Instance", 0);
+            static auto* getIdentity = Il2cppUtils::GetMethodIl2cpp(
+                    "Core.dll", "", "Core", "get_Identity", 0);
+            static auto* getPlayerId = Il2cppUtils::GetMethodIl2cpp(
+                    "Core.dll", "", "IdentityStorage", "get_PlayerId", 0);
+            static auto* getDeviceSpecificId = Il2cppUtils::GetMethodIl2cpp(
+                    "Core.dll", "", "IdentityStorage", "get_DeviceSpecificId", 0);
+            static auto* saveIdentity = Il2cppUtils::GetMethodIl2cpp(
+                    "Core.dll", "", "IdentityStorage", "SaveIdentity", 2);
+
+            if (!getCoreInstance || !getIdentity || !getPlayerId
+                || !getDeviceSpecificId || !saveIdentity) {
+                Log::Error("[OfflineIdentity] unable to resolve 5.1.0 identity methods");
+                return false;
+            }
+
+            using StaticGetter = void*(*)(Il2cppUtils::MethodInfo*);
+            using InstanceGetter = void*(*)(void*, Il2cppUtils::MethodInfo*);
+            using StringGetter = Il2cppUtils::Il2CppString*(*)(void*, Il2cppUtils::MethodInfo*);
+            using SaveIdentity = void(*)(void*, Il2cppUtils::Il2CppString*,
+                                         Il2cppUtils::Il2CppString*, Il2cppUtils::MethodInfo*);
+
+            auto* core = reinterpret_cast<StaticGetter>(getCoreInstance->methodPointer)(getCoreInstance);
+            if (!core) {
+                Log::Warn("[OfflineIdentity] Core.Instance is not ready; will retry");
+                return false;
+            }
+            auto* identity = reinterpret_cast<InstanceGetter>(getIdentity->methodPointer)(core, getIdentity);
+            if (!identity) {
+                Log::Warn("[OfflineIdentity] Core.Identity is not ready; will retry");
+                return false;
+            }
+
+            auto* currentPlayerId = reinterpret_cast<StringGetter>(getPlayerId->methodPointer)(identity, getPlayerId);
+            auto* currentDeviceId = reinterpret_cast<StringGetter>(getDeviceSpecificId->methodPointer)(
+                    identity, getDeviceSpecificId);
+            const bool missingPlayerId = !currentPlayerId || currentPlayerId->ToString().empty();
+            const bool missingDeviceId = !currentDeviceId || currentDeviceId->ToString().empty();
+
+            if (missingPlayerId || missingDeviceId) {
+                auto* playerId = missingPlayerId
+                        ? Il2cppUtils::Il2CppString::New("000000000")
+                        : currentPlayerId;
+                auto* deviceId = missingDeviceId
+                        ? Il2cppUtils::Il2CppString::New("ffffffff-ffff-ffff-ffff-ffffffffffff")
+                        : currentDeviceId;
+                reinterpret_cast<SaveIdentity>(saveIdentity->methodPointer)(
+                        identity, playerId, deviceId, saveIdentity);
+                Log::InfoFmt("[OfflineIdentity] seeded missing identity player_id=%s device_specific_id=%s",
+                             missingPlayerId ? "yes" : "no", missingDeviceId ? "yes" : "no");
+            } else {
+                Log::Info("[OfflineIdentity] preserved existing game identity");
+            }
+
+            currentPlayerId = reinterpret_cast<StringGetter>(getPlayerId->methodPointer)(identity, getPlayerId);
+            currentDeviceId = reinterpret_cast<StringGetter>(getDeviceSpecificId->methodPointer)(
+                    identity, getDeviceSpecificId);
+            identityReady = currentPlayerId && !currentPlayerId->ToString().empty()
+                    && currentDeviceId && !currentDeviceId->ToString().empty();
+            if (!identityReady) {
+                Log::Warn("[OfflineIdentity] identity remained empty after SaveIdentity; will retry");
+            }
+            return identityReady;
+        }
+
+        static void DumpRestResponseHeadersIfPossible(void* response) {
+            if (!response) return;
+
+            const auto klass = Il2cppUtils::get_class_from_instance(response);
+            if (!klass || !klass->namespaze || !klass->name) return;
+            // Safety gate: only attempt for RestSharp response types.
+            if (std::string_view(klass->namespaze) != "RestSharp") return;
+            if (std::string_view(klass->name).find("RestResponse") == std::string_view::npos
+                && std::string_view(klass->name).find("Response") == std::string_view::npos) {
+                return;
+            }
+
+            static std::mutex s_mtx;
+            static std::unordered_set<void*> s_dumped;
+            {
+                std::lock_guard<std::mutex> _l(s_mtx);
+                if (s_dumped.find(response) != s_dumped.end()) return;
+                s_dumped.insert(response);
+                if (s_dumped.size() > 256) s_dumped.clear();
+            }
+
+            // Resolve RestResponseBase.get_Headers via MethodInfo (so we can pass MethodInfo*).
+            static Il2cppUtils::MethodInfo* s_getHeadersMi = nullptr;
+            if (!s_getHeadersMi) {
+                s_getHeadersMi = Il2cppUtils::GetMethodIl2cpp("RestSharp.dll", "RestSharp", "RestResponseBase", "get_Headers", 0);
+                if (!s_getHeadersMi) {
+                    s_getHeadersMi = Il2cppUtils::GetMethodIl2cpp("RestSharp", "RestSharp", "RestResponseBase", "get_Headers", 0);
+                }
+            }
+            if (!s_getHeadersMi) return;
+
+            // This hook may run on non-Unity threads.
+            UnityResolve::ThreadAttach();
+
+            using GetHeadersFn = void*(*)(void*, Il2cppUtils::MethodInfo*);
+            auto headersObj = reinterpret_cast<GetHeadersFn>(s_getHeadersMi->methodPointer)(response, s_getHeadersMi);
+            if (!headersObj) {
+                Log::InfoFmt("[ApiClient_Deserialize] response headers=null response=%p klass=%s.%s",
+                             response, klass->namespaze, klass->name);
+                return;
+            }
+
+            Log::InfoFmt("[ApiClient_Deserialize] response headers dump begin response=%p headers=%p klass=%s.%s",
+                         response, headersObj, klass->namespaze, klass->name);
+
+            // Avoid managed enumeration here: it can crash if we accidentally operate on a non-managed object.
+            // We only support System.Collections.Generic.List`1 layout (items/size/version/syncRoot).
+            int idx = 0;
+            auto hdrKlass = Il2cppUtils::get_class_from_instance(headersObj);
+            if (!hdrKlass || !hdrKlass->namespaze || !hdrKlass->name) {
+                Log::WarnFmt("[ApiClient_Deserialize] headers klass invalid headers=%p", headersObj);
+                return;
+            }
+            Log::InfoFmt("[ApiClient_Deserialize] headers runtime type=%s.%s", hdrKlass->namespaze, hdrKlass->name);
+            const bool isGenericList = std::string_view(hdrKlass->namespaze) == "System.Collections.Generic"
+                                    && std::string_view(hdrKlass->name).find("List`1") != std::string_view::npos;
+            if (!isGenericList) {
+                Log::WarnFmt("[ApiClient_Deserialize] headers type not supported for dump: %s.%s (headers=%p)",
+                             hdrKlass->namespaze, hdrKlass->name, headersObj);
+                return;
+            }
+
+            auto list = reinterpret_cast<UnityResolve::UnityType::List<void*>*>(headersObj);
+            if (!list) return;
+            const int listSize = list->size;
+            auto items = list->pList;
+            Log::InfoFmt("[ApiClient_Deserialize] headers list size=%d items=%p", listSize, items);
+            if (!items) {
+                Log::WarnFmt("[ApiClient_Deserialize] headers list items=null headers=%p", headersObj);
+                return;
+            }
+
+            const int cap = (int)items->max_length;
+            const int n = (listSize < cap) ? listSize : cap;
+
+            // Resolve Parameter.get_Name/get_Value via MethodInfo.
+            static void* s_paramKlass = nullptr;
+            static Il2cppUtils::MethodInfo* s_paramGetNameMi = nullptr;
+            static Il2cppUtils::MethodInfo* s_paramGetValueMi = nullptr;
+            if (!s_paramKlass) {
+                s_paramKlass = Il2cppUtils::GetClassIl2cpp("RestSharp.dll", "RestSharp", "Parameter");
+                if (!s_paramKlass) s_paramKlass = Il2cppUtils::GetClassIl2cpp("RestSharp", "RestSharp", "Parameter");
+                if (s_paramKlass) {
+                    s_paramGetNameMi = Il2cppUtils::GetMethodIl2cpp(s_paramKlass, "get_Name", 0);
+                    s_paramGetValueMi = Il2cppUtils::GetMethodIl2cpp(s_paramKlass, "get_Value", 0);
+                }
+            }
+
+            for (int i = 0; i < n && idx < 128; ++i) {
+                auto param = items->At((unsigned)i);
+                if (!param) {
+                    ++idx;
+                    continue;
+                }
+
+                std::string name = "(unknown)";
+                std::string value = "(null)";
+
+                if (s_paramGetNameMi) {
+                    using GetStrFn = Il2cppUtils::Il2CppString*(*)(void*, Il2cppUtils::MethodInfo*);
+                    auto s = reinterpret_cast<GetStrFn>(s_paramGetNameMi->methodPointer)(param, s_paramGetNameMi);
+                    if (s) name = s->ToString();
+                }
+
+                if (s_paramGetValueMi) {
+                    using GetObjFn2 = void*(*)(void*, Il2cppUtils::MethodInfo*);
+                    auto v = reinterpret_cast<GetObjFn2>(s_paramGetValueMi->methodPointer)(param, s_paramGetValueMi);
+                    if (v) {
+                        const auto vk = Il2cppUtils::get_class_from_instance(v);
+                        const bool isString = vk
+                            && vk->namespaze && std::string_view(vk->namespaze) == "System"
+                            && vk->name && std::string_view(vk->name) == "String";
+                        if (isString) {
+                            value = static_cast<Il2cppUtils::Il2CppString*>(v)->ToString();
+                        } else if (vk && vk->namespaze && vk->name) {
+                            value = std::string(vk->namespaze) + "." + vk->name;
+                        } else {
+                            value = "(object)";
+                        }
+                    }
+                }
+
+                // Log::VerboseFmt("[ApiClient_Deserialize] header[%d] %s: %s", idx, name.c_str(), value.c_str());
+                ++idx;
+            }
+
+            // Log::VerboseFmt("[ApiClient_Deserialize] response headers dump end response=%p count=%d", response, idx);
+        }
+    } // namespace
+
+    namespace Shareable {
+        // memory leak ?
+        std::unordered_map<std::string, ArchiveData> archiveData{};
+        void* realtimeRenderingArchiveControllerCache = nullptr;
+        float realtimeRenderingArchivePositionSeconds = 0;
+        std::string currentArchiveId = "";
+        float currentArchiveDuration = 0;
+        RenderScene renderScene = RenderScene::None;
+        SetPlayPosition_State setPlayPositionState = SetPlayPosition_State::Nothing;
+
+        // Function implementations
+        void resetRenderScene() {
+            renderScene = RenderScene::None;
+        }
+
+        bool renderSceneIsNone() {
+            return renderScene == RenderScene::None;
+        }
+
+        bool renderSceneIsFesLive() {
+            return renderScene == RenderScene::FesLive;
+        }
+
+        bool renderSceneIsWithLive() {
+            return renderScene == RenderScene::WithLive;
+        }
+
+        bool renderSceneIsStory() {
+            return renderScene == RenderScene::Story;
+        }
+    }
+
+    // URL替换函数：将external_link中的URL替换为assets_url
+    std::string replaceUriHost(const std::string& uri, const std::string& assets_url) {
+        // 使用RE2正则表达式匹配URL模式
+        // 匹配 https://foo.example.org 这样的URL，并考虑路径部分
+        std::string pattern = R"(^https://[^/]+(/.*)?$)";
+        RE2 re(pattern);
+        
+        if (!re.ok()) {
+            Log::WarnFmt("RE2 compile failed for pattern: %s, error: %s", pattern.c_str(), re.error().c_str());
+            return uri;
+        }
+        
+        std::string path_part;
+        if (RE2::FullMatch(uri, re, &path_part)) {
+            std::string result = assets_url;
+            if (!path_part.empty()) {
+                if (!assets_url.empty() && assets_url.back() == '/' && path_part.front() == '/') {
+                    result += path_part.substr(1);
+                } else if (!assets_url.empty() && assets_url.back() != '/' && path_part.front() != '/') {
+                    result += "/" + path_part;
+                } else {
+                    result += path_part;
+                }
+            }
+            Log::VerboseFmt("URL replaced: %s -> %s", uri.c_str(), result.c_str());
+            return result;
+        } else {
+            std::string result = assets_url;
+            if (!uri.empty()) {
+                if (!assets_url.empty() && assets_url.back() == '/' && uri.front() == '/') {
+                    result += uri.substr(1);
+                } else if (!assets_url.empty() && assets_url.back() != '/' && uri.front() != '/') {
+                    result += "/" + uri;
+                } else {
+                    result += uri;
+                }
+            }
+            Log::VerboseFmt("Path combined with assets_url: %s -> %s", uri.c_str(), result.c_str());
+            return result;
+        }
+    }
+
+    bool isMotionCaptureCompatible(const std::string & url, const nlohmann::json& archive_config) {
+        bool isCompatible = true;
+        auto isAlsArchive = url.ends_with("md");
+        isCompatible &= Config::isLegacyMrsVersion() ^ isAlsArchive;
+        if (archive_config.contains("version_compatibility") && 
+            !archive_config["version_compatibility"].is_null() && 
+            archive_config["version_compatibility"].is_object()) {
+            auto version_compatibility = archive_config["version_compatibility"];
+//            Log::DebugFmt("version_compatibility is %s", version_compatibility.dump().c_str());
+            if (version_compatibility.contains("rule") && !version_compatibility["rule"].is_null()) {
+                std::string rule = version_compatibility["rule"].get<std::string>();
+                isCompatible &= VersionCompatibility::VersionChecker(rule).checkCompatibility(Config::currentClientVersion);
+            }
+        }
+        return isCompatible;
+    }
+#pragma region HttpRequests
+    nlohmann::json handle_legacy_archive_data(nlohmann::json json) {
+        json["live_timeline_ids"] = json["timeline_ids"];
+        nlohmann::json character_ids = nlohmann::json::array();
+        for (const auto& character : json["characters"]) {
+            character_ids.push_back(character["character_id"]);
+        }
+        json["character_ids"] = character_ids;
+//        json["_id"] = 23;
+//        json["costume_ids"] = {3016};
+        Log::VerboseFmt("%s", json.dump().c_str());
+        if (Config::isLegacyMrsVersion()) {
+            for (auto& chapter : json["chapters"]) {
+                chapter["is_available"] = "true";
+            }
+        }
+        return json;
+    }
+
+    void clear_json_arr(nlohmann::json& json, const std::string& key) {
+        if (json.contains(key) && json[key].is_array()) {
+            json[key].clear();
+        }
+    }
+    nlohmann::json handle_get_with_archive_data(nlohmann::json json, bool is_legacy = false) {
+        if (Config::withliveOrientation == (int)HookLiveRender::LiveScreenOrientation::Landscape) {
+            json["is_horizontal"] = "true";
+        }
+        if (Config::withliveOrientation == (int)HookLiveRender::LiveScreenOrientation::Portrait) {
+            json["is_horizontal"] = "false";
+        }
+        if (Config::unlockAfter) {
+            json["has_extra_admission"] = "true";
+        }
+        if (Config::enableSetArchiveStartTime) {
+            json["chapters"][0]["play_time_second"] = Config::archiveStartTime;
+        }
+        if (Config::enableMotionCaptureReplay) {
+            auto archive_id = Shareable::currentArchiveId;
+            auto it = Config::archiveConfigMap.find(archive_id);
+            if (it == Config::archiveConfigMap.end()) return json;
+            auto archive_config = it->second;
+            auto replay_type = archive_config["replay_type"].get<uint>();
+            auto external_link = archive_config.contains("external_link") ? archive_config["external_link"].get<std::string>() : "";
+            auto external_fix_link = archive_config.contains("external_fix_link") ? archive_config["external_fix_link"].get<std::string>() : "";
+
+            auto assets_url = Config::motionCaptureResourceUrl;
+            if (replay_type == 0) {
+                json.erase("archive_url");
+            }
+            if (replay_type == 1) {
+                json.erase("video_url");
+                if (!external_link.empty()) {
+                    auto new_external_link = replaceUriHost(external_link, assets_url);
+                    json["archive_url"] = new_external_link;
+                }
+            }
+            if (replay_type == 2) {
+                json.erase("video_url");
+                if (!external_fix_link.empty()) {
+                    auto new_external_fix_link = replaceUriHost(external_fix_link, assets_url);
+                    json["archive_url"] = new_external_fix_link;
+                }
+            }
+            clear_json_arr(json, "timelines");
+            clear_json_arr(json, "gift_pt_rankings");
+        }
+        if (is_legacy) {
+            json = handle_legacy_archive_data(json);
+        }
+        return json;
+    }
+    nlohmann::json handle_get_fes_archive_data(nlohmann::json json, bool is_legacy = false) {
+        if (Config::unlockAfter) {
+            json["has_extra_admission"] = "true";
+        }
+        if (Config::fesArchiveUnlockTicket) {
+            json["selectable_camera_types"] = {1,2,3,4};
+            json["ticket_rank"] = 6;
+        }
+        if (Config::enableSetArchiveStartTime) {
+            json["chapters"][0]["play_time_second"] = Config::archiveStartTime;
+        }
+        if (Config::enableMotionCaptureReplay) {
+            auto archive_id = Shareable::currentArchiveId;
+            auto it = Config::archiveConfigMap.find(archive_id);
+            if (it == Config::archiveConfigMap.end()) return json;
+            auto archive_config = it->second;
+            auto replay_type = archive_config["replay_type"].get<uint>();
+            auto external_link = archive_config.contains("external_link") ? archive_config["external_link"].get<std::string>() : "";
+            auto external_fix_link = archive_config.contains("external_fix_link") ? archive_config["external_fix_link"].get<std::string>() : "";
+            auto assets_url = Config::motionCaptureResourceUrl;
+            if (replay_type == 0) {
+                json.erase("archive_url");
+            }
+            if (replay_type == 1) {
+                json.erase("video_url");
+                if (!external_link.empty()) {
+                    auto new_external_link = replaceUriHost(external_link, assets_url);
+                    json["archive_url"] = new_external_link;
+                }
+            }
+            if (replay_type == 2) {
+                json.erase("video_url");
+                if (!external_fix_link.empty()) {
+                    auto new_external_fix_link = replaceUriHost(external_fix_link, assets_url);
+                    json["archive_url"] = new_external_fix_link;
+                }
+            }
+            clear_json_arr(json, "timelines");
+            clear_json_arr(json, "gift_pt_rankings");
+        }
+        if (is_legacy) {
+            json = handle_legacy_archive_data(json);
+        }
+        return json;
+    }
+    bool filter_archive_by_rule(nlohmann::json archive) {
+        if (!Config::enableMotionCaptureReplay || !Config::filterMotionCaptureReplay) return false;
+        auto archive_id = archive["archives_id"].get<std::string>();
+        auto it = Config::archiveConfigMap.find(archive_id);
+        if (it == Config::archiveConfigMap.end()) {
+            return true; // not found should be filtered
+        }
+        auto archive_config = it->second;
+
+        /**
+         * filter by simple replay type
+         */
+        auto replay_type = archive_config["replay_type"].get<uint>();
+        if (replay_type == 0) return true;
+
+        // apply rule
+
+        // judge motion capture version is compatible with current client
+        if (Config::filterPlayableMotionCapture) {
+            if (replay_type == 1) {
+                if (!isMotionCaptureCompatible(archive_config["external_link"].get<std::string>(), archive_config)) {
+                    return true;
+                }
+            }
+            if (replay_type == 2) {
+                if (!isMotionCaptureCompatible(archive_config["external_fix_link"].get<std::string>(), archive_config)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    bool try_handle_get_archive_data(const std::string& archive_id) {
+        std::string message = "The motion replay is not compatible for current client!";
+        bool avoid_next = false;
+        if (Config::enableMotionCaptureReplay && Config::avoidAccidentalTouch) {
+            auto it = Config::archiveConfigMap.find(archive_id);
+            if (it == Config::archiveConfigMap.end()) return false;
+            auto archive_config = it->second;
+
+            if (archive_config.contains("version_compatibility") &&
+                  !archive_config["version_compatibility"].is_null() &&
+                  archive_config["version_compatibility"].is_object()) {
+                auto version_compatibility = archive_config["version_compatibility"];
+                if (version_compatibility.contains("message") && !version_compatibility["message"].is_null()) {
+                    message = version_compatibility["message"].get<std::string>();
+                }
+            }
+            // client version is valid
+            auto replay_type = archive_config["replay_type"].get<uint>();
+            if (replay_type == 0) {
+                return false;
+            }
+            if (replay_type == 1) {
+                if (!isMotionCaptureCompatible(archive_config["external_link"].get<std::string>(), archive_config)) {
+                    avoid_next = true;
+                }
+            }
+            if (replay_type == 2) {
+                if (!isMotionCaptureCompatible(archive_config["external_fix_link"].get<std::string>(), archive_config)) {
+                    avoid_next = true;
+                }
+            }
+        }
+        if (avoid_next) {
+            Log::ShowToast(message.c_str());
+        }
+        return avoid_next;
+    }
+
+    nlohmann::json handle_get_archive_list(nlohmann::json json, bool is_legacy = false) {
+        auto& archive_list = json["archive_list"];
+        archive_list.erase(
+                std::remove_if(archive_list.begin(), archive_list.end(),
+                               [](const nlohmann::json& archive) {
+                                   return filter_archive_by_rule(archive);
+                }),
+                archive_list.end());
+        for (auto& archive : archive_list) {
+            auto archive_id = archive["archives_id"].get<std::string>();
+            if (Config::unlockAfter) {
+                archive["has_extra_admission"] = "true";
+            }
+            if (Shareable::archiveData.find(archive_id) == Shareable::archiveData.end()) {
+                auto live_start_time = archive["live_start_time"].get<std::string>();
+                auto live_end_time = archive["live_end_time"].get<std::string>();
+                auto duration = LinkuraLocal::Misc::Time::parseISOTime(live_end_time) - LinkuraLocal::Misc::Time::parseISOTime(live_start_time);
+                Shareable::archiveData[archive_id] = {
+                        .id = archive_id,
+                        .duration = duration,
+                };
+                Log::VerboseFmt("archives id is %s, duration is %lld", archive_id.c_str(), duration);
+            }
+            if (Config::enableMotionCaptureReplay && Config::enableInGameReplayDisplay) {
+                auto it = Config::archiveConfigMap.find(archive_id);
+                if (it == Config::archiveConfigMap.end()) continue;
+                auto archive_config = it->second;
+                auto replay_type = archive_config["replay_type"].get<uint>();
+                auto archive_title = archive["name"].get<std::string>();
+                std::string recommendVersion;
+                if (archive_config.contains("version_compatibility") &&
+                    !archive_config["version_compatibility"].is_null() &&
+                    archive_config["version_compatibility"].is_object()) {
+                    auto version_compatibility = archive_config["version_compatibility"];
+                    if (version_compatibility.contains("rule") &&
+                        !version_compatibility["rule"].is_null()) {
+                        std::string rule = version_compatibility["rule"].get<std::string>();
+                        recommendVersion = Config::getRecommendVersion(rule);
+                    }
+                }
+                recommendVersion = recommendVersion.empty() ? recommendVersion : "[" + recommendVersion + "]";
+
+                /**
+                 * isMrsVersion isAlsArchive Playable
+                 * 0            0            0
+                 * 0            1            1
+                 * 1            0            1
+                 * 1            1            0
+                 *
+                 * Exclusive or: isMrsVersion ^ isAls
+                 */
+                if (replay_type == 1) { // motion capture replay
+                    std::string mark = isMotionCaptureCompatible(archive_config["external_link"].get<std::string>(), archive_config) ? "✅" : "❌" + recommendVersion;
+                    archive_title = mark + archive_title;
+                }
+                if (replay_type == 2) {
+                    std::string mark = isMotionCaptureCompatible(archive_config["external_fix_link"].get<std::string>(), archive_config) ? "☑️" : "❌" + recommendVersion;
+                    archive_title = mark + archive_title;
+                }
+                if (replay_type == 0) { // video replay
+                    archive_title = "📺" + archive_title;
+                }
+                archive["name"] = archive_title;
+            }
+            if (is_legacy) {
+                if (archive["live_type"].get<int>() == 2) { // with meets
+                    archive["ticket_rank"] = 1;
+                }
+            }
+        }
+        if (is_legacy) {
+            json.erase("filterable_characters");
+            json.erase("sortable_fields");
+        }
+        return json;
+    }
+
+    void* advSeriesMasterInstance = nullptr;
+    std::unordered_set<int64_t> advSeriesIdExistsCache;
+    std::unordered_set<int64_t> advSeriesIdNotExistsCache;
+
+    void* advDatasMasterInstance = nullptr;
+    std::unordered_set<int64_t> advDataIdExistsCache;
+    std::unordered_set<int64_t> advDataIdNotExistsCache;
+
+    static bool IsConnectionLocationField(std::string_view fieldName) {
+        std::string normalized;
+        normalized.reserve(fieldName.size());
+        for (const auto ch : fieldName) {
+            normalized.push_back(static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(ch))));
+        }
+        return normalized.find("path") != std::string::npos
+                || normalized.find("database") != std::string::npos
+                || normalized.find("connectionstring") != std::string::npos;
+    }
+
+    // Home's LauncherBanners query comes from the original client's Master
+    // SQLite connection, not from an OpenAPI route.  Record the actual
+    // connection type and any string path fields before attempting a data
+    // deployment; guessing a SQLite schema or an Android file location would
+    // make a preservation pack non-reproducible.
+    static void LogMasterConnectionLocation(std::string_view masterName, void* connection) {
+        if (!connection) {
+            Log::WarnFmt("[MasterData] %.*s constructed with null connection",
+                         static_cast<int>(masterName.size()), masterName.data());
+            return;
+        }
+
+        const auto* connectionClass = Il2cppUtils::get_class_from_instance(connection);
+        if (!connectionClass || !connectionClass->name) {
+            Log::WarnFmt("[MasterData] %.*s connection runtime class is unavailable",
+                         static_cast<int>(masterName.size()), masterName.data());
+            return;
+        }
+
+        Log::InfoFmt("[MasterData] %.*s connection=%s.%s",
+                     static_cast<int>(masterName.size()), masterName.data(),
+                     connectionClass->namespaze ? connectionClass->namespaze : "",
+                     connectionClass->name);
+
+        void* iterator = nullptr;
+        Il2cppUtils::FieldInfo* field = nullptr;
+        while ((field = UnityResolve::Invoke<Il2cppUtils::FieldInfo*>(
+                "il2cpp_class_get_fields", connectionClass, &iterator))) {
+            if (!field->name || field->offset <= 0 || !IsConnectionLocationField(field->name)) {
+                continue;
+            }
+            const auto* typeName = field->type
+                    ? UnityResolve::Invoke<const char*>("il2cpp_type_get_name", field->type)
+                    : nullptr;
+            if (!typeName || std::string_view(typeName) != "System.String") {
+                continue;
+            }
+            auto* value = Il2cppUtils::ClassGetFieldValue<Il2cppUtils::Il2CppString*>(
+                    connection, field);
+            Log::InfoFmt("[MasterData] %.*s connection.%s=%s",
+                         static_cast<int>(masterName.size()), masterName.data(), field->name,
+                         value ? value->ToString().c_str() : "<null>");
+        }
+    }
+
+    DEFINE_HOOK(void, Silverflame_SFL_AdvSeriesMaster_ctor, (void* self, void* conn)) {
+        Log::DebugFmt("Silverflame_SFL_AdvSeriesMaster_ctor HOOKED, instance=%p", self);
+        advSeriesMasterInstance = self;
+        // 清空缓存
+        advSeriesIdExistsCache.clear();
+        advSeriesIdNotExistsCache.clear();
+        return Silverflame_SFL_AdvSeriesMaster_ctor_Orig(self, conn);
+    }
+
+    DEFINE_HOOK(void*, Silverflame_SFL_AdvSeriesMaster_Fetch, (void* self, int64_t id)) {
+        void* result = Silverflame_SFL_AdvSeriesMaster_Fetch_Orig(self, id);
+        return result;
+    }
+
+    DEFINE_HOOK(void, Silverflame_SFL_AdvDatasMaster_ctor, (void* self, void* conn)) {
+        Log::DebugFmt("Silverflame_SFL_AdvDatasMaster_ctor HOOKED, instance=%p", self);
+        advDatasMasterInstance = self;
+        // 清空缓存
+        advDataIdExistsCache.clear();
+        advDataIdNotExistsCache.clear();
+        return Silverflame_SFL_AdvDatasMaster_ctor_Orig(self, conn);
+    }
+
+    DEFINE_HOOK(void, Silverflame_SFL_LauncherBannersMaster_ctor, (void* self, void* conn)) {
+        LogMasterConnectionLocation("LauncherBannersMaster", conn);
+        return Silverflame_SFL_LauncherBannersMaster_ctor_Orig(self, conn);
+    }
+
+    DEFINE_HOOK(void*, Silverflame_SFL_AdvDatasMaster_Fetch, (void* self, int64_t id)) {
+        void* result = Silverflame_SFL_AdvDatasMaster_Fetch_Orig(self, id);
+        return result;
+    }
+
+    // 辅助函数：检查 adv_series_id 是否存在于本地数据库（带缓存）
+    bool isAdvSeriesIdExists(int64_t id) {
+        if (advSeriesIdExistsCache.count(id)) {
+            return true;
+        }
+        if (advSeriesIdNotExistsCache.count(id)) {
+            return false;
+        }
+
+        if (!advSeriesMasterInstance) {
+            Log::WarnFmt("AdvSeriesMaster instance is null, cannot check id=%lld", id);
+            return true; // 如果实例不存在，默认返回 true 不过滤
+        }
+        void* result = Silverflame_SFL_AdvSeriesMaster_Fetch_Orig(advSeriesMasterInstance, id);
+        bool exists = result != nullptr;
+
+        if (exists) {
+            advSeriesIdExistsCache.insert(id);
+        } else {
+            advSeriesIdNotExistsCache.insert(id);
+            Log::DebugFmt("adv_series_id=%lld not found in local database", id);
+        }
+
+        return exists;
+    }
+
+    bool isAdvDataIdExists(int64_t id) {
+        if (advDataIdExistsCache.count(id)) {
+            return true;
+        }
+        if (advDataIdNotExistsCache.count(id)) {
+            return false;
+        }
+
+        if (!advDatasMasterInstance) {
+            Log::WarnFmt("AdvDatasMaster instance is null, cannot check id=%lld", id);
+            return true; // 如果实例不存在，默认返回 true 不过滤
+        }
+        void* result = Silverflame_SFL_AdvDatasMaster_Fetch_Orig(advDatasMasterInstance, id);
+        bool exists = result != nullptr;
+
+        if (exists) {
+            advDataIdExistsCache.insert(id);
+        } else {
+            advDataIdNotExistsCache.insert(id);
+            Log::DebugFmt("adv_data_id=%lld not found in local database", id);
+        }
+
+        return exists;
+    }
+
+    template<typename Predicate>
+    void json_erase_if(nlohmann::json& arr, Predicate pred) {
+        arr.erase(std::remove_if(arr.begin(), arr.end(), pred), arr.end());
+    }
+
+    void filterActivityRecordMonthlyInfoList(nlohmann::json& json) {
+        if (!json.contains("activity_record_monthly_info_list") || !json["activity_record_monthly_info_list"].is_array()) {
+            return;
+        }
+        auto& info_list = json["activity_record_monthly_info_list"];
+
+        json_erase_if(info_list, [](const nlohmann::json& info_item) {
+            auto adv_series_id = info_item.value("adv_series_id", 0LL);
+            if (adv_series_id && !isAdvSeriesIdExists(adv_series_id)) {
+                Log::DebugFmt("Filtering out adv_series_id=%lld", adv_series_id);
+                return true;
+            }
+            return false;
+        });
+
+        for (auto& info_item : info_list) {
+            if (!info_item.contains("adv_info_list") || !info_item["adv_info_list"].is_array()) continue;
+            json_erase_if(info_item["adv_info_list"], [](const nlohmann::json& adv_info) {
+                auto adv_data_id = adv_info.value("adv_data_id", 0LL);
+                if (adv_data_id && !isAdvDataIdExists(adv_data_id)) {
+                    Log::DebugFmt("Filtering out adv_data_id=%lld", adv_data_id);
+                    return true;
+                }
+                return false;
+            });
+        }
+    }
+
+    uintptr_t ArchiveApi_ArchiveGetFesArchiveDataWithHttpInfoAsync_MoveNext_Addr = 0;
+    uintptr_t ArchiveApi_ArchiveGetWithArchiveDataWithHttpInfoAsync_MoveNext_Addr = 0;
+    /**
+     * Legacy version 1.x.x
+     */
+    uintptr_t ArchiveApi_ArchiveGetFesArchiveDataWithHttpInfoAsync_Old_MoveNext_Addr = 0;
+    uintptr_t ArchiveApi_ArchiveGetWithArchiveDataWithHttpInfoAsync_Old_MoveNext_Addr = 0;
+    uintptr_t ArchiveApi_ArchiveGetArchiveList_Old_MoveNext_Addr = 0;
+
+    uintptr_t ArchiveApi_ArchiveGetArchiveList_MoveNext_Addr = 0;
+    uintptr_t WithliveApi_WithliveEnterWithHttpInfoAsync_MoveNext_Addr = 0;
+    uintptr_t FesliveApi_FesliveEnterWithHttpInfoAsync_MoveNext_Addr = 0;
+
+    uintptr_t WebviewLiveApi_WebviewLiveLiveInfoWithHttpInfoAsync_MoveNext_Addr = 0;
+    uintptr_t WithliveApi_WithliveLiveInfoWithHttpInfoAsync_MoveNext_Addr = 0;
+    uintptr_t FesliveApi_FesliveLiveInfoWithHttpInfoAsync_MoveNext_Addr = 0;
+    uintptr_t ArchiveApi_ArchiveWithliveInfoWithHttpInfoAsync_MoveNext_Addr = 0;
+
+    uintptr_t ActivityRecordGetTopWithHttpInfoAsync_MoveNext_Addr = 0;
+
+    // The offline title continuation needs the generated state-machine state,
+    // the first closure, and the result flag captured by that closure.
+    Il2cppUtils::FieldInfo* titleStartButtonStateField = nullptr;
+    Il2cppUtils::FieldInfo* titleStartButtonControllerField = nullptr;
+    Il2cppUtils::FieldInfo* titleStartButtonClosure0Field = nullptr;
+    Il2cppUtils::FieldInfo* titleControllerLoginResponseField = nullptr;
+    Il2cppUtils::FieldInfo* titleIsUseUserSuccessField = nullptr;
+    std::atomic<bool> pendingOfflineHomeTransition{false};
+
+    template <typename T>
+    static bool ReadTitleFieldAt(void* instance, Il2cppUtils::FieldInfo* field,
+                                 int32_t extraOffset, T& value) {
+        if (!instance || !field) return false;
+        const auto offset = static_cast<int64_t>(field->offset) + extraOffset;
+        if (offset < 0 || offset > 0x1000) return false;
+        value = *reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(instance) + offset);
+        return true;
+    }
+
+    static void LogTitleStateMachineFields(void* stateMachine, const char* phase, unsigned sequence) {
+        int32_t boxedState = 0;
+        int32_t unboxedState = 0;
+        void* boxedController = nullptr;
+        void* unboxedController = nullptr;
+        void* loginResponse = nullptr;
+        const bool hasBoxedState = ReadTitleFieldAt(
+                stateMachine, titleStartButtonStateField, 0, boxedState);
+        const bool hasUnboxedState = ReadTitleFieldAt(
+                stateMachine, titleStartButtonStateField, -16, unboxedState);
+        const bool hasBoxedController = ReadTitleFieldAt(
+                stateMachine, titleStartButtonControllerField, 0, boxedController);
+        const bool hasUnboxedController = ReadTitleFieldAt(
+                stateMachine, titleStartButtonControllerField, -16, unboxedController);
+        const auto controller = hasUnboxedController ? unboxedController : boxedController;
+        const bool hasLoginResponse = ReadTitleFieldAt(
+                controller, titleControllerLoginResponseField, 0, loginResponse);
+        Log::InfoFmt(
+                "[LoginFlow] title state %s #%u boxedState=%s%d unboxedState=%s%d "
+                "boxedController=%s%p unboxedController=%s%p loginRes=%s%p",
+                phase,
+                sequence,
+                hasBoxedState ? "" : "?",
+                boxedState,
+                hasUnboxedState ? "" : "?",
+                unboxedState,
+                hasBoxedController ? "" : "?",
+                boxedController,
+                hasUnboxedController ? "" : "?",
+                unboxedController,
+                hasLoginResponse ? "" : "?",
+                hasLoginResponse ? loginResponse : nullptr);
+
+        // The response object is populated at state=4.  Serialize it once per
+        // object so we can see the exact branch-driving flags without changing
+        // the title flow or depending on generated model getter ABIs.
+        static void* lastLoginResponse = nullptr;
+        if (loginResponse && loginResponse != lastLoginResponse) {
+            lastLoginResponse = loginResponse;
+            auto* json = Il2cppUtils::ToJsonStr(loginResponse);
+            if (json) {
+                Log::InfoFmt("[LoginFlow] loginRes json=%s", json->ToString().c_str());
+            } else {
+                Log::WarnFmt("[LoginFlow] loginRes serialization returned null object=%p", loginResponse);
+            }
+        }
+    }
+
+    DEFINE_HOOK(void, TitleSceneController_SetPlayerId, (void* self,
+            Il2cppUtils::Il2CppString* playerId, void* method_info)) {
+        const auto value = playerId ? playerId->ToString() : "<null>";
+        Log::InfoFmt("[LoginFlow] TitleSceneController.SetPlayerId self=%p player_id=%s",
+                     self, value.c_str());
+        TitleSceneController_SetPlayerId_Orig(self, playerId, method_info);
+    }
+
+    DEFINE_HOOK(void, TitleSceneController_OnClickStartButton_MoveNext, (void* self,
+            void* method_info)) {
+        static std::atomic<unsigned> sequence{0};
+        const auto current = sequence.fetch_add(1, std::memory_order_relaxed);
+        int32_t stateBefore = 0;
+        void* finishClosure = nullptr;
+        bool loginSucceeded = false;
+        ReadTitleFieldAt(self, titleStartButtonStateField, -16, stateBefore);
+        ReadTitleFieldAt(self, titleStartButtonClosure0Field, -16, finishClosure);
+        ReadTitleFieldAt(finishClosure, titleIsUseUserSuccessField, 0, loginSucceeded);
+        if (stateBefore == -1) {
+            pendingOfflineHomeTransition.store(false, std::memory_order_release);
+        }
+        if (current < 128) {
+            Log::InfoFmt("[LoginFlow] TitleSceneController.<OnClickStartButton>d__6.MoveNext enter #%u self=%p",
+                         current + 1, self);
+            LogTitleStateMachineFields(self, "enter", current + 1);
+        }
+        TitleSceneController_OnClickStartButton_MoveNext_Orig(self, method_info);
+        int32_t stateAfter = 0;
+        ReadTitleFieldAt(self, titleStartButtonStateField, -16, stateAfter);
+
+        // Linkura 5.1.0 gates its final title transition behind an online
+        // resource-initialization UniTask<bool>.  In preservation mode the
+        // request login succeeds against the local route, but that online-only
+        // resource step returns false and silently drops the client's own
+        // completion callback.  Reuse that exact callback after the state
+        // machine has otherwise completed; it performs the normal SceneChanger
+        // transition and therefore preserves all client-side scene selection.
+        if (Config::enableOfflineApiMock
+                && stateBefore == 9
+                && stateAfter == -2
+                && finishClosure
+                && loginSucceeded) {
+            if (!pendingOfflineHomeTransition.exchange(
+                    true, std::memory_order_acq_rel)) {
+                Log::Warn("[LoginFlow] offline resource bootstrap did not finish; "
+                          "deferred the preserved Home transition");
+            }
+        }
+        if (current < 128) {
+            LogTitleStateMachineFields(self, "return", current + 1);
+            Log::InfoFmt("[LoginFlow] TitleSceneController.<OnClickStartButton>d__6.MoveNext return #%u self=%p",
+                         current + 1, self);
+        }
+    }
+
+    DEFINE_HOOK(void, TitleSceneController_AlterUpdateScene,
+            (void* self, void* method_info)) {
+        TitleSceneController_AlterUpdateScene_Orig(self, method_info);
+
+        // Scene changes must not be started while the async login MoveNext is
+        // still unwinding.  AlterUpdateScene is the title controller's normal
+        // main-thread frame callback, so it provides a safe next-frame point.
+        if (!pendingOfflineHomeTransition.exchange(
+                false, std::memory_order_acq_rel)) return;
+
+        // In 5.1.0 the preserved completion callback performs several retired
+        // online-service operations before its final ChangeScene call.  Those
+        // operations no longer complete offline.  The callback's own final
+        // branch selects scene 3 when is_login_bonus_receive=true, which is
+        // exactly the response served by the preservation login route.  Scene
+        // 35 is the login-bonus scene and would immediately redirect when its
+        // offline list is empty.
+        HookDebug::ChangeSceneForOfflineLogin(3);
+    }
+
+    // http request log
+    DEFINE_HOOK(void*, ApiClient_CallApiAsync, (void* self,
+            Il2cppUtils::Il2CppString* path, void* method,
+            void* queryParams, void* postBody,
+            void* headerParams, void* formParams, void* fileParams, void* pathParams,
+            Il2cppUtils::Il2CppString* contentType, void* cancellationToken, void* method_info)) {
+        auto strPath = path ? path->ToString() : "(null)";
+        std::string strBody = "{}";
+        if (postBody) {
+            const auto klass = Il2cppUtils::get_class_from_instance(postBody);
+            const bool isString = klass
+                && klass->name && std::string_view(klass->name) == "String"
+                && klass->namespaze && std::string_view(klass->namespaze) == "System";
+            if (isString) {
+                auto bodyStr = static_cast<Il2cppUtils::Il2CppString*>(postBody);
+                strBody = bodyStr->ToString();
+            }
+        }
+        Log::VerboseFmt("[ApiClient_CallApiAsync] path: %s\nrequest: %s", strPath.c_str(), strBody.c_str());
+
+        if (Config::enableOfflineApiMock && path) {
+            EnsureOfflineIdentityForLogin(strPath);
+            auto task = LinkuraLocal::HttpMock::CreateMockTaskForApiPath(strPath, strBody);
+            if (!task) {
+                Log::InfoFmt("[HttpMock] noop/unmatched for path=%s, returning nullptr", strPath.c_str());
+                return nullptr;
+            }
+            return task;
+        }
+
+        return ApiClient_CallApiAsync_Orig(self, path, method, queryParams, postBody,
+                                          headerParams, formParams, fileParams, pathParams,
+                                          contentType, cancellationToken, method_info);
+    }
+    // Lowercase response header names so the client's case-sensitive game-state header lookups
+    // (fan_level, user_stamina, x-res-version, ...) still match when an HTTP/1.1 proxy hop Title-Cases
+    // them. This getter is what the OpenAPI layer reads to build the ApiResponse.Headers dictionary.
+    DEFINE_HOOK(void*, RestResponseBase_get_Headers, (void* self, void* method_info)) {
+        using GetNameFn = Il2cppUtils::Il2CppString*(*)(void*, Il2cppUtils::MethodInfo*);
+        using SetNameFn = void(*)(void*, Il2cppUtils::Il2CppString*, Il2cppUtils::MethodInfo*);
+
+        auto* headers = RestResponseBase_get_Headers_Orig(self, method_info);
+
+        // Resolve RestSharp.Parameter's name accessors once.
+        static Il2cppUtils::MethodInfo* getNameMethod = nullptr;
+        static Il2cppUtils::MethodInfo* setNameMethod = nullptr;
+        static const bool resolved = [] {
+            auto* parameterClass = Il2cppUtils::GetClassIl2cpp("RestSharp.dll", "RestSharp", "Parameter");
+            if (!parameterClass) return false;
+            getNameMethod = Il2cppUtils::GetMethodIl2cpp(parameterClass, "get_Name", 0);
+            setNameMethod = Il2cppUtils::GetMethodIl2cpp(parameterClass, "set_Name", 1);
+            return getNameMethod && setNameMethod;
+        }();
+        if (!resolved || !headers) return headers;
+
+        auto* headerList = reinterpret_cast<UnityResolve::UnityType::List<void*>*>(headers);
+        auto* parameters = headerList->pList;
+        if (!parameters) return headers;
+        const int count = std::min(headerList->size, static_cast<int>(parameters->max_length));
+
+        for (int i = 0; i < count; i++) {
+            void* parameter = parameters->At(static_cast<unsigned>(i));
+            if (!parameter) continue;
+
+            auto* nameStr = reinterpret_cast<GetNameFn>(getNameMethod->methodPointer)(parameter, getNameMethod);
+            if (!nameStr) continue;
+
+            const std::string original = nameStr->ToString();
+            std::string lowercased = original;
+            std::transform(lowercased.begin(), lowercased.end(), lowercased.begin(),
+                           [](unsigned char ch) { return std::tolower(ch); });
+            if (lowercased != original) {
+                reinterpret_cast<SetNameFn>(setNameMethod->methodPointer)(
+                    parameter, Il2cppUtils::Il2CppString::New(lowercased), setNameMethod);
+            }
+        }
+        return headers;
+    }
+    // http response modify
+    DEFINE_HOOK(void* , ApiClient_Deserialize, (void* self, void* response, void* type, void* method_info)) {
+        if (Config::dbgMode || Config::enableOfflineApiMock) {
+            auto caller = __builtin_return_address(0);
+            Log::VerboseFmt("[ApiClient_Deserialize] enter self=%p response=%p type=%p caller=%p", self, response, type, caller);
+            DumpRestResponseHeadersIfPossible(response);
+        }
+        auto result = ApiClient_Deserialize_Orig(self, response, type, method_info);
+        auto json = nlohmann::json::parse(Il2cppUtils::ToJsonStr(result)->ToString());
+        // Print API response type name and response body for debugging
+        {
+            auto klass = UnityResolve::Invoke<void*>("il2cpp_class_from_system_type", type);
+            if (klass) {
+                auto ns   = UnityResolve::Invoke<const char*>("il2cpp_class_get_namespace", klass);
+                auto name = UnityResolve::Invoke<const char*>("il2cpp_class_get_name", klass);
+                Log::VerboseFmt("[ApiClient_Deserialize] type: %s.%s\nresponse: %s",
+                    ns ? ns : "", name ? name : "", json.dump().c_str());
+            }
+        }
+        auto caller = __builtin_return_address(0);
+        IF_CALLER_WITHIN(ArchiveApi_ArchiveGetFesArchiveDataWithHttpInfoAsync_MoveNext_Addr, caller, 3000) { // hook /v1/archive/get_fes_archive_data response
+            json = handle_get_fes_archive_data(json);
+            result = Il2cppUtils::FromJsonStr(json.dump(), type);
+        }
+        IF_CALLER_WITHIN(ArchiveApi_ArchiveGetWithArchiveDataWithHttpInfoAsync_MoveNext_Addr, caller, 3000) { // hook /v1/archive/get_with_archive_data response
+            json = handle_get_with_archive_data(json);
+            result = Il2cppUtils::FromJsonStr(json.dump(), type);
+        }
+        IF_CALLER_WITHIN(ArchiveApi_ArchiveGetFesArchiveDataWithHttpInfoAsync_Old_MoveNext_Addr, caller, 3000) { // hook /v1/archive/get_fes_archive_data response 1.x.x
+            json = handle_get_fes_archive_data(json, Config::isFirstYearVersion());
+            result = Il2cppUtils::FromJsonStr(json.dump(), type);
+        }
+        IF_CALLER_WITHIN(ArchiveApi_ArchiveGetWithArchiveDataWithHttpInfoAsync_Old_MoveNext_Addr, caller, 3000) { // hook /v1/archive/get_with_archive_data response 1.x.x
+            json = handle_get_with_archive_data(json, Config::isFirstYearVersion());
+            result = Il2cppUtils::FromJsonStr(json.dump(), type);
+        }
+        IF_CALLER_WITHIN(ArchiveApi_ArchiveGetArchiveList_MoveNext_Addr, caller, 3000) { // hook /v1/archive/get_archive_list response
+            json = handle_get_archive_list(json);
+            result = Il2cppUtils::FromJsonStr(json.dump(), type);
+        }
+        IF_CALLER_WITHIN(ArchiveApi_ArchiveGetArchiveList_Old_MoveNext_Addr, caller, 3000) { // 1.x.x
+            json = handle_get_archive_list(json, Config::isFirstYearVersion());
+            result = Il2cppUtils::FromJsonStr(json.dump(), type);
+        }
+        IF_CALLER_WITHIN(WithliveApi_WithliveEnterWithHttpInfoAsync_MoveNext_Addr, caller, 3000) {
+            if (Config::withliveOrientation == (int)HookLiveRender::LiveScreenOrientation::Landscape) {
+                json["is_horizontal"] = "true";
+            }
+            if (Config::withliveOrientation == (int)HookLiveRender::LiveScreenOrientation::Portrait) {
+                json["is_horizontal"] = "false";
+            }
+            if (Config::unlockAfter) {
+                json["has_extra_admission"] = "true";
+            }
+            result = Il2cppUtils::FromJsonStr(json.dump(), type);
+        }
+//        IF_CALLER_WITHIN(FesliveApi_FesliveEnterWithHttpInfoAsync_MoveNext_Addr, caller, 3000) {
+////            if (Config::unlockAfter) {
+////                json["has_extra_admission"] = "true";
+////            }
+//            // if (Config::fesArchiveUnlockTicket) {
+//            //     json["selectable_camera_types"] = {1,2,3,4};
+//            //     json["ticket_rank"] = 6;
+//            // }
+//            result = Il2cppUtils::FromJsonStr(json.dump(), type);
+//        }
+        // live info
+        IF_CALLER_WITHIN(ArchiveApi_ArchiveWithliveInfoWithHttpInfoAsync_MoveNext_Addr, caller, 3000) {
+            if (Config::unlockAfter) {
+                json["has_extra_admission"] = "true";
+            }
+            result = Il2cppUtils::FromJsonStr(json.dump(), type);
+        }
+        IF_CALLER_WITHIN(WithliveApi_WithliveLiveInfoWithHttpInfoAsync_MoveNext_Addr, caller, 3000) {
+            if (Config::unlockAfter) {
+                json["has_extra_admission"] = "true";
+//                json["has_admission"] = "true";
+            }
+            result = Il2cppUtils::FromJsonStr(json.dump(), type);
+        }
+//        IF_CALLER_WITHIN(FesliveApi_FesliveLiveInfoWithHttpInfoAsync_MoveNext_Addr, caller, 3000) {
+////            if (Config::unlockAfter) {
+////                json["has_admission"] = "true";
+////            }
+//            result = Il2cppUtils::FromJsonStr(json.dump(), type);
+//        }
+        IF_CALLER_WITHIN(ActivityRecordGetTopWithHttpInfoAsync_MoveNext_Addr, caller, 3000) {
+            if (Config::enableLegacyCompatibility && !Config::isLatestVersion()) {
+                filterActivityRecordMonthlyInfoList(json);
+                result = Il2cppUtils::FromJsonStr(json.dump(), type);
+            }
+        }
+        return result;
+    }
+
+    DEFINE_HOOK(void* , ArchiveApi_ArchiveGetFesArchiveDataWithHttpInfoAsync, (void* self, Il2cppUtils::Il2CppObject* request, void* cancellation_token, void* method_info)) {
+        Log::DebugFmt("ArchiveApi_ArchiveGetFesArchiveDataWithHttpInfoAsync HOOKED");
+        auto json = nlohmann::json::parse(Il2cppUtils::ToJsonStr(request)->ToString());
+        auto archive_id = json["archives_id"].get<std::string>();
+        if (try_handle_get_archive_data(archive_id)) {
+            return nullptr;
+        }
+        Shareable::currentArchiveId = archive_id;
+        Shareable::renderScene = Shareable::RenderScene::FesLive;
+        return ArchiveApi_ArchiveGetFesArchiveDataWithHttpInfoAsync_Orig(self,
+                                                                         request,
+                                                                         cancellation_token, method_info);
+    }
+    DEFINE_HOOK(void* , ArchiveApi_ArchiveGetWithArchiveDataWithHttpInfoAsync, (void* self, Il2cppUtils::Il2CppObject* request, void* cancellation_token, void* method_info)) {
+        Log::DebugFmt("ArchiveApi_ArchiveGetWithArchiveDataWithHttpInfoAsync HOOKED");
+        auto json = nlohmann::json::parse(Il2cppUtils::ToJsonStr(request)->ToString());
+        auto archive_id = json["archives_id"].get<std::string>();
+        if (try_handle_get_archive_data(archive_id)) {
+            return nullptr;
+        }
+        Shareable::currentArchiveId = archive_id;
+        Shareable::renderScene = Shareable::RenderScene::WithLive;
+        return ArchiveApi_ArchiveGetWithArchiveDataWithHttpInfoAsync_Orig(self,
+                                                                          request,
+                                                                          cancellation_token, method_info);
+    }
+
+    DEFINE_HOOK(void*, ArchiveApi_ArchiveGetArchiveListWithHttpInfoAsync, (void* self, Il2cppUtils::Il2CppObject* request, void* cancellation_token, void* method_info)) {
+        Log::DebugFmt("ArchiveApi_ArchiveGetWithArchiveDataWithHttpInfoAsync HOOKED");
+        if (Config::enableMotionCaptureReplay && Config::filterMotionCaptureReplay) {
+            auto json = nlohmann::json::parse(Il2cppUtils::ToJsonStr(request)->ToString());
+            json.erase("limit");
+            json.erase("offset");
+            request = static_cast<Il2cppUtils::Il2CppObject*>(
+                    Il2cppUtils::FromJsonStr(json.dump(), Il2cppUtils::get_system_type_from_instance(request))
+            );
+        }
+        return ArchiveApi_ArchiveGetArchiveListWithHttpInfoAsync_Orig(self, request, cancellation_token, method_info);
+    }
+
+    DEFINE_HOOK(void* , ArchiveApi_ArchiveWithliveInfoWithHttpInfoAsync, (void* self, Il2cppUtils::Il2CppObject* request, void* cancellation_token, void* method_info)) {
+        if (Config::unlockAfter || (Config::enableMotionCaptureReplay && Config::filterMotionCaptureReplay)) {
+            return nullptr;
+        }
+        return ArchiveApi_ArchiveWithliveInfoWithHttpInfoAsync_Orig(self,
+                                                                          request,
+                                                                          cancellation_token, method_info);
+    }
+    // cheat for server api, but we need to decrease the abnormal behaviour here. ( camera_type should change when every request sends )
+    DEFINE_HOOK(void* ,ArchiveApi_ArchiveSetFesCameraWithHttpInfoAsync, (void* self, Il2cppUtils::Il2CppObject* request, void* cancellation_token, void* method_info)) {
+        if (Config::fesArchiveUnlockTicket) {
+            return nullptr;
+//            auto json = nlohmann::json::parse(Il2cppUtils::ToJsonStr(request)->ToString());
+//            json["camera_type"] = 1;
+//            if (json.contains("focus_character_id")){
+//                json.erase("focus_character_id");
+//            }
+//            request = static_cast<Il2cppUtils::Il2CppObject*>(
+//                    Il2cppUtils::FromJsonStr(json.dump(), Il2cppUtils::get_system_type_from_instance(request))
+//            );
+        }
+        return ArchiveApi_ArchiveSetFesCameraWithHttpInfoAsync_Orig(self,
+                                                                    request,
+                                                                    cancellation_token, method_info);
+    }
+
+    DEFINE_HOOK(void*, ArchiveApi_ArchiveSetFesCameraAsync, (void* self, Il2cppUtils::Il2CppObject* request, void* cancellation_token, void* method_info)) {
+        Log::DebugFmt("ArchiveApi_ArchiveSetFesCameraAsync HOOKED");
+        return nullptr;
+    }
+    DEFINE_HOOK(void*, FesliveApi_FesliveSetCameraWithHttpInfoAsync, (void* self, Il2cppUtils::Il2CppObject* request, void* cancellation_token, void* method_info)) {
+         if (Config::fesArchiveUnlockTicket) {
+             return nullptr;
+         }
+        return FesliveApi_FesliveSetCameraWithHttpInfoAsync_Orig(self,
+                                                                    request,
+                                                                    cancellation_token, method_info);
+    }
+
+//    DEFINE_HOOK(void*, ArchiveApi_ArchiveGetWithTimelineDataWithHttpInfoAsync, (void* self, Il2cppUtils::Il2CppObject* request, void* cancellation_token, void* method_info)) {
+//        return nullptr;
+//    }
+//    DEFINE_HOOK(void*, ArchiveApi_ArchiveGetFesTimelineDataWithHttpInfoAsync, (void* self, Il2cppUtils::Il2CppObject* request, void* cancellation_token, void* method_info)) {
+//        return nullptr;
+//    }
+
+    DEFINE_HOOK(void* , FesliveApi_FesliveEnterWithHttpInfoAsync, (void* self, Il2cppUtils::Il2CppObject* request, void* cancellation_token, void* method_info)) {
+        Shareable::renderScene = Shareable::RenderScene::FesLive;
+        return FesliveApi_FesliveEnterWithHttpInfoAsync_Orig(self,
+                                                                          request,
+                                                                          cancellation_token, method_info);
+    }
+
+    DEFINE_HOOK(void* , WithliveApi_WithliveEnterWithHttpInfoAsync, (void* self, Il2cppUtils::Il2CppObject* request, void* cancellation_token, void* method_info)) {
+        Shareable::renderScene = Shareable::RenderScene::WithLive;
+        return WithliveApi_WithliveEnterWithHttpInfoAsync_Orig(self,
+                                                             request,
+                                                             cancellation_token, method_info);
+    }
+
+    DEFINE_HOOK(Il2cppUtils::Il2CppString* , AlstArchiveDirectory_GetLocalFullPathFromFileName, (Il2cppUtils::Il2CppObject* self, Il2cppUtils::Il2CppString* fileName)) {
+        auto result = AlstArchiveDirectory_GetLocalFullPathFromFileName_Orig(self, fileName);
+        auto result_str = result->ToString();
+        if (Config::enableMotionCaptureReplay) {
+            auto archive_id = Shareable::currentArchiveId;
+            auto it = Config::archiveConfigMap.find(archive_id);
+            if (it == Config::archiveConfigMap.end()) return result;
+            auto archive_config = it->second;
+            auto replay_type = archive_config["replay_type"].get<uint>();
+            if (replay_type == 1 || replay_type == 2) { // replay
+                auto new_result_str = replaceUriHost(result_str, Config::motionCaptureResourceUrl);
+                result = Il2cppUtils::Il2CppString::New(new_result_str);
+            }
+        }
+        return result;
+    }
+
+#pragma endregion
+
+#pragma region oldVersion
+    DEFINE_HOOK(void, Configuration_AddDefaultHeader, (void* self, Il2cppUtils::Il2CppString* key, Il2cppUtils::Il2CppString* value, void* mtd)) {
+        if (Config::enableLegacyCompatibility) {
+            Log::DebugFmt("Configuration_AddDefaultHeader HOOKED, %s=%s", key->ToString().c_str(), value->ToString().c_str());
+            auto key_str = key->ToString();
+            auto value_str = value->ToString();
+            if (key_str == "x-client-version") {
+                value = Il2cppUtils::Il2CppString::New(Config::latestClientVersion.toString());
+            }
+            if (key_str == "x-res-version") {
+                value = Il2cppUtils::Il2CppString::New(Misc::StringFormat::split_once(Config::latestResVersion, "@").first);
+            }
+        }
+        Configuration_AddDefaultHeader_Orig(self, key, value ,mtd);
+    }
+
+    DEFINE_HOOK(void, Configuration_set_UserAgent, (void* self, Il2cppUtils::Il2CppString* value, void* mtd)) {
+        if (Config::enableLegacyCompatibility) {
+            Log::DebugFmt("Configuration_set_UserAgent HOOKED, %s", value->ToString().c_str());
+            auto value_str = value->ToString();
+            if (value_str.starts_with("inspix-android")) {
+                value = Il2cppUtils::Il2CppString::New("inspix-android/" + Config::latestClientVersion.toString());
+            }
+        }
+        Configuration_set_UserAgent_Orig(self, value ,mtd);
+    }
+
+    DEFINE_HOOK(void, Configuration_set_BasePath, (void* self, Il2cppUtils::Il2CppString* value, void* mtd)) {
+        if (!Config::apiServerUrl.empty() && value) {
+            auto orig = value->ToString();
+            if (orig.rfind("https://", 0) == 0) {
+                auto rewritten = replaceUriHost(orig, Config::apiServerUrl);
+                if (rewritten != orig) {
+                    Log::InfoFmt("[ApiOverride] Configuration.BasePath: %s -> %s", orig.c_str(), rewritten.c_str());
+                    value = Il2cppUtils::Il2CppString::New(rewritten);
+                }
+            }
+        }
+        Configuration_set_BasePath_Orig(self, value, mtd);
+    }
+
+//    DEFINE_HOOK(void, AssetManager_SynchronizeResourceVersion_MoveNext, (void* self, void* mtd)) {
+////        Log::DebugFmt("AssetManager_SynchronizeResourceVersion HOOKED, requestedVersion is %s", requestedVersion->ToString().c_str());
+//        static auto AssetManager_klass = Il2cppUtils::GetClassIl2cpp("Core.dll", "Hailstorm", "AssetManager");
+//        static auto SynchronizeResourceVersion_klass = Il2cppUtils::find_nested_class_from_name(AssetManager_klass, "<SynchronizeResourceVersion>d__22");
+//        Log::DebugFmt("SynchronizeResourceVersion_klass is at %p", SynchronizeResourceVersion_klass);
+//        if (SynchronizeResourceVersion_klass) {
+//            static auto requestedVersion_field = UnityResolve::Invoke<Il2cppUtils::FieldInfo*>("il2cpp_class_get_field_from_name", SynchronizeResourceVersion_klass, "requestedVersion");
+//            static auto savedVersion_field = UnityResolve::Invoke<Il2cppUtils::FieldInfo*>("il2cpp_class_get_field_from_name", SynchronizeResourceVersion_klass, "savedVersion");
+//            Log::DebugFmt("requestedVersion_field is %p, savedVersion_field is %p", requestedVersion_field, savedVersion_field);
+//            auto requestedVersion = Il2cppUtils::ClassGetFieldValue<Il2cppUtils::Il2CppString*>(self, requestedVersion_field);
+//            auto savedVersion = Il2cppUtils::ClassGetFieldValue<Il2cppUtils::Il2CppString*>(self, savedVersion_field);
+//            if (requestedVersion) {
+//                auto requestedVersion_str = requestedVersion->ToString();
+//                Log::DebugFmt("AssetManager_SynchronizeResourceVersion HOOKED, requestedVersion is %s", requestedVersion_str.c_str());
+//            }
+//            if (savedVersion) {
+//                auto savedVersion_str = savedVersion->ToString();
+//                Log::DebugFmt("AssetManager_SynchronizeResourceVersion HOOKED, savedVersion is %s",  savedVersion_str.c_str());
+//            }
+//        }
+//        AssetManager_SynchronizeResourceVersion_MoveNext_Orig(self, mtd);
+//    }
+
+    // this will cause stuck
+//    DEFINE_HOOK(void*, AssetManager_SynchronizeResourceVersion, (void* self, Il2cppUtils::Il2CppString* requestedVersion, Il2cppUtils::Il2CppString* savedVersion, void* mtd)) {
+//        Log::DebugFmt("Hailstorm_AssetManager__SynchronizeResourceVersion HOOKED, requestedVersion is %s, savedVersion is %s", requestedVersion->ToString().c_str(), savedVersion->ToString().c_str());
+////        auto hooked_requestedVersion = Il2cppUtils::Il2CppString::New("R2504300@hbZZOCoWTueF+rikQLgPapC2Qw==");
+//        return AssetManager_SynchronizeResourceVersion_Orig(self, requestedVersion, savedVersion, mtd);
+//    }
+
+    // Core_SynchronizeResourceVersion -> AssetManager_SynchronizeResourceVersion
+    DEFINE_HOOK(void* , Core_SynchronizeResourceVersion, (void* self, Il2cppUtils::Il2CppString* requestedVersion,  void* mtd)) {
+        Log::DebugFmt("Core_SynchronizeResourceVersion HOOKED, requestedVersion is %s", requestedVersion->ToString().c_str());
+        if (Config::enableLegacyCompatibility) {
+            Log::DebugFmt("requestedVersion is changed from %s to %s", requestedVersion->ToString().c_str(), Config::currentResVersion.c_str());
+            requestedVersion = Il2cppUtils::Il2CppString::New(Config::currentResVersion);
+        }
+        return Core_SynchronizeResourceVersion_Orig(self, requestedVersion, mtd);
+    }
+    DEFINE_HOOK(Il2cppUtils::Il2CppString*, Application_get_version, ()) {
+        Il2cppUtils::Il2CppString* result = Application_get_version_Orig();
+        if (Config::enableLegacyCompatibility) {
+            Log::DebugFmt("Application_get_version HOOKED, version is changed from %s to %s", result->ToString().c_str(), Config::currentClientVersion.toString().c_str());
+            result = Il2cppUtils::Il2CppString::New(Config::currentClientVersion.toString());
+        }
+        return result;
+    }
+
+    // Destructive account/cache actions. Offline, "キャッシュ削除" would wipe
+    // the imported asset cache (which can no longer be downloaded), and
+    // logout / user deletion would reset the local identity and storage.
+    // Swallow them and tell the player why.
+    static bool BlockOfflineAction(const char* what) {
+        if (!Config::enableOfflineApiMock) return false;
+        Log::InfoFmt("[OfflineGuard] blocked %s", what);
+        Log::ShowToast("オフライン版では使用できません");
+        return true;
+    }
+    DEFINE_HOOK(void, TitleMenuPopup_OnClickCacheClear, (void* self, void* mtd)) {
+        if (BlockOfflineAction("TitleMenuPopup.OnClickCacheClear")) return;
+        TitleMenuPopup_OnClickCacheClear_Orig(self, mtd);
+    }
+    DEFINE_HOOK(void, TitleMenuPopup_OnClickLogout, (void* self, void* mtd)) {
+        if (BlockOfflineAction("TitleMenuPopup.OnClickLogout")) return;
+        TitleMenuPopup_OnClickLogout_Orig(self, mtd);
+    }
+    DEFINE_HOOK(void, TitleMenuPopup_OnClickDeleteUser, (void* self, void* mtd)) {
+        if (BlockOfflineAction("TitleMenuPopup.OnClickDeleteUser")) return;
+        TitleMenuPopup_OnClickDeleteUser_Orig(self, mtd);
+    }
+    DEFINE_HOOK(void, TPopupSetting_OnClickCacheClear, (void* self, void* mtd)) {
+        if (BlockOfflineAction("TPopupSetting.OnClickCacheClear")) return;
+        TPopupSetting_OnClickCacheClear_Orig(self, mtd);
+    }
+    DEFINE_HOOK(void, TPopupSettingMenu_OnClickLogoutPositiveButton, (void* self, void* arg, void* mtd)) {
+        if (BlockOfflineAction("TPopupSettingMenu.OnClickLogoutPositiveButton")) return;
+        TPopupSettingMenu_OnClickLogoutPositiveButton_Orig(self, arg, mtd);
+    }
+    DEFINE_HOOK(void, TPopupSettingMenu_OnClickDeleteUserPositiveButton, (void* self, void* arg, void* mtd)) {
+        if (BlockOfflineAction("TPopupSettingMenu.OnClickDeleteUserPositiveButton")) return;
+        TPopupSettingMenu_OnClickDeleteUserPositiveButton_Orig(self, arg, mtd);
+    }
+    DEFINE_HOOK(void, TPopupSettingMenu_Logout, (void* self, void* mtd)) {
+        if (BlockOfflineAction("TPopupSettingMenu.Logout")) return;
+        TPopupSettingMenu_Logout_Orig(self, mtd);
+    }
+    DEFINE_HOOK(void, Core_RecreateCurrentSavedata, (void* self, void* arg, void* mtd)) {
+        if (Config::enableOfflineApiMock) {
+            Log::InfoFmt("[OfflineGuard] blocked Core.RecreateCurrentSavedata");
+            return;
+        }
+        Core_RecreateCurrentSavedata_Orig(self, arg, mtd);
+    }
+
+    // Chapter RANK in the Home header: the click state machine
+    // (PointerSceneChangeMenuChapterPoint.<OnPointerClick>d__N) shows the
+    // 「Chapter対象期間外です」 alert when CommonApiCache.CurrentChapterRank is 0
+    // and otherwise opens the Chapter portal, which loads chapter_prefab_100031
+    // and three images that were never saved (empty placeholders in every
+    // archive; CDN gone) and ends in a download error.  The header keeps its
+    // non-zero rank for display; only inside that state machine the rank reads
+    // as 0, so the tap takes the alert branch.  Same as the iOS
+    // CHAPTER_PORTAL_PATCHES.
+    static thread_local int chapterPointClickDepth = 0;
+    DEFINE_HOOK(void, ChapterPointClick_MoveNext, (void* self, void* mtd)) {
+        if (!Config::enableOfflineApiMock) {
+            ChapterPointClick_MoveNext_Orig(self, mtd);
+            return;
+        }
+        ++chapterPointClickDepth;
+        ChapterPointClick_MoveNext_Orig(self, mtd);
+        --chapterPointClickDepth;
+    }
+    DEFINE_HOOK(int32_t, CommonApiCache_get_CurrentChapterRank, (void* self, void* mtd)) {
+        const auto rank = CommonApiCache_get_CurrentChapterRank_Orig(self, mtd);
+        if (chapterPointClickDepth > 0 && rank != 0) {
+            Log::InfoFmt("[OfflineGuard] Chapter portal not saved; rank %d reads as 0 for the tap", rank);
+            return 0;
+        }
+        return rank;
+    }
+
+    // Core.SynchronizeResourceVersion passes the stored ("saved") resource
+    // version to Hailstorm.AssetManager, which downloads when it is missing.
+    // The stored version lives in per-player local storage, keyed by the
+    // player id; a fresh install (player 000000000) has none even when the
+    // imported asset cache is complete, so it stops at a download error.
+    // Offline there is nothing to download: report the cache's version.
+    // Arguments are forwarded untouched (Core methods may be instance or
+    // static; every argument is pointer-sized).
+    DEFINE_HOOK(Il2cppUtils::Il2CppString*, Core_GetStoredResourceVersion,
+                (void* a0, void* a1, void* a2, void* a3)) {
+        auto* stored = Core_GetStoredResourceVersion_Orig(a0, a1, a2, a3);
+        const std::string value = stored ? stored->ToString() : std::string();
+        if (Config::enableOfflineApiMock && value.empty() && !Config::currentResVersion.empty()) {
+            Log::InfoFmt("[OfflineRes] stored resource version empty -> %s",
+                         Config::currentResVersion.c_str());
+            return Il2cppUtils::Il2CppString::New(Config::currentResVersion);
+        }
+        Log::DebugFmt("[OfflineRes] stored resource version=%s", value.c_str());
+        return stored;
+    }
+
+    // After login the client registers a push token (PushTokenAndroid ->
+    // FirebaseMessaging.GetTokenAsync -> /v1/user/push/devices) before it
+    // finishes initializing Home. Offline, a device that never had network
+    // has no cached FCM token and the Firebase task never completes, so the
+    // Home menu (School Idol Connect, Story, gacha and stage banners) stays
+    // empty. Hand back an already completed Task<string> with a placeholder;
+    // the offline API mock accepts the registration.
+    DEFINE_HOOK(void*, FirebaseMessaging_GetTokenAsync, (void* mtd)) {
+        if (!Config::enableOfflineApiMock) return FirebaseMessaging_GetTokenAsync_Orig(mtd);
+        static void* tcsKlass = Il2cppUtils::get_system_class_from_reflection_type_str(
+                "System.Threading.Tasks.TaskCompletionSource`1[[System.String, mscorlib]]", "mscorlib");
+        static auto* ctor = tcsKlass ? Il2cppUtils::GetMethodIl2cpp(tcsKlass, ".ctor", 0) : nullptr;
+        static auto* setResult = tcsKlass ? Il2cppUtils::GetMethodIl2cpp(tcsKlass, "SetResult", 1) : nullptr;
+        static auto* getTask = tcsKlass ? Il2cppUtils::GetMethodIl2cpp(tcsKlass, "get_Task", 0) : nullptr;
+        if (!ctor || !setResult || !getTask) {
+            Log::Error("[OfflinePush] TaskCompletionSource<string> not resolved; using Firebase");
+            return FirebaseMessaging_GetTokenAsync_Orig(mtd);
+        }
+        auto* tcs = UnityResolve::Invoke<void*>("il2cpp_object_new", tcsKlass);
+        if (!tcs) return FirebaseMessaging_GetTokenAsync_Orig(mtd);
+        reinterpret_cast<void (*)(void*, Il2cppUtils::MethodInfo*)>(ctor->methodPointer)(tcs, ctor);
+        auto* token = Il2cppUtils::Il2CppString::New("linkura-offline-push-token");
+        reinterpret_cast<void (*)(void*, void*, Il2cppUtils::MethodInfo*)>(setResult->methodPointer)(
+                tcs, token, setResult);
+        auto* task = reinterpret_cast<void* (*)(void*, Il2cppUtils::MethodInfo*)>(getTask->methodPointer)(
+                tcs, getTask);
+        Log::InfoFmt("[OfflinePush] GetTokenAsync -> completed placeholder task=%p", task);
+        return task ? task : FirebaseMessaging_GetTokenAsync_Orig(mtd);
+    }
+#pragma region
+
+    void Install(HookInstaller* hookInstaller) {
+        if (Config::dbgMode || Config::enableOfflineApiMock) {
+            Log::InfoFmt("[HttpMock] native build=%s %s", __DATE__, __TIME__);
+        }
+
+        // GetHttpAsyncAddr
+        ADD_HOOK(ApiClient_CallApiAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Client","ApiClient", "CallApiAsync"));
+        ADD_HOOK(ApiClient_Deserialize, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Client","ApiClient", "Deserialize"));
+        ADD_HOOK(RestResponseBase_get_Headers, Il2cppUtils::GetMethodPointer("RestSharp.dll", "RestSharp", "RestResponseBase", "get_Headers"));
+
+        // The 5.1.0 title flow awaits an async login continuation.  SetPlayerId
+        // is a void setter, and MoveNext is the generated async-state-machine
+        // method, so both hooks have ABI-stable signatures for diagnostics.
+        ADD_HOOK(TitleSceneController_SetPlayerId, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TitleSceneController", "SetPlayerId"));
+        auto titleSceneControllerClass = Il2cppUtils::GetClassIl2cpp(
+                "Assembly-CSharp.dll", "Tecotec", "TitleSceneController");
+        if (titleSceneControllerClass) {
+            auto startButtonStateMachine = Il2cppUtils::find_nested_class_from_name(
+                    titleSceneControllerClass, "<OnClickStartButton>d__6");
+            auto startButtonClosure0 = Il2cppUtils::find_nested_class_from_name(
+                    titleSceneControllerClass, "<>c__DisplayClass6_0");
+            auto* titleSceneControllerBaseClass = UnityResolve::Invoke<void*>(
+                    "il2cpp_class_get_parent", titleSceneControllerClass);
+            titleControllerLoginResponseField = Il2cppUtils::il2cpp_class_get_field_from_name(
+                    titleSceneControllerClass, "loginRes");
+            titleStartButtonStateField = Il2cppUtils::il2cpp_class_get_field_from_name(
+                    startButtonStateMachine, "<>1__state");
+            titleStartButtonControllerField = Il2cppUtils::il2cpp_class_get_field_from_name(
+                    startButtonStateMachine, "<>4__this");
+            titleStartButtonClosure0Field = Il2cppUtils::il2cpp_class_get_field_from_name(
+                    startButtonStateMachine, "<>8__1");
+            titleIsUseUserSuccessField = Il2cppUtils::il2cpp_class_get_field_from_name(
+                    startButtonClosure0, "isUsetUserSuccess");
+            Log::InfoFmt(
+                    "[LoginFlow] title fields state=%p(offset=%d) controller=%p(offset=%d) loginRes=%p(offset=%d)",
+                    titleStartButtonStateField,
+                    titleStartButtonStateField ? titleStartButtonStateField->offset : -1,
+                    titleStartButtonControllerField,
+                    titleStartButtonControllerField ? titleStartButtonControllerField->offset : -1,
+                    titleControllerLoginResponseField,
+                    titleControllerLoginResponseField ? titleControllerLoginResponseField->offset : -1);
+            auto moveNext = Il2cppUtils::GetMethodIl2cpp(startButtonStateMachine, "MoveNext", 0);
+            if (moveNext) {
+                ADD_HOOK(TitleSceneController_OnClickStartButton_MoveNext, moveNext->methodPointer);
+            } else {
+                Log::Warn("[LoginFlow] unable to resolve TitleSceneController.<OnClickStartButton>d__6.MoveNext");
+            }
+            auto* alterUpdateScene = titleSceneControllerBaseClass
+                    ? Il2cppUtils::GetMethodIl2cpp(
+                            titleSceneControllerBaseClass, "AlterUpdateScene", 0)
+                    : nullptr;
+            ADD_HOOK(TitleSceneController_AlterUpdateScene,
+                     alterUpdateScene
+                        ? reinterpret_cast<void*>(alterUpdateScene->methodPointer)
+                        : nullptr);
+        } else {
+            Log::Warn("[LoginFlow] unable to resolve 5.1.0 TitleSceneController");
+        }
+#pragma region ArchiveApi
+        auto ArchiveApi_klass = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi");
+        auto method = (Il2cppUtils::MethodInfo*) nullptr;
+        if (ArchiveApi_klass) {
+            // hook /v1/archive/get_fes_archive_data response
+            auto ArchiveGetFesArchiveDataWithHttpInfoAsync_klass = Il2cppUtils::find_nested_class_from_name(ArchiveApi_klass, "<ArchiveGetFesArchiveDataWithHttpInfoAsync>d__30");
+            method = Il2cppUtils::GetMethodIl2cpp(ArchiveGetFesArchiveDataWithHttpInfoAsync_klass, "MoveNext", 0);
+            if (method) {
+                ArchiveApi_ArchiveGetFesArchiveDataWithHttpInfoAsync_MoveNext_Addr = method->methodPointer;
+            }
+            // hook /v1/archive/get_with_archive_data response
+            auto ArchiveGetWithArchiveDataWithHttpInfoAsync_klass = Il2cppUtils::find_nested_class_from_name(ArchiveApi_klass, "<ArchiveGetWithArchiveDataWithHttpInfoAsync>d__46");
+            method = Il2cppUtils::GetMethodIl2cpp(ArchiveGetWithArchiveDataWithHttpInfoAsync_klass, "MoveNext", 0);
+            if (method) {
+                ArchiveApi_ArchiveGetWithArchiveDataWithHttpInfoAsync_MoveNext_Addr = method->methodPointer;
+            }
+            // hook /v1/archive/get_fes_archive_data response 1.x.x
+            auto ArchiveGetFesArchiveDataWithHttpInfoAsync_old_klass = Il2cppUtils::find_nested_class_from_name(ArchiveApi_klass, "<ArchiveGetFesArchiveDataWithHttpInfoAsync>d__34");
+            method = Il2cppUtils::GetMethodIl2cpp(ArchiveGetFesArchiveDataWithHttpInfoAsync_old_klass, "MoveNext", 0);
+            if (method) {
+                ArchiveApi_ArchiveGetFesArchiveDataWithHttpInfoAsync_Old_MoveNext_Addr = method->methodPointer;
+            }
+            // hook /v1/archive/get_with_archive_data response 1.x.x
+            auto ArchiveGetWithArchiveDataWithHttpInfoAsync_old_klass = Il2cppUtils::find_nested_class_from_name(ArchiveApi_klass, "<ArchiveGetWithArchiveDataWithHttpInfoAsync>d__50");
+            method = Il2cppUtils::GetMethodIl2cpp(ArchiveGetWithArchiveDataWithHttpInfoAsync_old_klass, "MoveNext", 0);
+            if (method) {
+                ArchiveApi_ArchiveGetWithArchiveDataWithHttpInfoAsync_Old_MoveNext_Addr = method->methodPointer;
+            }
+            // hook /v1/archive/get_archive_list response
+            auto ArchiveGetArchiveListWithHttpInfoAsync_klass = Il2cppUtils::find_nested_class_from_name(ArchiveApi_klass, "<ArchiveGetArchiveListWithHttpInfoAsync>d__18");
+            method = Il2cppUtils::GetMethodIl2cpp(ArchiveGetArchiveListWithHttpInfoAsync_klass, "MoveNext", 0);
+            if (method) {
+                ArchiveApi_ArchiveGetArchiveList_MoveNext_Addr = method->methodPointer;
+            }
+            // hook /v1/archive/get_archive_list response 1.x.x
+            auto ArchiveGetArchiveListWithHttpInfoAsync_old_klass = Il2cppUtils::find_nested_class_from_name(ArchiveApi_klass, "<ArchiveGetArchiveListWithHttpInfoAsync>d__22");
+            method = Il2cppUtils::GetMethodIl2cpp(ArchiveGetArchiveListWithHttpInfoAsync_old_klass, "MoveNext", 0);
+            if (method) {
+                ArchiveApi_ArchiveGetArchiveList_Old_MoveNext_Addr = method->methodPointer;
+            }
+            // hook /v1/archive/withlive_info
+            auto ArchiveWithliveInfoWithHttpInfoAsync_klass = Il2cppUtils::find_nested_class_from_name(ArchiveApi_klass, "<ArchiveWithliveInfoWithHttpInfoAsync>d__70");
+            method = Il2cppUtils::GetMethodIl2cpp(ArchiveWithliveInfoWithHttpInfoAsync_klass, "MoveNext", 0);
+            if (method) {
+                ArchiveApi_ArchiveWithliveInfoWithHttpInfoAsync_MoveNext_Addr = method->methodPointer;
+            }
+        }
+        ADD_HOOK(ArchiveApi_ArchiveWithliveInfoWithHttpInfoAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi", "ArchiveWithliveInfoWithHttpInfoAsync"));
+        // Fes live camera unlock
+        ADD_HOOK(ArchiveApi_ArchiveSetFesCameraWithHttpInfoAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi", "ArchiveSetFesCameraWithHttpInfoAsync"));
+#pragma endregion
+
+#pragma region WithliveApi
+        auto WithliveApi_klass = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "WithliveApi");
+        method = (Il2cppUtils::MethodInfo*) nullptr;
+        if (WithliveApi_klass) {
+            // hook /v1/withlive/enter response
+            auto WithliveEnterWithHttpInfoAsync_klass = Il2cppUtils::find_nested_class_from_name(
+                    WithliveApi_klass, "<WithliveEnterWithHttpInfoAsync>d__30");
+            method = Il2cppUtils::GetMethodIl2cpp(WithliveEnterWithHttpInfoAsync_klass, "MoveNext",
+                                                  0);
+            if (method) {
+                WithliveApi_WithliveEnterWithHttpInfoAsync_MoveNext_Addr = method->methodPointer;
+            }
+            // hook /v1/withlive/live_info response
+            auto WithliveLiveInfoWithHttpInfoAsync_klass = Il2cppUtils::find_nested_class_from_name(
+                    WithliveApi_klass, "<WithliveLiveInfoWithHttpInfoAsync>d__50");
+            method = Il2cppUtils::GetMethodIl2cpp(WithliveLiveInfoWithHttpInfoAsync_klass, "MoveNext",
+                                                  0);
+            if (method) {
+                WithliveApi_WithliveLiveInfoWithHttpInfoAsync_MoveNext_Addr = method->methodPointer;
+            }
+        }
+#pragma endregion
+
+#pragma region FesliveApi
+        auto FesliveApi_klass = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "FesliveApi");
+        if (FesliveApi_klass) {
+            // hook /v1/withlive/enter response
+            auto FesliveEnterWithHttpInfoAsync_klass = Il2cppUtils::find_nested_class_from_name(
+                    FesliveApi_klass, "<FesliveEnterWithHttpInfoAsync>d__38");
+            method = Il2cppUtils::GetMethodIl2cpp(FesliveEnterWithHttpInfoAsync_klass, "MoveNext", 0);
+            if (method) {
+                FesliveApi_FesliveEnterWithHttpInfoAsync_MoveNext_Addr = method->methodPointer;
+            }
+            // hook /v1/feslive/live_info response
+            auto FesliveLiveInfoWithHttpInfoAsync_klass = Il2cppUtils::find_nested_class_from_name(
+                    FesliveApi_klass, "<FesliveLiveInfoWithHttpInfoAsync>d__66");
+            method = Il2cppUtils::GetMethodIl2cpp(FesliveLiveInfoWithHttpInfoAsync_klass, "MoveNext", 0);
+            if (method) {
+                FesliveApi_FesliveLiveInfoWithHttpInfoAsync_MoveNext_Addr = method->methodPointer;
+            }
+        }
+        // Fes live camera unlock
+        ADD_HOOK(FesliveApi_FesliveSetCameraWithHttpInfoAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "FesliveApi", "FesliveSetCameraWithHttpInfoAsync"));
+#pragma endregion
+
+#pragma region WebviewLiveApi
+        auto WebviewLiveApi_klass = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "WebviewLiveApi");
+        if (WebviewLiveApi_klass) {
+            // hook /v1/webview/live/live_info
+            auto WebviewLiveLiveInfoWithHttpInfoAsync_klass = Il2cppUtils::find_nested_class_from_name(
+                    WebviewLiveApi_klass, "<WebviewLiveLiveInfoWithHttpInfoAsync>d__22");
+            method = Il2cppUtils::GetMethodIl2cpp(WebviewLiveLiveInfoWithHttpInfoAsync_klass, "MoveNext", 0);
+            if (method) {
+                WebviewLiveApi_WebviewLiveLiveInfoWithHttpInfoAsync_MoveNext_Addr = method->methodPointer;
+            }
+        }
+#pragma endregion
+#pragma region ActivityTopApi
+        auto ActivityTopApi_klass = Il2cppUtils::GetClassIl2cpp("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ActivityRecordApi");
+        method = (Il2cppUtils::MethodInfo*) nullptr;
+        if (ActivityTopApi_klass) {
+            auto ActivityRecordGetTopWithHttpInfoAsync_klass = Il2cppUtils::find_nested_class_from_name(
+                    ActivityTopApi_klass, "<ActivityRecordGetTopWithHttpInfoAsync>d__18");
+            method = Il2cppUtils::GetMethodIl2cpp(ActivityRecordGetTopWithHttpInfoAsync_klass, "MoveNext", 0);
+            if (method) {
+                ActivityRecordGetTopWithHttpInfoAsync_MoveNext_Addr = method->methodPointer;
+            }
+        }
+
+#pragma region RenderScene
+        ADD_HOOK(AlstArchiveDirectory_GetLocalFullPathFromFileName, Il2cppUtils::GetMethodPointer("Core.dll", "Alstromeria", "AlstArchiveDirectory", "GetRemoteUriFromFileName"));
+        ADD_HOOK(FesliveApi_FesliveEnterWithHttpInfoAsync , Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "FesliveApi", "FesliveEnterWithHttpInfoAsync"));
+        ADD_HOOK(WithliveApi_WithliveEnterWithHttpInfoAsync , Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "WithliveApi", "WithliveEnterWithHttpInfoAsync"));
+        ADD_HOOK(ArchiveApi_ArchiveGetFesArchiveDataWithHttpInfoAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi", "ArchiveGetFesArchiveDataWithHttpInfoAsync"));
+        ADD_HOOK(ArchiveApi_ArchiveGetWithArchiveDataWithHttpInfoAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi", "ArchiveGetWithArchiveDataWithHttpInfoAsync"));
+        ADD_HOOK(ArchiveApi_ArchiveGetArchiveListWithHttpInfoAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi", "ArchiveGetArchiveListWithHttpInfoAsync"));
+#pragma endregion
+#pragma region oldVersion
+        ADD_HOOK(Configuration_AddDefaultHeader, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Client", "Configuration", "AddDefaultHeader"));
+        ADD_HOOK(Configuration_set_UserAgent, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Client", "Configuration", "set_UserAgent"));
+        ADD_HOOK(Configuration_set_BasePath, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Client", "Configuration", "set_BasePath"));
+//        ADD_HOOK(AssetManager_SynchronizeResourceVersion, Il2cppUtils::GetMethodPointer("Core.dll", "Hailstorm", "AssetManager", "SynchronizeResourceVersion"));
+        ADD_HOOK(Core_SynchronizeResourceVersion, Il2cppUtils::GetMethodPointer("Core.dll", "", "Core", "SynchronizeResourceVersion"));
+        ADD_HOOK(Application_get_version, Il2cppUtils::il2cpp_resolve_icall("UnityEngine.Application::get_version"));
+        ADD_HOOK(TitleMenuPopup_OnClickCacheClear, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TitleMenuPopup", "OnClickCacheClear"));
+        ADD_HOOK(TitleMenuPopup_OnClickLogout, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TitleMenuPopup", "OnClickLogout"));
+        ADD_HOOK(TitleMenuPopup_OnClickDeleteUser, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TitleMenuPopup", "OnClickDeleteUser"));
+        ADD_HOOK(TPopupSetting_OnClickCacheClear, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TPopupSetting", "OnClickCacheClear"));
+        ADD_HOOK(TPopupSettingMenu_OnClickLogoutPositiveButton, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TPopupSettingMenu", "OnClickLogoutPositiveButton"));
+        ADD_HOOK(TPopupSettingMenu_OnClickDeleteUserPositiveButton, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TPopupSettingMenu", "OnClickDeleteUserPositiveButton"));
+        ADD_HOOK(TPopupSettingMenu_Logout, Il2cppUtils::GetMethodPointer(
+                "Assembly-CSharp.dll", "Tecotec", "TPopupSettingMenu", "Logout"));
+        ADD_HOOK(Core_RecreateCurrentSavedata, Il2cppUtils::GetMethodPointer(
+                "Core.dll", "", "Core", "RecreateCurrentSavedata"));
+        if (auto chapterPointClass = Il2cppUtils::GetClassIl2cpp(
+                "Assembly-CSharp.dll", "Tecotec", "PointerSceneChangeMenuChapterPoint")) {
+            auto clickStateMachine = Il2cppUtils::find_nested_class(chapterPointClass, [](void* nested) {
+                return std::string_view(static_cast<Il2cppUtils::Il2CppClassHead*>(nested)->name).starts_with("<OnPointerClick>d__");
+            });
+            auto moveNext = clickStateMachine
+                    ? Il2cppUtils::GetMethodIl2cpp(clickStateMachine, "MoveNext", 0) : nullptr;
+            if (moveNext) {
+                ADD_HOOK(ChapterPointClick_MoveNext, moveNext->methodPointer);
+                ADD_HOOK(CommonApiCache_get_CurrentChapterRank, Il2cppUtils::GetMethodPointer(
+                        "Assembly-CSharp.dll", "Tecotec", "CommonApiCache", "get_CurrentChapterRank"));
+            } else {
+                Log::Warn("[OfflineGuard] unable to resolve PointerSceneChangeMenuChapterPoint.<OnPointerClick>.MoveNext");
+            }
+        }
+        ADD_HOOK(Core_GetStoredResourceVersion, Il2cppUtils::GetMethodPointer(
+                "Core.dll", "", "Core", "GetStoredResourceVersion"));
+        ADD_HOOK(FirebaseMessaging_GetTokenAsync, Il2cppUtils::GetMethodPointer(
+                "Firebase.Messaging.dll", "Firebase.Messaging", "FirebaseMessaging", "GetTokenAsync"));
+//        ADD_HOOK(ArchiveApi_ArchiveGetWithTimelineDataWithHttpInfoAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi", "ArchiveGetWithTimelineDataWithHttpInfoAsync"));
+//        ADD_HOOK(ArchiveApi_ArchiveGetFesTimelineDataWithHttpInfoAsync, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Org.OpenAPITools.Api", "ArchiveApi", "ArchiveGetFesTimelineDataWithHttpInfoAsync"));
+        //        auto AssetManager_klass = Il2cppUtils::GetClassIl2cpp("Core.dll", "Hailstorm", "AssetManager");
+//        if (AssetManager_klass) {
+//            auto SynchronizeResourceVersion_klss = Il2cppUtils::find_nested_class_from_name(AssetManager_klass, "<SynchronizeResourceVersion>d__22");
+//            method = Il2cppUtils::GetMethodIl2cpp(SynchronizeResourceVersion_klss, "MoveNext", 0);
+//            if (method) {
+//                ADD_HOOK(AssetManager_SynchronizeResourceVersion_MoveNext, method->methodPointer);
+//            }
+//        }
+        ADD_HOOK(Silverflame_SFL_AdvSeriesMaster_ctor, Il2cppUtils::GetMethodPointer("Core.dll", "Silverflame.SFL", "AdvSeriesMaster", ".ctor"));
+        ADD_HOOK(Silverflame_SFL_AdvSeriesMaster_Fetch, Il2cppUtils::GetMethodPointer("Core.dll", "Silverflame.SFL", "AdvSeriesMaster", "Fetch"));
+        ADD_HOOK(Silverflame_SFL_AdvDatasMaster_ctor, Il2cppUtils::GetMethodPointer("Core.dll", "Silverflame.SFL", "AdvDatasMaster", ".ctor"));
+        ADD_HOOK(Silverflame_SFL_AdvDatasMaster_Fetch, Il2cppUtils::GetMethodPointer("Core.dll", "Silverflame.SFL", "AdvDatasMaster", "Fetch"));
+        ADD_HOOK(Silverflame_SFL_LauncherBannersMaster_ctor,
+                 Il2cppUtils::GetMethodPointer("Core.dll", "Silverflame.SFL",
+                                                "LauncherBannersMaster", ".ctor"));
+#pragma endregion
+    }
+}

@@ -1,68 +1,26 @@
 #!/bin/bash
-# Build the iOS offline runtime.
-#   ios/build.sh ios    -> build/ios/LinkuraOffline.dylib   (arm64, iOS 15+, unsigned)
-#   ios/build.sh host   -> build/host/linkura-offline-server (macOS, for tests)
-# The backend sources are shared with the Android module
-# (app/src/main/cpp/LinkuraLocalify/http-mock) and compiled with
-# LINKURA_MOCK_STANDALONE, which swaps the hook framework for a small shim.
+# Build the iOS offline runtime:
+#   ios/build.sh   -> ios/build/LinkuraOffline.dylib (arm64, iOS 15+, unsigned)
+# The dylib embeds the shared offline server (server/src, compiled with
+# LINKURA_MOCK_STANDALONE) and starts it on 127.0.0.1 inside the game.
+# Set LINKURA_REMOTE=0 to leave out the development remote (tap/screenshot).
 set -euo pipefail
-TARGET="${1:-ios}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(dirname "$HERE")"
-CPP="$ROOT/app/src/main/cpp"
-MOCK="$CPP/LinkuraLocalify/http-mock"
-OUT="$HERE/build/$TARGET"
-GEN="$HERE/build/generated"
-mkdir -p "$OUT" "$GEN"
+OUT="$HERE/build"
+SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+CC=(xcrun --sdk iphoneos clang -target arm64-apple-ios15.0 -isysroot "$SDK")
+CXX=(xcrun --sdk iphoneos clang++ -target arm64-apple-ios15.0 -isysroot "$SDK")
+source "$HERE/../server/build-common.sh"
 
-CMAKE="${CMAKE:-$(command -v cmake || ls -d "$HOME"/Library/Android/sdk/cmake/*/bin/cmake 2>/dev/null | tail -1)}"
-[ -x "$CMAKE" ] || { echo "cmake not found (set CMAKE=...)" >&2; exit 1; }
-"$CMAKE" -DINPUT_DIR="$MOCK/builtin" -DOUTPUT_HEADER="$GEN/offline_api_mock_builtin.hpp" \
-    -P "$CPP/cmake/generate_builtin_json_header.cmake" >/dev/null
-"$CMAKE" -DINPUT_DIR="$MOCK/backend" -DOUTPUT_HEADER="$GEN/http_mock_backend_builtin_sql.hpp" \
-    -P "$CPP/cmake/generate_builtin_sql_header.cmake" >/dev/null
-
-CXX_SOURCES=(
-    "$MOCK/RouteRegistry.cpp"
-    "$MOCK/backend/HttpMockBackend.cpp"
-    "$MOCK/standalone/MockPlatformStandalone.cpp"
-    "$MOCK/standalone/OfflineHttpServer.cpp"
-)
-INCLUDES=(-I"$CPP/LinkuraLocalify" -I"$CPP/deps" -I"$CPP/deps/sqlite" -I"$GEN" -I"$MOCK" -I"$MOCK/backend")
-CXXFLAGS=(-std=c++2b -O2 -DLINKURA_MOCK_STANDALONE=1 -fvisibility=hidden -Wall -Wno-unused-function)
-SQLITE_FLAGS=(-O2 -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -fvisibility=hidden -w)
-
-case "$TARGET" in
-  ios)
-    SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-    CC=(xcrun --sdk iphoneos clang -target arm64-apple-ios15.0 -isysroot "$SDK")
-    CXX=(xcrun --sdk iphoneos clang++ -target arm64-apple-ios15.0 -isysroot "$SDK")
-    ;;
-  host)
-    CC=(xcrun clang)
-    CXX=(xcrun clang++)
-    ;;
-  *) echo "usage: $0 ios|host" >&2; exit 2 ;;
-esac
-
-OBJ="$OUT/obj"; mkdir -p "$OBJ"
-"${CC[@]}" "${SQLITE_FLAGS[@]}" -c "$CPP/deps/sqlite/sqlite3.c" -o "$OBJ/sqlite3.o"
-OBJECTS=("$OBJ/sqlite3.o")
-for src in "${CXX_SOURCES[@]}"; do
+SOURCES=("$HERE/LinkuraOffline.mm" "$HERE/LinkuraPush.mm")
+LINK_FLAGS=()
+if [ "${LINKURA_REMOTE:-1}" = 0 ]; then LINK_FLAGS=(-Wl,-U,_LinkuraRemoteStart); else SOURCES+=("$HERE/LinkuraRemote.mm"); fi
+OBJECTS=("${SERVER_OBJECTS[@]}")
+for src in "${SOURCES[@]}"; do
     obj="$OBJ/$(basename "${src%.*}").o"
-    "${CXX[@]}" "${CXXFLAGS[@]}" "${INCLUDES[@]}" -c "$src" -o "$obj"
+    "${CXX[@]}" "${SERVER_CXXFLAGS[@]}" -fobjc-arc "${SERVER_INCLUDES[@]}" -c "$src" -o "$obj"
     OBJECTS+=("$obj")
 done
-
-if [ "$TARGET" = ios ]; then
-    "${CXX[@]}" "${CXXFLAGS[@]}" -fobjc-arc "${INCLUDES[@]}" -c "$HERE/LinkuraOffline.mm" -o "$OBJ/LinkuraOffline.o"
-    "${CXX[@]}" "${CXXFLAGS[@]}" -fobjc-arc "${INCLUDES[@]}" -c "$HERE/LinkuraRemote.mm" -o "$OBJ/LinkuraRemote.o"
-    "${CXX[@]}" "${CXXFLAGS[@]}" -fobjc-arc "${INCLUDES[@]}" -c "$HERE/LinkuraPush.mm" -o "$OBJ/LinkuraPush.o"
-    "${CXX[@]}" -dynamiclib -install_name @executable_path/Frameworks/LinkuraOffline.dylib \
-        -framework Foundation -framework UIKit -framework CoreGraphics "${OBJECTS[@]}" "$OBJ/LinkuraOffline.o" "$OBJ/LinkuraRemote.o" "$OBJ/LinkuraPush.o" -o "$OUT/LinkuraOffline.dylib"
-    echo "built $OUT/LinkuraOffline.dylib"
-else
-    "${CXX[@]}" "${CXXFLAGS[@]}" "${INCLUDES[@]}" -c "$HERE/host/main.cpp" -o "$OBJ/main.o"
-    "${CXX[@]}" "${OBJECTS[@]}" "$OBJ/main.o" -o "$OUT/linkura-offline-server"
-    echo "built $OUT/linkura-offline-server"
-fi
+"${CXX[@]}" -dynamiclib -install_name @executable_path/Frameworks/LinkuraOffline.dylib \
+    -framework Foundation -framework UIKit -framework CoreGraphics ${LINK_FLAGS[@]+"${LINK_FLAGS[@]}"} "${OBJECTS[@]}" -o "$OUT/LinkuraOffline.dylib"
+echo "built $OUT/LinkuraOffline.dylib"

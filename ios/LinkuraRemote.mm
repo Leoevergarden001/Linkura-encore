@@ -93,7 +93,7 @@ static void LKTap(CGPoint point) {
     });
 }
 
-void LinkuraRemoteStart(NSURL* directory) {
+extern "C" void LinkuraRemoteStart(NSURL* directory) {
     static dispatch_source_t timer;
     NSURL* command = [directory URLByAppendingPathComponent:@"cmd.json"];
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());

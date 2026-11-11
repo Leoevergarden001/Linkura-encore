@@ -21,8 +21,8 @@
 #include <mutex>
 #include <string>
 
-#include "http-mock/standalone/MockPlatformStandalone.hpp"
-#include "http-mock/standalone/OfflineHttpServer.hpp"
+#include "standalone/MockPlatformStandalone.hpp"
+#include "standalone/OfflineHttpServer.hpp"
 
 namespace {
     std::mutex g_fileMutex;
@@ -90,7 +90,8 @@ static void SeedPlayerPrefs(NSURL* visible) {
     LogSink("I", line);
 }
 
-void LinkuraRemoteStart(NSURL* directory);
+// Development remote (LinkuraRemote.mm); weak so builds without it link.
+extern "C" __attribute__((weak)) void LinkuraRemoteStart(NSURL* directory);
 void LinkuraPushStart();
 void LinkuraOfflineLog(const char* level, const char* message) { LogSink(level, message); }
 
@@ -128,7 +129,7 @@ static void LinkuraOfflineStart() {
             }
         }
         if (visible) SeedPlayerPrefs(visible);
-        if (visible) LinkuraRemoteStart(visible);
+        if (visible && LinkuraRemoteStart) LinkuraRemoteStart(visible);
         LinkuraPushStart();
         NSString* version = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
         char banner[256];
