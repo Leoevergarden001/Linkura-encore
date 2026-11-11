@@ -1350,6 +1350,34 @@ namespace LinkuraLocal::HookShare {
         Core_RecreateCurrentSavedata_Orig(self, arg, mtd);
     }
 
+    // Chapter RANK in the Home header: the click state machine
+    // (PointerSceneChangeMenuChapterPoint.<OnPointerClick>d__N) shows the
+    // 「Chapter対象期間外です」 alert when CommonApiCache.CurrentChapterRank is 0
+    // and otherwise opens the Chapter portal, which loads chapter_prefab_100031
+    // and three images that were never saved (empty placeholders in every
+    // archive; CDN gone) and ends in a download error.  The header keeps its
+    // non-zero rank for display; only inside that state machine the rank reads
+    // as 0, so the tap takes the alert branch.  Same as the iOS
+    // CHAPTER_PORTAL_PATCHES.
+    static thread_local int chapterPointClickDepth = 0;
+    DEFINE_HOOK(void, ChapterPointClick_MoveNext, (void* self, void* mtd)) {
+        if (!Config::enableOfflineApiMock) {
+            ChapterPointClick_MoveNext_Orig(self, mtd);
+            return;
+        }
+        ++chapterPointClickDepth;
+        ChapterPointClick_MoveNext_Orig(self, mtd);
+        --chapterPointClickDepth;
+    }
+    DEFINE_HOOK(int32_t, CommonApiCache_get_CurrentChapterRank, (void* self, void* mtd)) {
+        const auto rank = CommonApiCache_get_CurrentChapterRank_Orig(self, mtd);
+        if (chapterPointClickDepth > 0 && rank != 0) {
+            Log::InfoFmt("[OfflineGuard] Chapter portal not saved; rank %d reads as 0 for the tap", rank);
+            return 0;
+        }
+        return rank;
+    }
+
     // Core.SynchronizeResourceVersion passes the stored ("saved") resource
     // version to Hailstorm.AssetManager, which downloads when it is missing.
     // The stored version lives in per-player local storage, keyed by the
@@ -1613,6 +1641,21 @@ namespace LinkuraLocal::HookShare {
                 "Assembly-CSharp.dll", "Tecotec", "TPopupSettingMenu", "Logout"));
         ADD_HOOK(Core_RecreateCurrentSavedata, Il2cppUtils::GetMethodPointer(
                 "Core.dll", "", "Core", "RecreateCurrentSavedata"));
+        if (auto chapterPointClass = Il2cppUtils::GetClassIl2cpp(
+                "Assembly-CSharp.dll", "Tecotec", "PointerSceneChangeMenuChapterPoint")) {
+            auto clickStateMachine = Il2cppUtils::find_nested_class(chapterPointClass, [](void* nested) {
+                return std::string_view(static_cast<Il2cppUtils::Il2CppClassHead*>(nested)->name).starts_with("<OnPointerClick>d__");
+            });
+            auto moveNext = clickStateMachine
+                    ? Il2cppUtils::GetMethodIl2cpp(clickStateMachine, "MoveNext", 0) : nullptr;
+            if (moveNext) {
+                ADD_HOOK(ChapterPointClick_MoveNext, moveNext->methodPointer);
+                ADD_HOOK(CommonApiCache_get_CurrentChapterRank, Il2cppUtils::GetMethodPointer(
+                        "Assembly-CSharp.dll", "Tecotec", "CommonApiCache", "get_CurrentChapterRank"));
+            } else {
+                Log::Warn("[OfflineGuard] unable to resolve PointerSceneChangeMenuChapterPoint.<OnPointerClick>.MoveNext");
+            }
+        }
         ADD_HOOK(Core_GetStoredResourceVersion, Il2cppUtils::GetMethodPointer(
                 "Core.dll", "", "Core", "GetStoredResourceVersion"));
         ADD_HOOK(FirebaseMessaging_GetTokenAsync, Il2cppUtils::GetMethodPointer(
