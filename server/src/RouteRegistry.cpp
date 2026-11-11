@@ -774,6 +774,9 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/home/get_custom_setting", [](const MockRequestContext&, HttpMockBackend& backend) {
                 return ToBackendResponse(backend.GetCustomSettingResponse());
             });
+            // Home's wallpaper and clock controls post a notification after
+            // changing their local setting. The 5.0.1 API has no response DTO.
+            RegisterStaticJson(routes, "/v1/home/notify_wallpaper_setting", "null");
             RegisterStaticJson(routes, "/v1/webview/school_idol_connect_post/get_theme_list", OfflineApiMockBuiltIn::WebviewSchoolIdolConnectPostGetThemeListJsonView);
             RegisterStaticJson(routes, "/v1/follow/live_chat_group_list", OfflineApiMockBuiltIn::FollowLiveChatGroupListJsonView);
             RegisterStaticJson(routes, "/v1/archive/get_home", OfflineApiMockBuiltIn::ArchiveGetHomeJsonView);
