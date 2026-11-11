@@ -18,6 +18,12 @@ YAML_DIR = MASTER_DIR
 TEMPLATE_DIR = TOOLS_DIR / "template"
 BUILTIN_DIR = BUILTIN_DIR
 
+# These two Master series are named "？？？" and have no card art. Offered as
+# Home wallpaper pieces they show blank cells: one for 10104000 (Rarity 4) and
+# two for 10105000 (Rarity 5; the client adds a 60-block animated variant for
+# Rarity >= 5 cards, which normally play picture_ur_home_<card>.usm).
+UNMAPPED_PLACEHOLDER_SERIES = {1010400, 1010500}
+
 
 def _load_yaml(path: Path):
     with path.open("r", encoding="utf-8") as f:
@@ -32,6 +38,8 @@ def generate_json() -> None:
     series_min: dict[int, int] = {}
     for card in _load_yaml(YAML_DIR / "CardDatas.yaml"):
         series_id = card["CardSeriesId"]
+        if series_id in UNMAPPED_PLACEHOLDER_SERIES:
+            continue
         card_id = card["Id"]
         if series_id not in series_min or card_id < series_min[series_id]:
             series_min[series_id] = card_id
