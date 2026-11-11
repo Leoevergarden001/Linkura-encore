@@ -95,6 +95,87 @@ CHAPTER_PORTAL_PATCHES = (
     (0x2EB0FE8, "PointerSceneChangeMenuChapterPoint.OnPointerClick -> period alert", "00070034", "38000014"),
 )
 
+def _adrp(pc: int, target: int, rd: int) -> str:
+    imm = ((target & ~0xFFF) - (pc & ~0xFFF)) >> 12
+    word = 0x90000000 | ((imm & 3) << 29) | (((imm >> 2) & 0x7FFFF) << 5) | rd
+    return word.to_bytes(4, "little").hex()
+
+
+def _add_imm(rd: int, rn: int, imm12: int) -> str:
+    word = 0x91000000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd
+    return word.to_bytes(4, "little").hex()
+
+
+# Core.GetStoredResourceVersion (also behind GetCachedResourceVersion and
+# GetRequestedResourceVersion) reads resource versions from the per-player
+# local storage. Without the source account's player id in PlayerPrefs the
+# player is 000000000 and that storage is empty, so the client cannot open the
+# cached catalog and stays on the title screen. Android hooks the method to
+# report the cache's version. Offline there is exactly one version, so here the
+# method always returns it: its "nothing stored" path is taken unconditionally
+# and loads a string literal rewritten to that version. The borrowed literal is
+# a Mono BTLS error message (iOS uses Apple TLS and the offline client speaks
+# plain HTTP, so it is never shown). The method's lazy metadata init is
+# retargeted from the "" slot (used only on that path) to the borrowed slot.
+RES_VERSION_LITERAL = "BTLS is not supported in this runtime."
+DEFAULT_RES_VERSION = "R2606002@RQMqABAxdj0b5c8TKh4+PNDUYQ=="
+_RES_VERSION_SLOT = 0x985C468
+RES_VERSION_PATCHES = (
+    (0x31CD388, "Core::GetStoredResourceVersion init: \"\" slot -> version literal slot", "203403b0",
+     _adrp(0x31CD388, _RES_VERSION_SLOT, 0)),
+    (0x31CD38C, "Core::GetStoredResourceVersion init: slot offset", "00e03f91",
+     _add_imm(0, 0, _RES_VERSION_SLOT & 0xFFF)),
+    (0x31CD39C, "Core::GetStoredResourceVersion: ignore per-player storage", "f40400b4", "27000014"),
+    (0x31CD438, "Core::GetStoredResourceVersion: return version literal", "283403b0",
+     _adrp(0x31CD438, _RES_VERSION_SLOT, 8)),
+    (0x31CD43C, "Core::GetStoredResourceVersion: slot offset", "08e13f91",
+     _add_imm(8, 8, _RES_VERSION_SLOT & 0xFFF)),
+)
+
+def _ldr_x(rt: int, rn: int, offset: int) -> str:
+    word = 0xF9400000 | (((offset >> 3) & 0xFFF) << 10) | (rn << 5) | rt
+    return word.to_bytes(4, "little").hex()
+
+
+# IdentityStorage.get_PlayerId reads the player id from (encrypted) PlayerPrefs.
+# Without the source account's entry it returns null, and Home preparation
+# (ProfileDecoration.PrepareByCustomData and some 30 other callers) throws
+# NullReferenceException, so LOGIN never leaves the title screen. Android seeds
+# the missing identity with player 000000000 through the game's SaveIdentity;
+# here the getter returns that id as a string literal. The borrowed literal is
+# a Mono BTLS error message (iOS uses Apple TLS, so it is never shown), and the
+# getter's lazy metadata init is retargeted from the PlayerPrefs key slot
+# (used only by the replaced load) to the borrowed slot.
+PLAYER_ID_LITERAL = "Attempting to modify read-only MonoBtlsX509VerifyParam instance."
+OFFLINE_PLAYER_ID = "000000000"
+_PLAYER_ID_SLOT = 0x985C160
+PLAYER_ID_PATCHES = (
+    (0x31CEE6C, "IdentityStorage::get_PlayerId init: key slot -> player id literal slot", "c03103f0",
+     _adrp(0x31CEE6C, _PLAYER_ID_SLOT, 0)),
+    (0x31CEE70, "IdentityStorage::get_PlayerId init: slot offset", "00000991",
+     _add_imm(0, 0, _PLAYER_ID_SLOT & 0xFFF)),
+    (0x31CEE80, "IdentityStorage::get_PlayerId: player id literal page", "601e40f9",
+     _adrp(0x31CEE80, _PLAYER_ID_SLOT, 8)),
+    (0x31CEE84, "IdentityStorage::get_PlayerId: load player id literal", "e00000b4",
+     _ldr_x(0, 8, _PLAYER_ID_SLOT & 0xFFF)),
+    (0x31CEE88, "IdentityStorage::get_PlayerId: restore frame", "c83103f0", "fd7b41a9"),
+    (0x31CEE8C, "IdentityStorage::get_PlayerId: restore registers", "1f2003d5", "f44fc2a8"),
+    (0x31CEE90, "IdentityStorage::get_PlayerId: return", "012141f9", "c0035fd6"),
+)
+
+# Hailstorm's AssetCatalogSynchronizer.SynchronizeRemoteCatalog downloads the
+# resource manifest unless the saved resource version equals the requested
+# one. The saved version is per-player local storage: without the source
+# account's player id in PlayerPrefs (player 000000000) it is empty and the
+# client starts a manifest download, which offline ends in a download error.
+# There is no CDN to synchronize with offline, so always take the "versions
+# equal" branch: the cache's own catalog database stays in use. This replaces
+# the source player id entry in the storage-key.json of an iOS install
+# (Android does the same through the Core.GetStoredResourceVersion hook).
+CATALOG_SYNC_PATCHES = (
+    (0x323B564, "AssetCatalogSynchronizer.SynchronizeRemoteCatalog: treat versions as equal", "60200037", "03010014"),
+)
+
 # The title screen prints "ID <player id>" from PlayerPrefs.  The iOS build
 # reuses the Android cache, so that ID belongs to the source account, not to
 # this client.  TitleSceneController.SetPlayerId already shows an empty label
@@ -274,6 +355,40 @@ def block_chapter_portal(framework: bytes) -> tuple[bytes, list[dict]]:
     return patch_code(framework, CHAPTER_PORTAL_PATCHES)
 
 
+def fixed_res_version(framework: bytes) -> tuple[bytes, list[dict]]:
+    """Report the cache's resource version regardless of the player."""
+    return patch_code(framework, RES_VERSION_PATCHES)
+
+
+def rewrite_res_version_literal(data: bytes, res_version: str) -> tuple[bytes, list[LiteralPatch]]:
+    if not re.fullmatch(r"R\d+(@[A-Za-z0-9+/=]+)?", res_version) or len(res_version) > len(RES_VERSION_LITERAL):
+        raise IosError(f"resource version {res_version!r} is not a resource version of at most "
+                       f"{len(RES_VERSION_LITERAL)} characters")
+    changed, patches = rewrite_literals(data, {RES_VERSION_LITERAL: res_version}.get)
+    if len(patches) != 1:
+        raise IosError("resource version carrier literal differs from the verified 5.0.1 client")
+    return changed, patches
+
+
+def fixed_player_id(framework: bytes) -> tuple[bytes, list[dict]]:
+    """Report the offline player id instead of reading it from PlayerPrefs."""
+    return patch_code(framework, PLAYER_ID_PATCHES)
+
+
+def rewrite_player_id_literal(data: bytes, player_id: str = OFFLINE_PLAYER_ID) -> tuple[bytes, list[LiteralPatch]]:
+    if not re.fullmatch(r"\d{1,20}", player_id):
+        raise IosError(f"player id {player_id!r} must be 1-20 digits")
+    changed, patches = rewrite_literals(data, {PLAYER_ID_LITERAL: player_id}.get)
+    if len(patches) != 1:
+        raise IosError("player id carrier literal differs from the verified 5.0.1 client")
+    return changed, patches
+
+
+def skip_catalog_sync(framework: bytes) -> tuple[bytes, list[dict]]:
+    """Keep the cached catalog instead of downloading the manifest."""
+    return patch_code(framework, CATALOG_SYNC_PATCHES)
+
+
 def hide_title_player_id(framework: bytes) -> tuple[bytes, list[dict]]:
     """Do not print the (source account's) player ID on the title screen."""
     return patch_code(framework, TITLE_ID_PATCHES)
@@ -312,6 +427,9 @@ def stage_offline_ios_client(
     block_story: bool = True,
     hide_title_id: bool = True,
     block_chapter: bool = True,
+    skip_catalog: bool = True,
+    res_version: str | None = DEFAULT_RES_VERSION,
+    player_id: str | None = OFFLINE_PLAYER_ID,
 ) -> dict:
     source, dylib, output = (p.expanduser().resolve() for p in (source, dylib, output))
     manifest = output.with_suffix(output.suffix + ".json")
@@ -351,6 +469,12 @@ def stage_offline_ios_client(
         if show_preview_bgm_fallback:
             metadata, preview_patches = rewrite_show_preview_bgm(metadata)
             patches += preview_patches
+        if res_version:
+            metadata, version_patches = rewrite_res_version_literal(metadata, res_version)
+            patches += version_patches
+        if player_id:
+            metadata, player_patches = rewrite_player_id_literal(metadata, player_id)
+            patches += player_patches
 
         replacements = {
             app + "Info.plist": plistlib.dumps(patch_info_plist(info, bundle_id)),
@@ -358,7 +482,8 @@ def stage_offline_ios_client(
             main: insert_dylib(main_data, DYLIB_INSTALL_NAME),
         }
         code_patches: list[dict] = []
-        if disable_lyric_videos or guard_destructive or compat_patches or block_story or hide_title_id or block_chapter:
+        if (disable_lyric_videos or guard_destructive or compat_patches or block_story or hide_title_id
+                or block_chapter or skip_catalog or res_version or player_id):
             if framework not in members:
                 raise IosError("UnityFramework not found")
             framework_data = archive.read(framework)
@@ -367,7 +492,10 @@ def stage_offline_ios_client(
                                      (guard_destructive, guard_destructive_actions),
                                      (block_story, block_story_playback),
                                      (hide_title_id, hide_title_player_id),
-                                     (block_chapter, block_chapter_portal)):
+                                     (block_chapter, block_chapter_portal),
+                                     (skip_catalog, skip_catalog_sync),
+                                     (bool(res_version), fixed_res_version),
+                                     (bool(player_id), fixed_player_id)):
                 if enabled:
                     framework_data, applied = patcher(framework_data)
                     code_patches += applied
@@ -416,6 +544,9 @@ def stage_offline_ios_client(
         "blockStoryPlayback": block_story,
         "hideTitlePlayerId": hide_title_id,
         "blockChapterPortal": block_chapter,
+        "skipCatalogSync": skip_catalog,
+        "fixedResVersion": res_version,
+        "fixedPlayerId": player_id,
         "codePatches": code_patches,
         "literalPatches": [{"index": p.index, "old": p.old, "new": p.new} for p in patches],
         "removedSignatureFiles": removed,

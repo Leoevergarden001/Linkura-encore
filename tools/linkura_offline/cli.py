@@ -18,7 +18,7 @@ from .android_repack import AndroidRepackError, repack_android_client
 from .android_resource_pack import ResourcePackError, build_resource_pack, install_resource_pack
 from .android_storage_key import StorageKeyError, export_storage_key
 from .ios_macho import IosError
-from .ios_offline import DEFAULT_PORT, stage_offline_ios_client
+from .ios_offline import DEFAULT_PORT, DEFAULT_RES_VERSION, OFFLINE_PLAYER_ID, stage_offline_ios_client
 from .ios_symbols import write_symbols
 
 REPO = Path(__file__).resolve().parents[2]
@@ -37,6 +37,9 @@ def _ios_stage(args: argparse.Namespace) -> int:
         guard_destructive=not args.allow_destructive_actions,
         block_story=not args.allow_story_playback,
         block_chapter=not args.allow_chapter_portal,
+        skip_catalog=not args.allow_catalog_sync,
+        res_version=None if args.per_player_res_version else args.res_version,
+        player_id=None if args.keep_player_id else OFFLINE_PLAYER_ID,
     )
     for patch in report["literalPatches"]:
         print(f"OK  metadata {patch['old']} -> {patch['new']}")
@@ -118,6 +121,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="let 活動記録 再生 start its download (default: the dialog just closes)")
     p.add_argument("--allow-chapter-portal", action="store_true",
                    help="let Chapter RANK open the Chapter portal (its assets were not saved)")
+    p.add_argument("--res-version", default=DEFAULT_RES_VERSION,
+                   help="resource version of your cache; the client always reports it, so the storage key "
+                        "alone (without the source player id) is enough")
+    p.add_argument("--per-player-res-version", action="store_true",
+                   help="keep reading resource versions from per-player storage (needs the source player id)")
+    p.add_argument("--allow-catalog-sync", action="store_true",
+                   help="let the client download the resource manifest when its saved version is missing "
+                        "(needs the source player id in PlayerPrefs; default: keep the cached catalog)")
+    p.add_argument("--keep-player-id", action="store_true",
+                   help="read the player id from PlayerPrefs (needs the source player id; default: the "
+                        "client is player 000000000, like the Android build)")
     p.set_defaults(func=_ios_stage)
 
     p = sub.add_parser("ios-symbols", help="address -> method name map from an IPA (for tools/re)")

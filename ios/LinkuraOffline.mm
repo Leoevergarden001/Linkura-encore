@@ -60,7 +60,8 @@ namespace {
 // names as Android. Documents/LinkuraOffline/storage-key.json uses the
 // Android resource-pack format ({"entries": {"<url-encoded name>": "<url-
 // encoded value>"}}); seed those entries before Unity reads PlayerPrefs so an
-// imported Documents/D, Documents/M cache is recognised.
+// imported Documents/D, Documents/M cache is recognised. A null value removes
+// the entry (for example the source account's player id from an older setup).
 static void SeedPlayerPrefs(NSURL* visible) {
     NSURL* file = [visible URLByAppendingPathComponent:@"storage-key.json"];
     NSData* raw = [NSData dataWithContentsOfURL:file];
@@ -75,8 +76,16 @@ static void SeedPlayerPrefs(NSURL* visible) {
     int changed = 0;
     for (NSString* name in entries) {
         id value = entries[name];
-        if (![name isKindOfClass:NSString.class] || ![value isKindOfClass:NSString.class]) continue;
+        if (![name isKindOfClass:NSString.class]) continue;
         NSString* key = [name stringByRemovingPercentEncoding] ?: name;
+        if (value == NSNull.null) {
+            if ([defaults objectForKey:key]) {
+                [defaults removeObjectForKey:key];
+                changed++;
+            }
+            continue;
+        }
+        if (![value isKindOfClass:NSString.class]) continue;
         NSString* decoded = [(NSString*)value stringByRemovingPercentEncoding] ?: value;
         if (![[defaults stringForKey:key] isEqualToString:decoded]) {
             [defaults setObject:decoded forKey:key];

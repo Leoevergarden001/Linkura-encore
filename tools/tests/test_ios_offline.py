@@ -14,6 +14,15 @@ from tools.linkura_offline.ios_offline import (
     LYRIC_VIDEO_PATCHES,
     apply_compat_patches,
     block_chapter_portal,
+    skip_catalog_sync,
+    fixed_res_version,
+    rewrite_res_version_literal,
+    RES_VERSION_LITERAL,
+    fixed_player_id,
+    rewrite_player_id_literal,
+    PLAYER_ID_LITERAL,
+    PLAYER_ID_PATCHES,
+    OFFLINE_PLAYER_ID,
     block_story_playback,
     hide_title_player_id,
     disable_lyric_video,
@@ -118,6 +127,34 @@ class ShowPreviewBgmRewriteTest(unittest.TestCase):
             rewrite_show_preview_bgm(metadata)
 
 
+class ResVersionLiteralTest(unittest.TestCase):
+    def test_rewrites_only_the_carrier_literal(self):
+        metadata = make_metadata([RES_VERSION_LITERAL, "BTLS"])
+        out, patches = rewrite_res_version_literal(metadata, "R2606002@RQMqABAxdj0b5c8TKh4+PNDUYQ==")
+        self.assertEqual(literal_values(out), ["R2606002@RQMqABAxdj0b5c8TKh4+PNDUYQ==", "BTLS"])
+        self.assertEqual((len(patches), len(out)), (1, len(metadata)))
+
+    def test_rejects_bad_version_or_layout(self):
+        with self.assertRaises(IosError):
+            rewrite_res_version_literal(make_metadata([RES_VERSION_LITERAL]), "not a version")
+        with self.assertRaises(IosError):
+            rewrite_res_version_literal(make_metadata(["something else"]), "R2606002")
+
+
+class PlayerIdLiteralTest(unittest.TestCase):
+    def test_rewrites_only_the_carrier_literal(self):
+        metadata = make_metadata([PLAYER_ID_LITERAL, "MonoBtlsSsl"])
+        out, patches = rewrite_player_id_literal(metadata)
+        self.assertEqual(literal_values(out), [OFFLINE_PLAYER_ID, "MonoBtlsSsl"])
+        self.assertEqual((len(patches), len(out)), (1, len(metadata)))
+
+    def test_rejects_bad_id_or_layout(self):
+        with self.assertRaises(IosError):
+            rewrite_player_id_literal(make_metadata([PLAYER_ID_LITERAL]), "abc")
+        with self.assertRaises(IosError):
+            rewrite_player_id_literal(make_metadata(["something else"]))
+
+
 # The decrypted 5.0.1 IPA is not in the repository; point LINKURA_IPA at it.
 SOURCE_IPA = Path(os.environ.get("LINKURA_IPA", "com.oddno.lovelive_5.0.1.ipa"))
 
@@ -168,6 +205,59 @@ class LyricVideoPatchTest(unittest.TestCase):
         self.assertEqual(word >> 26, 0b000101)  # unconditional B
         self.assertEqual(0x2EB0FE8 + ((word & 0x3FFFFFF) << 2), alert)
         self.assertEqual(alert, 0x2EB10C8)
+        self.assertEqual(len(applied), 1)
+
+    def test_fixed_res_version_returns_carrier_literal(self):
+        out, applied = fixed_res_version(self.framework)
+        self.assertEqual(len(applied), 5)
+
+        def adrp_target(pc):
+            w = int.from_bytes(out[pc:pc + 4], "little")
+            self.assertEqual(w & 0x9F000000, 0x90000000)
+            return (pc & ~0xFFF) + ((((w >> 29) & 3) | (((w >> 5) & 0x7FFFF) << 2)) << 12)
+
+        def add_imm(pc):
+            w = int.from_bytes(out[pc:pc + 4], "little")
+            self.assertEqual(w & 0xFFC00000, 0x91000000)
+            return (w >> 10) & 0xFFF
+
+        for adrp, add in ((0x31CD388, 0x31CD38C), (0x31CD438, 0x31CD43C)):
+            self.assertEqual(adrp_target(adrp) + add_imm(add), 0x985C468)
+        word = int.from_bytes(out[0x31CD39C:0x31CD3A0], "little")
+        self.assertEqual(word >> 26, 0b000101)
+        self.assertEqual(0x31CD39C + ((word & 0x3FFFFFF) << 2), 0x31CD438)
+
+    def test_fixed_player_id_returns_carrier_literal(self):
+        out, applied = fixed_player_id(self.framework)
+        self.assertEqual(len(applied), len(PLAYER_ID_PATCHES))
+
+        def word(pc):
+            return int.from_bytes(out[pc:pc + 4], "little")
+
+        def adrp_target(pc):
+            w = word(pc)
+            self.assertEqual(w & 0x9F000000, 0x90000000)
+            return (pc & ~0xFFF) + ((((w >> 29) & 3) | (((w >> 5) & 0x7FFFF) << 2)) << 12)
+
+        self.assertEqual(word(0x31CEE70) & 0xFFC00000, 0x91000000)
+        self.assertEqual(adrp_target(0x31CEE6C) + ((word(0x31CEE70) >> 10) & 0xFFF), 0x985C160)
+        ldr = word(0x31CEE84)
+        self.assertEqual(ldr & 0xFFC00000, 0xF9400000)  # ldr x0, [x8, #imm]
+        self.assertEqual((ldr >> 5) & 31, 8)
+        self.assertEqual(adrp_target(0x31CEE80) + (((ldr >> 10) & 0xFFF) << 3), 0x985C160)
+        # epilogue is the original one, followed by ret
+        self.assertEqual(out[0x31CEE88:0x31CEE90], self.framework[0x31CEE94:0x31CEE9C])
+        self.assertEqual(out[0x31CEE90:0x31CEE94].hex(), "c0035fd6")
+
+    def test_catalog_sync_takes_versions_equal_branch(self):
+        before = int.from_bytes(self.framework[0x323B564:0x323B568], "little")
+        self.assertEqual(before & 0x7F000000, 0x37000000)  # tbnz w0, #0, <done>
+        target = 0x323B564 + (((before >> 5) & 0x3FFF) << 2)
+        out, applied = skip_catalog_sync(self.framework)
+        word = int.from_bytes(out[0x323B564:0x323B568], "little")
+        self.assertEqual(word >> 26, 0b000101)  # unconditional B
+        self.assertEqual(0x323B564 + ((word & 0x3FFFFFF) << 2), target)
+        self.assertEqual(target, 0x323B970)
         self.assertEqual(len(applied), 1)
 
     def test_title_id_hidden(self):
