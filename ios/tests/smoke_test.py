@@ -209,6 +209,12 @@ def main() -> int:
             check("stamina recovery info", status == 200 and info["user_stamina"]["stamina_max"] == 999, body[:200].decode())
             status, _, body = post(conn, "/v1/out_quest_live/recovery_stamina", {"use_recovery_type": 1, "recovery_count": 1, "use_item_list": []})
             check("stamina refill", status == 200 and json.loads(body)["user_stamina"]["stamina_now"] >= 999, body[:200].decode())
+            check("stamina hold limit is the 3-digit max", info.get("stamina_limit") == 999, json.dumps(info)[:200])
+            status, _, body = post(conn, "/v1/out_quest_live/recovery_stamina",
+                                   {"use_recovery_type": 2, "recovery_count": 1,
+                                    "use_item_list": [{"item_id": 3001001, "item_num": 1}]})
+            check("charge ticket cannot pass 999", status == 200 and
+                  json.loads(body)["user_stamina"]["stamina_now"] == 999, body[:200].decode())
             post(conn, "/v1/user/login", {"player_id": "ABCDEFGHJ", "device_specific_id": "", "version": 1})
             status, _, body = post(conn, "/v1/profile/get_info", {})
             check("login player id not echoed into profile",

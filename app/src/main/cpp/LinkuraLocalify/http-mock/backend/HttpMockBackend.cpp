@@ -5300,6 +5300,11 @@ namespace LinkuraLocal::HttpMock {
     namespace {
         constexpr int64_t kStaminaMax = 999;
         constexpr int64_t kStaminaRecoverySeconds = 360;
+        // Charge tickets may not push プレイPt. past this.  The header lays
+        // out "now/max" for three digits each, so a value of 1000+ wraps; the
+        // client's heal popups (IsStaminaLimitExceeded) read stamina_limit
+        // and refuse a recovery that would exceed it.
+        constexpr int64_t kStaminaHoldLimit = kStaminaMax;
     }
 
     int64_t HttpMockBackend::Impl::CurrentStaminaLocked(std::time_t* fullAt) {
@@ -5319,6 +5324,8 @@ namespace LinkuraLocal::HttpMock {
             }
             if (stmt) sqlite3_finalize(stmt);
         }
+        // Older saves could hold up to 9999 from charge tickets.
+        value = std::min(value, kStaminaHoldLimit);
         if (value < kStaminaMax && now > updated) {
             value = std::min(kStaminaMax, value + (now - updated) / kStaminaRecoverySeconds);
         }
@@ -5381,7 +5388,6 @@ namespace LinkuraLocal::HttpMock {
     // server setting that was not preserved; offline the SIsCa refill is free
     // and restores the cap.
     namespace {
-        constexpr int64_t kStaminaHoldLimit = 9999;
         struct ChargeTicket { int itemId; int64_t effect; };
         constexpr ChargeTicket kChargeTickets[] = {{3001001, 50}, {3001002, 100}};
     }
