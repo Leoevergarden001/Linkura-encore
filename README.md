@@ -22,6 +22,7 @@ An unofficial offline server and client patch set for Link! Like! LoveLive! (リ
 | 客户端 | 你自己的 5.1.0 APK | 你自己的、已解密的 5.0.1 IPA |
 | 资源 | 你设备上游戏的资源缓存（`files/D`、`files/M`）和存储密钥 | 同左（Android 缓存可转用） |
 | 环境 | Android SDK/NDK、JDK 17、Java 21+（LSPatch） | Xcode、Apple 账号（免费 Personal Team 即可） |
+| 打包资源 | SQLCipher 4 命令行（`brew install sqlcipher`），用来把缓存换成新生成的存储密钥 | 同左 |
 
 ## 快速开始
 
