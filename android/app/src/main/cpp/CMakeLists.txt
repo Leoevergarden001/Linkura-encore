@@ -6,8 +6,6 @@
 # Sets the minimum CMake version required for this project.
 cmake_minimum_required(VERSION 3.22.1)
 
-include(FetchContent)
-
 # Declares the project name. The project name can be accessed via ${ PROJECT_NAME},
 # Since this is the top level CMakeLists.txt, the project name is also accessible
 # with ${CMAKE_PROJECT_NAME} (both CMake variables are in-sync within the top level
@@ -19,32 +17,6 @@ add_compile_options(-Wno-undefined-bool-conversion)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++23")
-
-# Fetch protobuf
-FetchContent_Declare(
-  protobuf
-  GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
-  GIT_TAG        v4.31.1
-  GIT_SHALLOW    TRUE
-)
-
-set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(protobuf_BUILD_PROTOC_BINARIES OFF CACHE BOOL "" FORCE)
-
-FetchContent_MakeAvailable(protobuf)
-
-# Fetch RE2
-FetchContent_Declare(
-  re2
-  GIT_REPOSITORY https://github.com/google/re2.git
-  GIT_TAG        2025-07-22
-  GIT_SHALLOW    TRUE
-)
-
-set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-
-FetchContent_MakeAvailable(re2)
 
 find_package(xdl REQUIRED CONFIG)
 find_package(shadowhook REQUIRED CONFIG)
@@ -75,26 +47,17 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         LinkuraLocalify/Log.cpp
         LinkuraLocalify/Misc.cpp
         LinkuraLocalify/Local.cpp
-	        LinkuraLocalify/MasterLocal.cpp
-	        LinkuraLocalify/camera/baseCamera.cpp
-	        LinkuraLocalify/camera/camera.cpp
-	        LinkuraLocalify/HttpMock.cpp
-	        ${LINKURA_SERVER_DIR}/src/RouteRegistry.cpp
-	        ${LINKURA_SERVER_DIR}/src/backend/HttpMockBackend.cpp
-	        LinkuraLocalify/config/Config.cpp
-	        LinkuraLocalify/config/version_compatibility.cpp
-	        LinkuraLocalify/string_parser/StringParser.cpp
+        LinkuraLocalify/HttpMock.cpp
+        LinkuraLocalify/config/Config.cpp
+        LinkuraLocalify/config/version_compatibility.cpp
+        # Shared offline server
+        ${LINKURA_SERVER_DIR}/src/RouteRegistry.cpp
+        ${LINKURA_SERVER_DIR}/src/backend/HttpMockBackend.cpp
         # Hook modules
-        LinkuraLocalify/hooks/HookDebug.cpp
-        LinkuraLocalify/hooks/HookLiveRender.cpp
-        LinkuraLocalify/hooks/HookCamera.cpp
+        LinkuraLocalify/hooks/HookOfflineFixes.cpp
         LinkuraLocalify/hooks/HookShare.cpp
         LinkuraLocalify/hooks/HookSqlCipher.cpp
-        LinkuraLocalify/hooks/HookStory.cpp
-        LinkuraLocalify/hooks/HookTranslation.cpp
         LinkuraLocalify/hooks/HookVirtualClock.cpp
-        # Generated protobuf files
-        build/linkura_messages.pb.cc
         )
 
 # Generate built-in offline API mock json constants (header) at build time.
@@ -162,14 +125,11 @@ target_link_libraries(${CMAKE_PROJECT_NAME} linkura_sqlite)
 
 target_link_libraries(${CMAKE_PROJECT_NAME} xdl::xdl)
 target_link_libraries(${CMAKE_PROJECT_NAME} shadowhook::shadowhook)
-target_link_libraries(${CMAKE_PROJECT_NAME} protobuf::libprotobuf-lite)
-target_link_libraries(${CMAKE_PROJECT_NAME} re2::re2)
 
 include_directories(LinkuraLocalify)
 include_directories(${CMAKE_SOURCE_DIR}/deps)
 include_directories(${LINKURA_THIRD_PARTY_DIR})
 include_directories(${LINKURA_SERVER_DIR}/src)
-include_directories(${CMAKE_SOURCE_DIR}/build)
 
 set(FMT_DIR "${CMAKE_SOURCE_DIR}/deps/fmt-11.0.2")
 include_directories(${FMT_DIR}/include)

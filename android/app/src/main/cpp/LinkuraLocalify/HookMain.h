@@ -16,7 +16,9 @@ extern std::unordered_set<void*> hookedStubs;
 
 extern bool IsNativeObjectAlive(void* obj);
 
-namespace LinkuraLocal::HookDebug {
+// Offline fixes for the 5.1 client (scene changes, Home, missions, async
+// exceptions) plus development diagnostics installed only with dbgMode.
+namespace LinkuraLocal::HookOfflineFixes {
     void Install(HookInstaller* hookInstaller);
     bool ChangeSceneForOfflineLogin(int sceneId);
 }
@@ -24,37 +26,12 @@ namespace LinkuraLocal::HookDebug {
 #include <vector>
 #include <cstdint>
 
-namespace LinkuraLocal::HookCamera {
-    void Install(HookInstaller* hookInstaller);
-    std::vector<uint8_t> getCameraInfoProtobuf();
-
-    void unregisterMainFreeCamera(bool cleanup);
-    void unregisterCurrentCamera();
-    void setCameraBackgroundColor(float red, float green, float blue, float alpha);
-
-    namespace Sharable {
-        extern std::unordered_set<UnityResolve::UnityType::Camera*> backgroundColorCameras;
-    }
-}
-
 namespace LinkuraLocal::HookLiveRender {
+    // With×MEETS screen orientation values of Config::withliveOrientation.
     enum struct LiveScreenOrientation {
         Landscape,
         Portrait
     };
-    void Install(HookInstaller* hookInstaller);
-    std::vector<uint8_t> getCurrentArchiveInfo();
-    void setArchivePosition(float seconds);
-    void applyCameraGraphicSettings(UnityResolve::UnityType::Camera* mainCamera);
-    void applyRenderTextureGraphicSettings(void* renderTexture);
-    void toggleArchivePlay(bool triggeredByJava = false);
-    namespace Shareable {
-        extern bool isPlaying;
-    }
-}
-
-namespace LinkuraLocal::HookStory {
-    void Install(HookInstaller* hookInstaller);
 }
 
 namespace LinkuraLocal::HookShare {
@@ -100,9 +77,6 @@ namespace LinkuraLocal::HookShare {
 namespace LinkuraLocal::HookSqlCipher {
     void Install(HookInstaller* hookInstaller);
     void InstallManaged(HookInstaller* hookInstaller);
-}
-namespace LinkuraLocal::HookTranslation {
-    void Install(HookInstaller *hookInstaller);
 }
 namespace LinkuraLocal::HookVirtualClock {
     void Install(HookInstaller* hookInstaller);

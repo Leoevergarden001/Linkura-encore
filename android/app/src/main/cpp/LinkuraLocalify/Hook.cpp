@@ -1,7 +1,5 @@
 #include "Hook.h"
 #include "Local.h"
-#include "MasterLocal.h"
-#include "camera/camera.hpp"
 
 // #include <jni.h>
 #include <thread>
@@ -12,7 +10,6 @@
 #include <codecvt>
 #include <chrono>
 #include <future>
-#include "linkura_messages.pb.h"
 
 
 std::unordered_set<void*> hookedStubs{};
@@ -75,12 +72,8 @@ namespace LinkuraLocal::HookMain {
 //                auto name = UnityResolve::Invoke<const char*>("il2cpp_class_get_name", pClass);
 //            }
         }
-        HookDebug::Install(hookInstaller);
-        HookLiveRender::Install(hookInstaller);
-        HookCamera::Install(hookInstaller);
+        HookOfflineFixes::Install(hookInstaller);
         HookShare::Install(hookInstaller);
-        HookStory::Install(hookInstaller);
-        HookTranslation::Install(hookInstaller);
         HookVirtualClock::Install(hookInstaller);
     }
     // 77 2640 5000
@@ -114,16 +107,12 @@ namespace LinkuraLocal::HookMain {
         }
 
         StartInjectFunctions();
-        L4Camera::initCameraSettings(); // free camera
 
         if (Config::lazyInit) {
             UnityResolveProgress::assembliesProgress.current = 2;
             UnityResolveProgress::classProgress.total = 1;
             UnityResolveProgress::classProgress.current = 0;
         }
-
-        Local::LoadData();
-//        MasterLocal::LoadData();
 
         UnityResolveProgress::startInit = false;
 

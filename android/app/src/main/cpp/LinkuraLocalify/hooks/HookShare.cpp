@@ -2,7 +2,6 @@
 #include "../Misc.hpp"
 #include "../Local.h"
 #include "HttpMock.hpp"
-#include <re2/re2.h>
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -258,18 +257,19 @@ namespace LinkuraLocal::HookShare {
 
     // URL替换函数：将external_link中的URL替换为assets_url
     std::string replaceUriHost(const std::string& uri, const std::string& assets_url) {
-        // 使用RE2正则表达式匹配URL模式
-        // 匹配 https://foo.example.org 这样的URL，并考虑路径部分
-        std::string pattern = R"(^https://[^/]+(/.*)?$)";
-        RE2 re(pattern);
-        
-        if (!re.ok()) {
-            Log::WarnFmt("RE2 compile failed for pattern: %s, error: %s", pattern.c_str(), re.error().c_str());
-            return uri;
-        }
-        
+        // Same as matching ^https://[^/]+(/.*)?$ : an https URL with a
+        // non-empty host; path_part is everything from the first '/' after it.
+        constexpr std::string_view scheme = "https://";
         std::string path_part;
-        if (RE2::FullMatch(uri, re, &path_part)) {
+        bool matched = false;
+        if (uri.size() > scheme.size() && std::string_view(uri).starts_with(scheme)) {
+            const auto slash = uri.find('/', scheme.size());
+            if (slash != scheme.size()) {
+                matched = true;
+                if (slash != std::string::npos) path_part = uri.substr(slash);
+            }
+        }
+        if (matched) {
             std::string result = assets_url;
             if (!path_part.empty()) {
                 if (!assets_url.empty() && assets_url.back() == '/' && path_part.front() == '/') {
@@ -920,7 +920,7 @@ namespace LinkuraLocal::HookShare {
         // exactly the response served by the preservation login route.  Scene
         // 35 is the login-bonus scene and would immediately redirect when its
         // offline list is empty.
-        HookDebug::ChangeSceneForOfflineLogin(3);
+        HookOfflineFixes::ChangeSceneForOfflineLogin(3);
     }
 
     // http request log

@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string_view>
-namespace LinkuraLocal::HookDebug {
+namespace LinkuraLocal::HookOfflineFixes {
     using Il2cppString = UnityResolve::UnityType::String;
 
     namespace {
@@ -196,50 +196,13 @@ namespace LinkuraLocal::HookDebug {
     }
 
     // 👀
-    DEFINE_HOOK(void, CoverImageCommandReceiver_Awake, (Il2cppUtils::Il2CppObject* self, void* method)) {
-        Log::DebugFmt("CoverImageCommandReceiver_Awake HOOKED");
-        if (Config::removeRenderImageCover) return;
-        CoverImageCommandReceiver_Awake_Orig(self, method);
-    }
     // 👀　work for both als and mrs
-    DEFINE_HOOK(void, CharacterVisibleReceiver_SetupExistCharacter, (Il2cppUtils::Il2CppObject* self,int character, void* method)) {
-        Log::DebugFmt("CharacterVisibleReceiver_SetupExistCharacter HOOKED");
-        if (Config::avoidCharacterExit) return;
-        CharacterVisibleReceiver_SetupExistCharacter_Orig(self, character, method);
-    }
     // old Config::enableLegacyCompatibility
-    DEFINE_HOOK(void, CharacterVisibleReceiver_UpdateAvatarVisibility, (Il2cppUtils::Il2CppObject* self, bool isVisible, void* method)) {
-        Log::DebugFmt("CharacterVisibleReceiver_UpdateAvatarVisibility HOOKED");
-        if (Config::avoidCharacterExit) isVisible = true;
-        CharacterVisibleReceiver_UpdateAvatarVisibility_Orig(self, isVisible, method);
-    }
     // old Config::enableLegacyCompatibility
-    DEFINE_HOOK(void, MRS_AppsCoverScreen_SetActiveCoverImage, (Il2cppUtils::Il2CppObject* self, bool isActive, void* method)) {
-        Log::DebugFmt("AppsCoverScreen_SetActiveCoverImage HOOKED");
-        if (Config::removeRenderImageCover) isActive = false;
-        MRS_AppsCoverScreen_SetActiveCoverImage_Orig(self, isActive, method);
-    }
 
-    DEFINE_HOOK(Il2cppString*, Hailstorm_AssetDownloadJob_get_UrlBase, (Il2cppUtils::Il2CppObject* self, void* method)) {
-        auto base = Hailstorm_AssetDownloadJob_get_UrlBase_Orig(self, method);
-        if (!Config::assetsUrlPrefix.empty()) {
-            base = Il2cppString::New(HookShare::replaceUriHost(base->ToString(), Config::assetsUrlPrefix));
-        }
-        return base;
-    }
 
-    DEFINE_HOOK(void, FootShadowManipulator_OnInstantiate, (Il2cppUtils::Il2CppObject* self, void* method)) {
-        Log::DebugFmt("FootShadowManipulator_OnInstantiate HOOKED");
-        if (Config::hideCharacterShadow) return;
-        FootShadowManipulator_OnInstantiate_Orig(self, method);
-    }
 
     // character　item
-    DEFINE_HOOK(void, ItemManipulator_OnInstantiate, (Il2cppUtils::Il2CppObject* self, void* method)) {
-        Log::DebugFmt("ItemManipulator_OnInstantiate HOOKED");
-        if (Config::hideLiveStreamCharacterItems) return;
-        ItemManipulator_OnInstantiate_Orig(self, method);
-    }
 
     enum HideLiveStreamSceneItemMode {
         None,
@@ -264,11 +227,6 @@ namespace LinkuraLocal::HookDebug {
     };
 
     // For example: Whiteboard, photo in with meets
-    DEFINE_HOOK(void, ScenePropManipulator_OnInstantiate, (Il2cppUtils::Il2CppObject* self, void* method)) {
-        Log::DebugFmt("ScenePropManipulator_OnInstantiate HOOKED");
-        if (Config::hideLiveStreamSceneItemsLevel >= HideLiveStreamSceneItemMode::Lite) return;
-        ScenePropManipulator_OnInstantiate_Orig(self, method);
-    }
 
     static void hideGameObjectRecursive(UnityResolve::UnityType::GameObject* gameObject, int current_level, int max_level,
                                  const std::string& prefix = "", std::set<void*>* visited = nullptr, bool debug = true) {
@@ -317,65 +275,8 @@ namespace LinkuraLocal::HookDebug {
     }
 
     // return struct value, should use &scene as ptr.
-    DEFINE_HOOK(void*, SceneManager_GetSceneByName, (Il2cppString * sceneName, void* method)) {
-        Log::DebugFmt("SceneManager_GetSceneByName HOOKED: %s", sceneName->ToString().c_str());
-        auto scene = SceneManager_GetSceneByName_Orig(sceneName, method);
-        Log::DebugFmt("SceneManager_GetSceneByName HOOKED: %s Finished", sceneName->ToString().c_str());
-        static auto Scene_klass = Il2cppUtils::GetClass("UnityEngine.CoreModule.dll", "UnityEngine.SceneManagement", "Scene");
-        static auto Scene_getRootGameObjects = Scene_klass->Get<UnityResolve::Method>("GetRootGameObjects", {});
-        static auto Transform_klass = Il2cppUtils::GetClass("UnityEngine.CoreModule.dll", "UnityEngine", "Transform");
-        if (sceneName->ToString().starts_with("3d_stage")) {
-//            Log::DebugFmt("Scene_getRootGameObjects is at %p", Scene_getRootGameObjects);
-            if (Scene_getRootGameObjects) {
-                auto gameObjects = Scene_getRootGameObjects->Invoke<UnityResolve::UnityType::Array<UnityResolve::UnityType::GameObject*>*>(&scene);
-//                auto gameObjects = Scene_getRootGameObjects(scene);
-//                Log::DebugFmt("gameObjects is at %p", gameObjects);
-                auto gameObjectsVector = gameObjects->ToVector();
-                for (auto object : gameObjectsVector) {
-                    auto name = object->GetName();
-                    Log::DebugFmt("SceneManager_GetSceneByName game object: %s", name.c_str());
-                    switch ((HideLiveStreamSceneItemMode) Config::hideLiveStreamSceneItemsLevel) {
-                        case HideLiveStreamSceneItemMode::Normal:
-                            if (name.starts_with("Sc")) {
-                                hideGameObjectRecursive(object, 0, 12);
-                            }
-                            break;
-                        case HideLiveStreamSceneItemMode::Strong: // 也许可以通过循环实时隐藏，或者是根据阻止timeline显示对应的object
-                        case HideLiveStreamSceneItemMode::Ultimate:
-                            hideGameObjectRecursive(object, 0, 12);
-                            break;
-                        default:
-                            break;
-                    }
-                }
-            }
 
 
-
-        }
-        return scene;
-    }
-
-    DEFINE_HOOK(void, TimelineCommandReceiver_Awake, (void* self, void* method)) {
-        Log::DebugFmt("TimelineCommandReceiver_Awake HOOKED");
-        // 可以根据阻止timeline显示对应的object
-        if (Config::hideLiveStreamSceneItemsLevel == HideLiveStreamSceneItemMode::Ultimate) return;
-        TimelineCommandReceiver_Awake_Orig(self, method);
-    }
-
-    DEFINE_HOOK(int32_t, ManagerParams_get_SeatsCount, (Il2cppUtils::Il2CppObject* self, void* method)) {
-        auto result = ManagerParams_get_SeatsCount_Orig(self, method);
-        Log::DebugFmt("ManagerParams_get_SeatsCount HOOKED: %d", result);
-        switch ((HideLiveStreamSceneItemMode) Config::hideLiveStreamSceneItemsLevel) {
-            case HideLiveStreamSceneItemMode::Strong: // 也许可以通过循环实时隐藏，或者是根据阻止timeline显示对应的object
-            case HideLiveStreamSceneItemMode::Ultimate:
-                result = 0;
-                break;
-            default:
-                break;
-        }
-        return result;
-    }
 #pragma region draft
     DEFINE_HOOK(void, LiveSceneController_InitializeSceneAsync, (Il2cppUtils::Il2CppObject* self, void* method)) {
         Log::DebugFmt("LiveSceneController_InitializeSceneAsync HOOKED");
@@ -1400,19 +1301,8 @@ namespace LinkuraLocal::HookDebug {
         ADD_HOOK(Internal_Log, Il2cppUtils::il2cpp_resolve_icall(
                 "UnityEngine.DebugLogHandler::Internal_Log(UnityEngine.LogType,UnityEngine.LogOption,System.String,UnityEngine.Object)"));
         
-        // 👀
-        ADD_HOOK(CoverImageCommandReceiver_Awake, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "CoverImageCommandReceiver", "Awake"));
-        ADD_HOOK(CharacterVisibleReceiver_SetupExistCharacter, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix.Character", "CharacterVisibleReceiver", "SetupExistCharacter"));
 
-        // 👀 old
-        ADD_HOOK(MRS_AppsCoverScreen_SetActiveCoverImage, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Inspix.LiveMain", "AppsCoverScreen", "SetActiveCoverImage"));
-        ADD_HOOK(CharacterVisibleReceiver_UpdateAvatarVisibility, Il2cppUtils::GetMethodPointer("Assembly-CSharp.dll", "Inspix.Character", "CharacterVisibleReceiver", "UpdateAvatarVisibility"));
-        ADD_HOOK(Hailstorm_AssetDownloadJob_get_UrlBase, Il2cppUtils::GetMethodPointer("Core.dll", "Hailstorm", "AssetDownloadJob", "get_UrlBase"));
 
-        ADD_HOOK(FootShadowManipulator_OnInstantiate, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix.Character.FootShadow", "FootShadowManipulator", "OnInstantiate"));
-        ADD_HOOK(ItemManipulator_OnInstantiate, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix.Character.Item", "ItemManipulator", "OnInstantiate"));
-        ADD_HOOK(ScenePropManipulator_OnInstantiate, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix.Operator", "ScenePropManipulator", "OnInstantiate"));
-        ADD_HOOK(SceneManager_GetSceneByName, Il2cppUtils::GetMethodPointer("UnityEngine.CoreModule.dll", "UnityEngine.SceneManagement", "SceneManager", "GetSceneByName"));
         auto sceneChangerMethod = Il2cppUtils::GetMethodPointer(
                 "Assembly-CSharp.dll", "", "SceneChanger", "AddSceneAsync");
         if (!sceneChangerMethod) {
@@ -1793,9 +1683,7 @@ namespace LinkuraLocal::HookDebug {
             Log::Error("[LoginFlow] unable to resolve UnityEngine.SceneManagement.SceneManager");
         }
 
-        ADD_HOOK(TimelineCommandReceiver_Awake, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "TimelineCommandReceiver", "Awake"));
 
-        ADD_HOOK(ManagerParams_get_SeatsCount, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix.Audience.IndirectRendering", "ManagerParams", "get_SeatsCount"));
 #pragma region draft_hook
 //        ADD_HOOK(LiveSceneController_InitializeSceneAsync, Il2cppUtils::GetMethodPointer("Core.dll", "Inspix", "LiveSceneController", "InitializeSceneAsync"));
 //        ADD_HOOK(SceneControllerBase_GetSceneView, Il2cppUtils::GetMethodPointer("Core.dll", "", "SceneControllerBase`1", "SetSceneParam"));

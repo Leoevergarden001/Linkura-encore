@@ -1,12 +1,11 @@
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.kotlinAndroid)
-    alias(libs.plugins.compose.compiler)
-    alias(libs.plugins.serialization)
-    id("kotlin-parcelize")
-    id("com.google.protobuf") version "0.9.5"
 }
 
+// Xposed / LSPatch module of linkura-offline. The application id and the
+// entry class keep the linkura-localify names: the native JNI symbols, the
+// LSPatch module id and the repack tooling depend on them.
 android {
     namespace 'io.github.chocolzs.linkura.localify'
     compileSdk 34
@@ -16,14 +15,9 @@ android {
         applicationId "io.github.chocolzs.linkura.localify"
         minSdk 29
         targetSdk 34
-        versionCode 12
-        versionName "v2.0.0-beta5"
-        buildConfigField "String", "VERSION_NAME", "\"${versionName}\""
+        versionCode 1
+        versionName "0.1.0-offline"
 
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        vectorDrawables {
-            useSupportLibrary true
-        }
         externalNativeBuild {
             cmake {
                 cppFlags ''
@@ -37,8 +31,6 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            buildConfigField "boolean", "ENABLE_LOG", "true"
             signingConfig signingConfigs.debug
         }
     }
@@ -50,10 +42,7 @@ android {
         jvmTarget = '11'
     }
     buildFeatures {
-        buildConfig true
-        compose true
         prefab true
-        aidl true
     }
     externalNativeBuild {
         cmake {
@@ -73,147 +62,10 @@ android {
             excludes += "**.bin"
         }
     }
-
-    sourceSets {
-        main {
-            proto {
-                srcDir 'src/main/proto'
-            }
-            java {
-                srcDirs += "${protobuf.generatedFilesBaseDir}/main/java"
-            }
-        }
-    }
-
-    applicationVariants.configureEach { variant ->
-        variant.mergeAssetsProvider.configure { mergeAssetsTask ->
-            mergeAssetsTask.doLast {
-               delete(fileTree(dir: mergeAssetsTask.outputDir, includes: [
-                                                                        //   'linkura-local/gakuen-adapted-translation-data/**',
-                                                                           'linkura-local/linkura-master-translation/**',
-                                                                           'linkura-local/linkura-generic-strings-translation/**',
-                                                                           'linkura-local/live-data/**'
-                                                                          ]))
-            }
-        }
-    }
-}
-
-// Generate protobuf files during project configuration phase
-project.afterEvaluate {
-    // Check if protobuf files exist, if not create a simple task to generate them
-    def protoSrcDir = "${projectDir}/src/main/proto"
-    def cppOutDir = "${projectDir}/src/main/cpp/build"
-    def protobufGenerated = file("${cppOutDir}/linkura_messages.pb.cc").exists()
-    
-    if (!protobufGenerated) {
-        logger.lifecycle("Protobuf files not found, will generate during build...")
-        
-        // Create output directory
-        file(cppOutDir).mkdirs()
-        
-        // Create a simple placeholder file to satisfy CMake during sync
-        def placeholderFile = file("${cppOutDir}/linkura_messages.pb.cc")
-        placeholderFile.text = """// Placeholder file generated during sync
-// This will be replaced by actual protobuf generated code during build
-namespace linkura { namespace ipc {
-// Placeholder content
-}}
-"""
-        logger.lifecycle("Created placeholder protobuf file for CMake sync")
-    }
-}
-
-protobuf {
-    protoc {
-        artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.get()}"
-    }
-    generateProtoTasks {
-        all().each { task ->
-            task.plugins {
-                java {
-                    option 'lite'
-                }
-            }
-            task.doLast {
-                // Generate C++ protobuf files for native code
-                def protoSrcDir = "${projectDir}/src/main/proto"
-                def cppOutDir = "${projectDir}/src/main/cpp/build"
-
-                // Create output directory if it doesn't exist
-                file(cppOutDir).mkdirs()
-
-                // Use the protoc binary downloaded by Gradle
-                def protocPath = protobuf.tools.protoc.artifact
-                def protocExe = configurations.protobufToolsLocator_protoc.singleFile
-
-                fileTree(dir: protoSrcDir, include: '**/*.proto').each { protoFile ->
-                    exec {
-                        commandLine protocExe,
-                                '--cpp_out=lite:' + cppOutDir,
-                                '--proto_path=' + protoSrcDir,
-                                protoFile.absolutePath
-                    }
-                }
-            }
-        }
-    }
 }
 
 dependencies {
-    // implementation files('libs/lspatch_cleaned.jar')
-    // api 'com.google.guava:guava:32.0.1-jre'
-
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.material3)
-    implementation(libs.material)
-
-    implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.androidx.navigation.compose)
-    implementation files('libs/lspatch_cleaned.jar')
-
-    implementation(libs.zip4j)
-    implementation(libs.shizukuApi)
-    implementation(libs.rikka.shizuku.provider)
-    implementation(libs.rikka.refine)
-    implementation(libs.rikka.hidden.stub)
-    implementation(libs.hiddenapibypass)
-
-    def composeBom = platform(libs.androidx.compose.bom)
-    implementation(composeBom)
-    androidTestImplementation(composeBom)
-    implementation(libs.androidx.runtime)
-    implementation(libs.androidx.material)
-    implementation(libs.androidx.foundation)
-    implementation(libs.androidx.foundation.layout)
-    implementation(libs.androidx.animation)
-    implementation(libs.androidx.ui.tooling.preview)
-    implementation(libs.androidx.material.icons.extended)
-    androidTestImplementation(libs.androidx.ui.test.junit4)
-    debugImplementation(libs.androidx.ui.tooling)
-    debugImplementation(libs.androidx.ui.test.manifest)
-    implementation(libs.accompanist.pager)
-    implementation(libs.accompanist.pager.indicators)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-
-    implementation(libs.coil.compose)
-    implementation(libs.coil.svg)
-
-    implementation(platform(libs.okhttp.bom))
-    implementation(libs.okhttp)
-    implementation(libs.logging.interceptor)
-
-    // Markdown renderer
-    implementation("com.mikepenz:multiplatform-markdown-renderer:0.29.0")
-    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.29.0")
-
     implementation(libs.xdl)
     implementation(libs.shadowhook)
     compileOnly(libs.xposed.api)
-    implementation(libs.kotlinx.serialization.json)
-
-    // Protobuf
-    implementation(libs.protobuf.javalite)
 }

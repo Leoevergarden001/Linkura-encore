@@ -104,7 +104,6 @@ namespace LinkuraLocal::Config {
     void LoadConfig(const std::string& configStr);
     void LoadArchiveConfig(const std::string& configStr);
     void SaveConfig(const std::string& configPath);
-    void UpdateConfig(const linkura::ipc::ConfigUpdate& configUpdate);
 
     // Legacy version comparison functions (keep for compatibility)
     std::vector<int> parseVersion(const std::string& version);
