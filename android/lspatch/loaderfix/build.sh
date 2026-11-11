@@ -1,5 +1,5 @@
 #!/bin/bash
-# Rebuild lspatch_loaderfix.jar from lspatch.jar (LSPatch 0.7).
+# Rebuild android/lspatch/lspatch_loaderfix.jar from lspatch.jar (LSPatch 0.7).
 #
 # Why: XResources extends xposed.dummy.XResourcesSuperClass, which LSPosed
 # only generates at runtime. On the first launch after a clean install there
@@ -17,7 +17,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 LIBS="$(dirname "$HERE")"
 SDK="${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}"
 BT="${BUILD_TOOLS:-$SDK/build-tools/34.0.0}"
-JAVA_HOME="${JAVA_HOME:-/path/to/jdk-17}"
+JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || true)}"
+[ -x "$JAVA_HOME/bin/javac" ] || { echo "set JAVA_HOME to a JDK 17" >&2; exit 1; }
 export JAVA_HOME
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
