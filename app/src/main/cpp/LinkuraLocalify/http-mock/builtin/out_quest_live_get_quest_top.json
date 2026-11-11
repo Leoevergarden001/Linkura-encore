@@ -3125,6 +3125,411 @@
         }
       ],
       "dream_live_series_id": 1003
+    },
+    {
+      "dream_quest_series_id": 61021803,
+      "dream_quest_stages_id": 610218030,
+      "clear_times": 0,
+      "is_clear": false,
+      "is_get_card": true,
+      "limit_break_times": 0,
+      "condition_list": [
+        {
+          "condition_text": "ユメノコトワリを300個集めよう",
+          "achieve_count": 9999,
+          "is_release": true,
+          "is_display_progress_num": true
+        },
+        {
+          "condition_text": "Gradeをシルバー1まで上げよう",
+          "achieve_count": 305,
+          "is_release": true,
+          "is_display_progress_num": false
+        },
+        {
+          "condition_text": "乙宗 梢のファンレベルを100まで上げよう",
+          "achieve_count": 9999,
+          "is_release": true,
+          "is_display_progress_num": true
+        }
+      ],
+      "music_list": [
+        {
+          "m_musics_id": 103104,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103105,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103106,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103107,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103109,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103115,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103117,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103204,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103205,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 104101,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 104203,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 104204,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203101,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203107,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 204108,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 204109,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 204117,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 204119,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 204121,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 204301,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303107,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303114,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303201,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 304117,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 305104,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 405142,
+          "is_enable": true
+        }
+      ],
+      "dream_live_series_id": 1003
+    },
+    {
+      "dream_quest_series_id": 61022803,
+      "dream_quest_stages_id": 610228030,
+      "clear_times": 0,
+      "is_clear": false,
+      "is_get_card": true,
+      "limit_break_times": 0,
+      "condition_list": [
+        {
+          "condition_text": "ユメノコトワリを300個集めよう",
+          "achieve_count": 9999,
+          "is_release": true,
+          "is_display_progress_num": true
+        },
+        {
+          "condition_text": "Gradeをシルバー1まで上げよう",
+          "achieve_count": 305,
+          "is_release": true,
+          "is_display_progress_num": false
+        },
+        {
+          "condition_text": "夕霧 綴理のファンレベルを100まで上げよう",
+          "achieve_count": 9999,
+          "is_release": true,
+          "is_display_progress_num": true
+        }
+      ],
+      "music_list": [
+        {
+          "m_musics_id": 103102,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103108,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103111,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 104116,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 105105,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203102,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203104,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203111,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 204112,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303103,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303106,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303112,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303116,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303117,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303202,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303205,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303206,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 304101,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 304109,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 304110,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 304112,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 304118,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 304120,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 304203,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 405143,
+          "is_enable": true
+        }
+      ],
+      "dream_live_series_id": 1003
+    },
+    {
+      "dream_quest_series_id": 61023803,
+      "dream_quest_stages_id": 610238030,
+      "clear_times": 0,
+      "is_clear": false,
+      "is_get_card": true,
+      "limit_break_times": 0,
+      "condition_list": [
+        {
+          "condition_text": "ユメノコトワリを300個集めよう",
+          "achieve_count": 9999,
+          "is_release": true,
+          "is_display_progress_num": true
+        },
+        {
+          "condition_text": "Gradeをシルバー1まで上げよう",
+          "achieve_count": 305,
+          "is_release": true,
+          "is_display_progress_num": false
+        },
+        {
+          "condition_text": "藤島 慈のファンレベルを100まで上げよう",
+          "achieve_count": 9999,
+          "is_release": true,
+          "is_display_progress_num": true
+        }
+      ],
+      "music_list": [
+        {
+          "m_musics_id": 103110,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103113,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103114,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103116,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 103119,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 104103,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 104106,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 104110,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 104114,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 104118,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 104119,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 104301,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203105,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203108,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203112,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203117,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203204,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203205,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 203301,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 204116,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 204202,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 205102,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 303119,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 304121,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 405131,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 405132,
+          "is_enable": true
+        },
+        {
+          "m_musics_id": 405144,
+          "is_enable": true
+        }
+      ],
+      "dream_live_series_id": 1003
     }
   ],
   "grade_detail": {

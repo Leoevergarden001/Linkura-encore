@@ -35,12 +35,20 @@ namespace LinkuraLocal::HttpMock {
             routes.emplace(std::string(path), std::move(handler));
         }
 
-        static std::optional<MockResponse> HandleUserLogin(const MockRequestContext&,
-                                                             HttpMockBackend&) {
+        static std::optional<MockResponse> HandleUserLogin(const MockRequestContext& request,
+                                                             HttpMockBackend& backend) {
             // A clean 5.1.0 install sends an empty player_id. In preservation mode
             // that still identifies the single local save; treating it as a new
             // online account sends the client into the LinkLike ID flow and makes
             // an offline cold start impossible.
+            const auto payload = nlohmann::json::parse(request.payloadJson, nullptr, false);
+            if (payload.is_object() && payload.contains("player_id") &&
+                payload["player_id"].is_string()) {
+                // The title screen reads this local ID from PlayerPrefs. Use
+                // the same ID in ProfileInfo without embedding a device's
+                // private player ID in checked-in templates or logs.
+                backend.RememberLoginPlayerId(payload["player_id"].get<std::string>());
+            }
             const auto& jsonBody = OfflineApiMockBuiltIn::UserLoginJsonView;
             return MockResponse{
                 std::string(jsonBody),
@@ -733,6 +741,10 @@ namespace LinkuraLocal::HttpMock {
             // HomeMenu exposes them in offline mode. Empty player collections
             // represent a clean local save; the shop catalog comes from Shops.yaml.
             RegisterBackend(routes, "/v1/mission/get_list", HandleMissionGetList);
+            RegisterBackend(routes, "/v1/mission/receive_common_mission_reward",
+                            [](const MockRequestContext&, HttpMockBackend& backend) {
+                                return ToBackendResponse(backend.ReceiveCommonMissionReward());
+                            });
             RegisterStaticJson(routes, "/v1/present_box/get_list",
                                R"({"total_count":0,"page":1,"items":[]})");
             RegisterStaticJson(routes, "/v1/present_box/get_history",
@@ -744,6 +756,9 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/item_exchange/set_purchase", HandleItemExchangeSetPurchase);
             RegisterStaticJson(routes, "/v1/circle/get_circle_top_info",
                                R"({"circle_info":null,"circle_member_list":[],"circle_ranking_info":null,"item_request_result":null,"emoji_list":[],"membership_list":[]})");
+            // ID search: there are no other players offline. ResultCode enum
+            // (5.0.1 metadata): Success=0, NotExists=1.
+            RegisterStaticJson(routes, "/v1/follow/search_id", R"({"result_code":1})");
             RegisterStaticJson(routes, "/v1/follow/get_list",
                                R"({"follow_info_list":[],"max_follow_count":0})");
             RegisterStaticJson(routes, "/v1/follow/get_follower_list",

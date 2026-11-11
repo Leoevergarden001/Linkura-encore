@@ -240,6 +240,9 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetArchiveDetailByIdLocked(std::string_view archivesId);
         std::optional<MockStoredResponse> GetHomeResponseLocked();
         std::optional<MockStoredResponse> GetMissionListResponseLocked();
+        std::pair<int64_t, int64_t> CommonMissionStarsLocked();
+        int CommonMissionReceivedOrderLocked();
+        std::optional<MockStoredResponse> ReceiveCommonMissionRewardLocked();
         bool RecordMissionEventLocked(std::string_view sourceKey, std::string_view kind,
                                       int amount = 1, int detail = 0);
         std::optional<nlohmann::json> BuildProfileInfoLocked();
@@ -281,6 +284,7 @@ namespace LinkuraLocal::HttpMock {
         std::optional<GachaState> LoadGachaStateLocked(int seriesId = 1055003);
         std::optional<MockStoredResponse> GetGachaSeriesListResponseLocked();
         std::optional<MockStoredResponse> GachaSetPurchaseLocked(std::string_view payloadJson);
+        bool PaidDailyGachaUsedLocked(int seriesId);
         std::optional<MockStoredResponse> GetGachaHistoryResponseLocked();
         std::optional<MockStoredResponse> GetGachaGuaranteePointListLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GachaSetGuaranteePointExchangeLocked(std::string_view payloadJson);
@@ -1931,7 +1935,9 @@ namespace LinkuraLocal::HttpMock {
             badge != result.end() && badge->is_object()) {
             (*badge)["has_daily_ticket"] = false;
             (*badge)["has_grand_prix_playable_count"] = false;
-            (*badge)["is_not_received_common_mission_reward"] = false;
+            const auto [stageStars, showStars] = CommonMissionStarsLocked();
+            (*badge)["is_not_received_common_mission_reward"] =
+                (stageStars + showStars) / 15 > CommonMissionReceivedOrderLocked();
             (*badge)["is_not_read_sticker_exchange_new_arrival"] = false;
         }
         return MockStoredResponse{
@@ -1958,6 +1964,50 @@ namespace LinkuraLocal::HttpMock {
         return ok;
     }
 
+    std::pair<int64_t, int64_t> HttpMockBackend::Impl::CommonMissionStarsLocked() {
+        int64_t stageStars = 0;
+        int64_t showStars = 0;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT COALESCE(SUM(best),0) FROM (SELECT MAX(amount) AS best "
+                "FROM offline_mission_event WHERE event_kind='QUEST_STAR' GROUP BY detail);",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt && sqlite3_step(stmt) == SQLITE_ROW) {
+            stageStars = sqlite3_column_int64(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT high_score_achievement_status, difficulty_scores_json FROM rhythm_music_score;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                showStars += sqlite3_column_int(stmt, 0);
+                const auto* raw = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                const auto difficulties = nlohmann::json::parse(raw ? raw : "[]", nullptr, false);
+                if (!difficulties.is_array()) continue;
+                for (const auto& difficulty : difficulties) {
+                    if (!difficulty.is_object()) continue;
+                    showStars += difficulty.value("combo_achievement_status", 0);
+                    showStars += difficulty.value("clear_lamp", 0);
+                }
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return {stageStars, showStars};
+    }
+
+    int HttpMockBackend::Impl::CommonMissionReceivedOrderLocked() {
+        sqlite3_stmt* stmt = nullptr;
+        int order = 0;
+        if (sqlite3_prepare_v2(db,
+                "SELECT value FROM offline_mission_meta WHERE key='common_received_order';",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt && sqlite3_step(stmt) == SQLITE_ROW) {
+            const auto* raw = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            if (raw) order = std::clamp(std::atoi(raw), 0, 180);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return order;
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetMissionListResponseLocked() {
         if (!initialized && !EnsureReadyLocked()) return std::nullopt;
         if (!db) return std::nullopt;
@@ -1965,6 +2015,11 @@ namespace LinkuraLocal::HttpMock {
         nlohmann::json result = OfflineApiMockBuiltIn::MissionGetListJsonObj();
         if (!rules.is_object() || !result.is_object() ||
             !result.contains("mission_list") || !result["mission_list"].is_array()) return std::nullopt;
+
+        const auto [stageStars, showStars] = CommonMissionStarsLocked();
+        result["common_mission_info"]["school_stage_star"] = stageStars;
+        result["common_mission_info"]["rhythm_game_star"] = showStars;
+        result["common_mission_info"]["received_order"] = CommonMissionReceivedOrderLocked();
 
         const auto scalar = [this](const std::string& sql, int detail = 0,
                                    std::string_view kind = {}) -> int64_t {
@@ -2196,6 +2251,74 @@ namespace LinkuraLocal::HttpMock {
             200, "OK (offline mission state)"};
     }
 
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::ReceiveCommonMissionRewardLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const auto [stageStars, showStars] = CommonMissionStarsLocked();
+        // The preserved CommonMissions Master has 180 consecutive tiers:
+        // IDs 1001–1180, 15 total stars and 1,000 free SIsCa per tier.
+        const int received = CommonMissionReceivedOrderLocked();
+        const int eligible = std::clamp<int64_t>((stageStars + showStars) / 15, 0, 180);
+        nlohmann::json ids = nlohmann::json::array();
+        if (eligible > received) {
+            if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+            const auto rollback = [this]() -> std::optional<MockStoredResponse> {
+                ExecSql(db, "ROLLBACK;");
+                return std::nullopt;
+            };
+            const int amount = (eligible - received) * 1000;
+            sqlite3_stmt* wallet = nullptr;
+            bool ok = sqlite3_prepare_v2(db,
+                "UPDATE museum_gacha_state SET free_jewels=free_jewels+? WHERE series_id=1055003;",
+                -1, &wallet, nullptr) == SQLITE_OK && wallet;
+            if (ok) {
+                sqlite3_bind_int(wallet, 1, amount);
+                ok = sqlite3_step(wallet) == SQLITE_DONE && sqlite3_changes(db) == 1;
+            }
+            if (wallet) sqlite3_finalize(wallet);
+            if (!ok) return rollback();
+            sqlite3_stmt* item = nullptr;
+            ok = sqlite3_prepare_v2(db,
+                "INSERT INTO museum_item_inventory(d_item_datas_id,item_num) "
+                "SELECT d_item_datas_id,?1 FROM item WHERE item_id=1002001 LIMIT 1 "
+                "ON CONFLICT(d_item_datas_id) DO UPDATE SET item_num=item_num+excluded.item_num;",
+                -1, &item, nullptr) == SQLITE_OK && item;
+            if (ok) {
+                sqlite3_bind_int(item, 1, amount);
+                ok = sqlite3_step(item) == SQLITE_DONE && sqlite3_changes(db) == 1;
+            }
+            if (item) sqlite3_finalize(item);
+            if (!ok) return rollback();
+            sqlite3_stmt* mark = nullptr;
+            ok = sqlite3_prepare_v2(db,
+                "INSERT INTO offline_mission_meta(key,value) VALUES('common_received_order',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+                -1, &mark, nullptr) == SQLITE_OK && mark;
+            if (ok) {
+                const auto value = std::to_string(eligible);
+                ok = BindText(mark, 1, value) && sqlite3_step(mark) == SQLITE_DONE;
+            }
+            if (mark) sqlite3_finalize(mark);
+            if (!ok || !ExecSql(db, "COMMIT;")) return rollback();
+            for (int order = received + 1; order <= eligible; ++order) ids.push_back(1000 + order);
+        }
+        const auto state = LoadGachaStateLocked();
+        return MockStoredResponse{
+            nlohmann::json({{"received_common_mission_ids", std::move(ids)}}).dump(),
+            state ? GachaHeaders(state->freeJewels, state->paidJewels) : std::string{},
+            200, "OK (offline common mission)"};
+    }
+
+    namespace {
+        // GachaSetPurchaseType (5.0.1 metadata): Single=1, Consective=2,
+        // PaidSiscaOnly=3 (the daily discount draw), tickets 4/5.
+        constexpr int kPurchasePaidSiscaOnly = 3;
+        constexpr int kPaidDailyGachaPrice = 50;
+        int64_t GachaBusinessDay(std::time_t now) {
+            return (static_cast<int64_t>(now) + 9 * 3600 - 4 * 3600) / 86400;  // 04:00 JST
+        }
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetGachaSeriesListResponseLocked() {
         const auto state = LoadGachaStateLocked();
         if (!state) return std::nullopt;
@@ -2216,6 +2339,11 @@ namespace LinkuraLocal::HttpMock {
             series["user_series_exec_count"] = seriesState->drawCount;
             series["is_single_enable"] = state->freeJewels + state->paidJewels >= 200;
             series["is_consective_enable"] = state->freeJewels + state->paidJewels >= 2000;
+            // 「1日1回限定」discount draw: paid SIsCa only, once per series per
+            // day (04:00 JST reset), per the series NoticeText in Master.
+            const bool paidAvailable = !PaidDailyGachaUsedLocked(config.id);
+            series["is_paid_enable"] = paidAvailable && state->paidJewels >= kPaidDailyGachaPrice;
+            series["remaining_limited_paid_gacha_count"] = paidAvailable ? 1 : 0;
             // This series catalog must not depend on which cards the player
             // already owns. Advertise the complete Museum candidate set so a
             // new acquisition is represented consistently. Whether the
@@ -2227,6 +2355,22 @@ namespace LinkuraLocal::HttpMock {
         return MockStoredResponse{
             response.dump(), GachaHeaders(state->freeJewels, state->paidJewels),
             200, "OK (offline mock)"};
+    }
+
+    bool HttpMockBackend::Impl::PaidDailyGachaUsedLocked(int seriesId) {
+        if (!db || !ExecSql(db, "CREATE TABLE IF NOT EXISTS offline_gacha_paid_daily ("
+                                "series_id INTEGER NOT NULL, business_day INTEGER NOT NULL, "
+                                "PRIMARY KEY(series_id, business_day));")) return true;
+        sqlite3_stmt* stmt = nullptr;
+        bool used = false;
+        if (sqlite3_prepare_v2(db, "SELECT 1 FROM offline_gacha_paid_daily WHERE series_id=? AND business_day=?;",
+                               -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, seriesId);
+            sqlite3_bind_int64(stmt, 2, GachaBusinessDay(std::time(nullptr)));
+            used = sqlite3_step(stmt) == SQLITE_ROW;
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return used;
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GachaSetPurchaseLocked(
@@ -2242,14 +2386,20 @@ namespace LinkuraLocal::HttpMock {
         }
         const auto* series = FindMuseumGachaSeries(payload["gacha_series_id"].get<int>());
         const int purchaseType = payload["gacha_set_purchase_type"].get<int>();
-        if (purchaseType != 1 && purchaseType != 2) {
-            return MockStoredResponse{R"({"error":"offline gacha supports single and ten draws"})", {},
+        if (purchaseType != 1 && purchaseType != 2 && purchaseType != kPurchasePaidSiscaOnly) {
+            return MockStoredResponse{R"({"error":"offline gacha supports single, ten and daily paid draws"})", {},
                                       400, "Unsupported offline gacha purchase type"};
         }
-        const int drawCount = purchaseType == 1 ? 1 : 10;
-        const int price = drawCount * 200;
+        const bool paidOnly = purchaseType == kPurchasePaidSiscaOnly;
+        const int drawCount = purchaseType == 2 ? 10 : 1;
+        const int price = paidOnly ? kPaidDailyGachaPrice : drawCount * 200;
         const auto state = LoadGachaStateLocked(series->id);
         if (!state) return std::nullopt;
+        if (paidOnly && (PaidDailyGachaUsedLocked(series->id) || state->paidJewels < price)) {
+            return MockStoredResponse{R"({"error":"daily paid draw unavailable"})",
+                                      GachaHeaders(state->freeJewels, state->paidJewels),
+                                      400, "Daily paid draw unavailable"};
+        }
         if (state->freeJewels + state->paidJewels < price) {
             return MockStoredResponse{R"({"error":"insufficient local SIsCa"})",
                                       GachaHeaders(state->freeJewels, state->paidJewels),
@@ -2259,7 +2409,7 @@ namespace LinkuraLocal::HttpMock {
         // The preserved Master identifies standard and featured candidates,
         // but not the original server-side per-card probabilities.
         static thread_local std::mt19937 rng(std::random_device{}());
-        const auto spentFree = std::min<int64_t>(state->freeJewels, price);
+        const auto spentFree = paidOnly ? int64_t{0} : std::min<int64_t>(state->freeJewels, price);
         const auto spentPaid = price - spentFree;
         const auto freeAfter = state->freeJewels - spentFree;
         const auto paidAfter = state->paidJewels - spentPaid;
@@ -2388,6 +2538,19 @@ namespace LinkuraLocal::HttpMock {
         valid = sqlite3_step(wallet) == SQLITE_DONE && sqlite3_changes(db) == 1;
         sqlite3_finalize(wallet);
         if (!valid) return rollback();
+        if (paidOnly) {
+            sqlite3_stmt* daily = nullptr;
+            valid = sqlite3_prepare_v2(db,
+                "INSERT INTO offline_gacha_paid_daily(series_id,business_day) VALUES(?,?);",
+                -1, &daily, nullptr) == SQLITE_OK && daily;
+            if (valid) {
+                sqlite3_bind_int(daily, 1, series->id);
+                sqlite3_bind_int64(daily, 2, GachaBusinessDay(now));
+                valid = sqlite3_step(daily) == SQLITE_DONE;
+            }
+            if (daily) sqlite3_finalize(daily);
+            if (!valid) return rollback();
+        }
 
         sqlite3_stmt* mirror = nullptr;
         if (sqlite3_prepare_v2(db,
@@ -3807,11 +3970,21 @@ namespace LinkuraLocal::HttpMock {
             }
         }
 
+        // A SHOW live is cleared when MENTAL is left at the end (the client
+        // plays on at 0 and reports remain_mental). NotesJudgementType (5.0.1
+        // metadata): Miss=0 Bad=1 Good=2 Great=3 Perfect=4 PerfectPlus=5.
+        const bool liveCleared = payload.value("remain_mental", 1) > 0;
         int maxComboThisPlay = 0;
+        int noteCount = 0;
+        int brokenNotes = 0;      // Miss / Bad
+        int belowPerfect = 0;     // anything under Perfect
         if (payload.contains("notes_result_list") && payload["notes_result_list"].is_array()) {
             int currentCombo = 0;
             for (const auto& note : payload["notes_result_list"]) {
                 const int judgement = note.value("judgement_result", 0);
+                ++noteCount;
+                if (judgement < 2) ++brokenNotes;
+                if (judgement < 4) ++belowPerfect;
                 if (judgement >= 2) {
                     ++currentCombo;
                     if (currentCombo > maxComboThisPlay) maxComboThisPlay = currentCombo;
@@ -3838,7 +4011,7 @@ namespace LinkuraLocal::HttpMock {
 
         (*currentDiffEntry)["best_combo"] = maxComboAfter;
         (*currentDiffEntry)["combo_achievement_status"] = comboStatusAfter;
-        (*currentDiffEntry)["clear_lamp"] = 1;
+        if (liveCleared) (*currentDiffEntry)["clear_lamp"] = 1;
 
         const int masteryLevelAfter = std::min(masteryLevelBefore + 1, 50);
 
@@ -3849,7 +4022,7 @@ namespace LinkuraLocal::HttpMock {
                 "(music_id, high_score, high_score_achievement_status, "
                 "clear_count, total_score_accumulated, music_mastery_level, difficulty_scores_json) "
                 "VALUES (?, ?, ?, "
-                "COALESCE((SELECT clear_count FROM rhythm_music_score WHERE music_id = ?), 0) + 1, "
+                "COALESCE((SELECT clear_count FROM rhythm_music_score WHERE music_id = ?), 0) + ?, "
                 "COALESCE((SELECT total_score_accumulated FROM rhythm_music_score WHERE music_id = ?), 0) + ?, ?, ?);";
             sqlite3_stmt* stmt = nullptr;
             if (sqlite3_prepare_v2(db, upsertSql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
@@ -3857,10 +4030,11 @@ namespace LinkuraLocal::HttpMock {
                 sqlite3_bind_int(stmt, 2, highScoreAfter);
                 sqlite3_bind_int(stmt, 3, hsStatusAfter);
                 sqlite3_bind_int(stmt, 4, musicId);
-                sqlite3_bind_int(stmt, 5, musicId);
-                sqlite3_bind_int(stmt, 6, score);
-                sqlite3_bind_int(stmt, 7, masteryLevelAfter);
-                BindText(stmt, 8, diffScoresStr);
+                sqlite3_bind_int(stmt, 5, liveCleared ? 1 : 0);
+                sqlite3_bind_int(stmt, 6, musicId);
+                sqlite3_bind_int(stmt, 7, score);
+                sqlite3_bind_int(stmt, 8, masteryLevelAfter);
+                BindText(stmt, 9, diffScoresStr);
                 if (sqlite3_step(stmt) != SQLITE_DONE) {
                     Log::ErrorFmt("[HttpMockBackend] rhythm_music_score upsert failed: %s", sqlite3_errmsg(db));
                     sqlite3_finalize(stmt);
@@ -3893,7 +4067,7 @@ namespace LinkuraLocal::HttpMock {
             return std::nullopt;
         }
 
-        const int64_t totalClearAfter = totalClearBefore + 1;
+        const int64_t totalClearAfter = totalClearBefore + (liveCleared ? 1 : 0);
         const int64_t totalScoreAccumAfter = totalScoreAccumBefore + score;
         const int64_t totalHighScoreAfter = totalHighScoreBefore - highScoreBefore + highScoreAfter;
 
@@ -3938,7 +4112,11 @@ namespace LinkuraLocal::HttpMock {
             {"combo_achievement_status_after", comboStatusAfter},
             {"reward_list", nlohmann::json::array()},
         };
-        result["clear_status"] = clearCountBefore == 0 ? 1 : 0;
+        // RhythmGameLiveClearStatus (5.0.1 metadata): NotClear=0 Clear=1
+        // FullCombo=2 AllPerfect=3 (was "first clear ? 1 : 0").
+        result["clear_status"] = !liveCleared ? 0
+                : (noteCount > 0 && belowPerfect == 0) ? 3
+                : (noteCount > 0 && brokenNotes == 0) ? 2 : 1;
         result["class_mission_progress_list"] = nlohmann::json::array({
             {{"condition_type", 1}, {"progress_before", totalClearBefore}, {"progress_after", totalClearAfter}},
             {{"condition_type", 2}, {"progress_before", totalScoreAccumBefore}, {"progress_after", totalScoreAccumAfter}},
@@ -6625,6 +6803,22 @@ namespace LinkuraLocal::HttpMock {
         const int musicId = currentQuestLive.musicId;
         const int64_t dailyScore = score / 1000;
 
+        int masteryLevel = 1;
+        int earnedMusicExp = 0;
+        if (db && musicId > 0) {
+            sqlite3_stmt* mastery = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "SELECT music_exp_level, earned_music_exp FROM music_mastery WHERE music_id=?;",
+                    -1, &mastery, nullptr) == SQLITE_OK && mastery) {
+                sqlite3_bind_int(mastery, 1, musicId);
+                if (sqlite3_step(mastery) == SQLITE_ROW) {
+                    masteryLevel = sqlite3_column_int(mastery, 0);
+                    earnedMusicExp = sqlite3_column_int(mastery, 1);
+                }
+            }
+            if (mastery) sqlite3_finalize(mastery);
+        }
+
         int64_t beforeHighScore = 0;
         if (db) {
             sqlite3_stmt* stmt = nullptr;
@@ -6668,10 +6862,10 @@ namespace LinkuraLocal::HttpMock {
         result["music_id"] = musicId;
         result["reward_list"] = nlohmann::json::array();
         result["play_report"] = currentQuestLive.playReport;
-        result["mastary_level_before"] = 1;
-        result["mastary_level_after"] = 1;
+        result["mastary_level_before"] = masteryLevel;
+        result["mastary_level_after"] = masteryLevel;
         result["mastary_level_experience"] = 0;
-        result["mastary_level_total_experience_before"] = 0;
+        result["mastary_level_total_experience_before"] = earnedMusicExp;
         result["first_clear_flag"] = (beforeHighScore == 0);
         result["first_complete_clear_flag"] = (beforeHighScore == 0);
         result["is_limit_over_style_point"] = false;
@@ -6825,6 +7019,11 @@ namespace LinkuraLocal::HttpMock {
         return impl_->GetMissionListResponseLocked();
     }
 
+    std::optional<MockStoredResponse> HttpMockBackend::ReceiveCommonMissionReward() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->ReceiveCommonMissionRewardLocked();
+    }
+
     // Every response carries the wallet in its headers and the client updates
     // the displayed jewel balance from whichever response arrived last. Only
     // the gacha and Home handlers used to write the live wallet; all other
@@ -6950,6 +7149,28 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GetProfileInfoResponse() {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GetProfileInfoResponseLocked();
+    }
+
+    bool HttpMockBackend::RememberLoginPlayerId(std::string_view playerId) {
+        // Player IDs are nine printable alphanumeric characters. Ignore a
+        // fresh install's empty ID and malformed input; never log the value.
+        if (playerId.size() != 9 ||
+            !std::all_of(playerId.begin(), playerId.end(), [](unsigned char c) {
+                return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z');
+            })) return false;
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        if (!impl_->initialized && !impl_->EnsureReadyLocked()) return false;
+        if (!impl_->db || !ExecSql(impl_->db,
+                "CREATE TABLE IF NOT EXISTS offline_profile_text ("
+                "field TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL);")) return false;
+        sqlite3_stmt* stmt = nullptr;
+        const bool prepared = sqlite3_prepare_v2(impl_->db,
+            "INSERT OR REPLACE INTO offline_profile_text(field,value) VALUES('player_id',?);",
+            -1, &stmt, nullptr) == SQLITE_OK && stmt;
+        const bool saved = prepared && BindText(stmt, 1, playerId) &&
+                           sqlite3_step(stmt) == SQLITE_DONE;
+        if (stmt) sqlite3_finalize(stmt);
+        return saved;
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GetGachaSeriesListResponse() {

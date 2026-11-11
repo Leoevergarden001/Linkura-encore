@@ -171,6 +171,36 @@ def main() -> int:
             friend = json.loads(body)["profile_info"]["friend_card_info"]
             check("friend card shown on profile", len(friend) == 1 and friend[0]["card_type"] == 1 and
                   friend[0]["user_card_info"]["d_card_datas_id"] == first_card, json.dumps(friend)[:200])
+            # 1日1回限定 paid draw: available once per day, paid SIsCa only, 50.
+            status, _, body = post(conn, "/v1/gacha/get_series_list", {})
+            first = json.loads(body)["gacha_series_list"][0]
+            check("daily paid draw offered", first["is_paid_enable"] and first["remaining_limited_paid_gacha_count"] == 1)
+            status, _, body = post(conn, "/v1/gacha/set_purchase",
+                                   {"gacha_series_id": first["gacha_series_id"], "gacha_set_purchase_type": 3, "campaign_id": 0})
+            check("daily paid draw", status == 200, body[:200].decode())
+            status, _, body = post(conn, "/v1/gacha/set_purchase",
+                                   {"gacha_series_id": first["gacha_series_id"], "gacha_set_purchase_type": 3, "campaign_id": 0})
+            check("daily paid draw only once", status == 400, str(status))
+            status, _, body = post(conn, "/v1/gacha/get_series_list", {})
+            first = json.loads(body)["gacha_series_list"][0]
+            check("daily paid draw used up", not first["is_paid_enable"] and first["remaining_limited_paid_gacha_count"] == 0)
+            status, _, body = post(conn, "/v1/follow/search_id", {"player_id": "ABCDEFGHJ"})
+            check("friend id search says not found", status == 200 and json.loads(body) == {"result_code": 1})
+            # SHOW clear status: NotClear when MENTAL ran out, AllPerfect when every note is Perfect+.
+            def show_play(remain_mental, judgement):
+                post(conn, "/v1/rhythm_game_live/set_start", {"music_id": 103101, "music_score_difficulty": 3})
+                status, _, body = post(conn, "/v1/rhythm_game_live/set_finish", {
+                    "score": 100, "remain_mental": remain_mental, "technical_score": 0, "enable_auto": False,
+                    "notes_result_list": [{"judgement_result": judgement, "timing_msec": 0}] * 30, "play_data": ""})
+                return status, json.loads(body)
+            status, failed = show_play(0, 0)
+            check("SHOW fail is NotClear", status == 200 and failed["clear_status"] == 0, str(failed.get("clear_status")))
+            check("SHOW fail not counted as clear", failed["class_mission_progress_list"][0]["progress_before"] ==
+                  failed["class_mission_progress_list"][0]["progress_after"])
+            status, perfect = show_play(100, 5)
+            check("SHOW all perfect", perfect["clear_status"] == 3, str(perfect.get("clear_status")))
+            check("SHOW clear counted", perfect["class_mission_progress_list"][0]["progress_after"] ==
+                  perfect["class_mission_progress_list"][0]["progress_before"] + 1)
             status, _, body = post(conn, "/v1/profile/get_fan_level_info", {"player_id": profile["player_id"]})
             fan = json.loads(body)
             check("fan level info", status == 200 and len(fan["fan_level_info_list"]) == len(profile["fan_level_list"]) > 0,

@@ -25,7 +25,9 @@ namespace LinkuraLocal::HttpMock {
         static bool RebuildAtFilesDir(const std::string& filesDir);
         std::optional<MockStoredResponse> GetHomeResponse();
         std::optional<MockStoredResponse> GetMissionListResponse();
+        std::optional<MockStoredResponse> ReceiveCommonMissionReward();
         std::optional<MockStoredResponse> GetProfileInfoResponse();
+        bool RememberLoginPlayerId(std::string_view playerId);
         std::optional<MockStoredResponse> GetCustomSettingResponse();
         std::optional<MockStoredResponse> SetFriendCard(std::string_view payloadJson);
         std::optional<MockStoredResponse> GetMyDesignList(bool icon);
