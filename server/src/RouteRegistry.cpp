@@ -502,6 +502,20 @@ namespace LinkuraLocal::HttpMock {
             return MockResponse{std::move(record->body), std::move(record->headersText), record->statusCode, std::move(record->statusDescription)};
         }
 
+        static std::optional<MockResponse> HandleGradeSetReward(const MockRequestContext&, HttpMockBackend& backend) {
+            auto record = backend.GradeSetReward();
+            if (!record.has_value()) return std::nullopt;
+            if (record->headersText.empty()) record->headersText = std::string(OfflineApiMockBuiltIn::DefaultHeadersView);
+            return MockResponse{std::move(record->body), std::move(record->headersText), record->statusCode, std::move(record->statusDescription)};
+        }
+
+        static std::optional<MockResponse> HandleOutQuestLiveGetQuestTop(const MockRequestContext&, HttpMockBackend& backend) {
+            auto record = backend.OutQuestLiveGetQuestTop();
+            if (!record.has_value()) return std::nullopt;
+            if (record->headersText.empty()) record->headersText = std::string(OfflineApiMockBuiltIn::DefaultHeadersView);
+            return MockResponse{std::move(record->body), std::move(record->headersText), record->statusCode, std::move(record->statusDescription)};
+        }
+
         static std::optional<MockResponse> HandleDailyQuestStageSelect(const MockRequestContext&,
                                                                         HttpMockBackend& backend) {
             return ToBackendResponse(backend.DailyQuestStageSelect());
@@ -781,7 +795,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterStaticJson(routes, "/v1/follow/live_chat_group_list", OfflineApiMockBuiltIn::FollowLiveChatGroupListJsonView);
             RegisterStaticJson(routes, "/v1/archive/get_home", OfflineApiMockBuiltIn::ArchiveGetHomeJsonView);
             RegisterStaticJson(routes, "/v1/archive/get_archive_list", OfflineApiMockBuiltIn::ArchiveGetArchiveListJsonView);
-            RegisterStaticJson(routes, "/v1/out_quest_live/get_quest_top", OfflineApiMockBuiltIn::OutQuestLiveGetQuestTopJsonView);
+            RegisterBackend(routes, "/v1/out_quest_live/get_quest_top", HandleOutQuestLiveGetQuestTop);
             RegisterBackend(routes, "/v1/out_quest_live/daily/get_stage_select", HandleDailyQuestStageSelect);
             RegisterBackend(routes, "/v1/out_quest_live/daily/get_recovery_challenge_count",
                             [](const MockRequestContext&, HttpMockBackend& backend) {
@@ -804,6 +818,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/out_quest_live/grade/get_stage_data", HandleGradeGetStageData);
             RegisterBackend(routes, "/v1/out_quest_live/grade/get_result", HandleGradeGetResult);
             RegisterBackend(routes, "/v1/out_quest_live/grade/set_quest_retire", HandleGradeSetQuestRetire);
+            RegisterBackend(routes, "/v1/out_quest_live/grade/set_reward", HandleGradeSetReward);
             RegisterBackend(routes, "/v1/out_quest_live/grand_prix/get_top_info", HandleGrandPrixGetTopInfo);
             RegisterBackend(routes, "/v1/out_quest_live/grand_prix/get_stage_select", HandleGrandPrixGetStageSelect);
             RegisterBackend(routes, "/v1/out_quest_live/grand_prix/get_stage_list", HandleGrandPrixGetStageList);

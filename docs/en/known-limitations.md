@@ -17,3 +17,4 @@ The offline edition depends on assets saved before shutdown. Missing assets cann
 | SHOW | A score of 0 still displays LIVE CLEAR; some character skills have no voice | Original client behavior: no failure state, skill voices do not overlap, and cards with a 「除外」 skill trigger only once per run. |
 | Display | Game default resolution and font | Rendering settings and font replacement from the original linkura-localify were removed. |
 | Player ID | Fixed at 000000000 | Offline play uses one local save. The resource pack includes only the catalog and master databases with fresh storage keys, without the original account's ID or keys. |
+| Grade | Starts at Grade 1 with 0 Pt; only Grade Quest rewards add Grade Pt. Season Grade and its rank stay 0 | Live Grand Prix pays Grade Pt as ranking rewards, and Grade Challenge and Season Grade count over periods that have ended; offline there are no other players or periods |

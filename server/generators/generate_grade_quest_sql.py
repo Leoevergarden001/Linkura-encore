@@ -65,6 +65,34 @@ def generate_schema_ddl() -> str:
         "    required_series_id INTEGER NOT NULL DEFAULT 0",
         ");",
         "",
+        "-- GradeQuestRewards + GradeQuestRewardsDatas. conditions_value2: 2 = at least,",
+        "-- 3 = at most. rewards_json: [{reward_type, item_id, num}], reward_type 8 = Grade Pt.",
+        "CREATE TABLE IF NOT EXISTS grade_quest_reward (",
+        "    rewards_id INTEGER NOT NULL PRIMARY KEY,",
+        "    series_id INTEGER NOT NULL,",
+        "    order_id INTEGER NOT NULL DEFAULT 0,",
+        "    conditions_type INTEGER NOT NULL,",
+        "    conditions_value INTEGER NOT NULL DEFAULT 0,",
+        "    conditions_value2 INTEGER NOT NULL DEFAULT 2,",
+        "    rewards_json TEXT NOT NULL DEFAULT '[]'",
+        ");",
+        "",
+        "CREATE INDEX IF NOT EXISTS idx_grade_quest_reward_series ON grade_quest_reward(series_id);",
+        "",
+        "-- GradeDatas: Grade N needs require_points total Grade Pt; live_bonus is its Grade bonus (%).",
+        "CREATE TABLE IF NOT EXISTS grade_data (",
+        "    grade_num INTEGER NOT NULL PRIMARY KEY,",
+        "    require_points INTEGER NOT NULL,",
+        "    live_bonus INTEGER NOT NULL DEFAULT 0",
+        ");",
+        "",
+        "-- GradeRewards + GradeRewardDatas: rewards for reaching grade_num.",
+        "CREATE TABLE IF NOT EXISTS grade_reward (",
+        "    grade_rewards_id INTEGER NOT NULL PRIMARY KEY,",
+        "    grade_num INTEGER NOT NULL,",
+        "    rewards_json TEXT NOT NULL DEFAULT '[]'",
+        ");",
+        "",
         "CREATE TABLE IF NOT EXISTS grade_quest_progress (",
         "    series_id INTEGER NOT NULL PRIMARY KEY,",
         "    clear_status INTEGER NOT NULL DEFAULT 0,",
@@ -119,6 +147,39 @@ def _release_conditions(series_list: list[dict]) -> dict[int, int]:
     if missing:
         raise ValueError(f"no release condition for grade quest series {sorted(missing)}")
     return dict(sorted(required.items()))
+
+
+def _reward_items(rows: list[dict], key: str) -> dict[int, list[dict]]:
+    items: dict[int, list[dict]] = {}
+    for r in sorted(rows, key=lambda r: r["Id"]):
+        items.setdefault(r[key], []).append(
+            {"reward_type": r["RewardType"], "item_id": r["RewardItemId"], "num": r["RewardNum"]})
+    return items
+
+
+def _json_sql(value) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("'", "''")
+
+
+def _reward_statements() -> list[str]:
+    statements: list[str] = []
+    quest_items = _reward_items(_load_yaml(YAML_DIR / "GradeQuestRewardsDatas.yaml"), "GradeQuestRewardsId")
+    for r in _load_yaml(YAML_DIR / "GradeQuestRewards.yaml"):
+        statements.append(
+            "INSERT OR IGNORE INTO grade_quest_reward (rewards_id, series_id, order_id, conditions_type, "
+            "conditions_value, conditions_value2, rewards_json) "
+            f"VALUES ({r['Id']}, {r['GradeQuestSeriesId']}, {r['OrderId']}, {r['ConditionsType']}, "
+            f"{r['ConditionsValue']}, {r['ConditionsValue2']}, '{_json_sql(quest_items.get(r['Id'], []))}');")
+    for g in _load_yaml(YAML_DIR / "GradeDatas.yaml"):
+        statements.append(
+            "INSERT OR IGNORE INTO grade_data (grade_num, require_points, live_bonus) "
+            f"VALUES ({g['GradeNum']}, {g['RequireGradePoints']}, {g['GradeLiveBonus']});")
+    grade_items = _reward_items(_load_yaml(YAML_DIR / "GradeRewardDatas.yaml"), "GradeRewardsId")
+    for g in _load_yaml(YAML_DIR / "GradeRewards.yaml"):
+        statements.append(
+            "INSERT OR IGNORE INTO grade_reward (grade_rewards_id, grade_num, rewards_json) "
+            f"VALUES ({g['Id']}, {g['GradeNum']}, '{_json_sql(grade_items.get(g['Id'], []))}');")
+    return statements
 
 
 def generate_seed_statements() -> list[str]:
@@ -216,6 +277,8 @@ def generate_seed_statements() -> list[str]:
             f"INSERT OR IGNORE INTO grade_quest_release (series_id, required_series_id) "
             f"VALUES ({series_id}, {required});"
         )
+
+    statements.extend(_reward_statements())
 
     for skill_id in TIER_1_SKILLS:
         statements.append(

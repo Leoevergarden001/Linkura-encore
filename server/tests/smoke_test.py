@@ -231,12 +231,26 @@ def main() -> int:
             squares = grade_status(body)
             check("grade quest start opens the first square", status == 200 and squares.get(31034101) == 1,
                   body[:300].decode())
+            # Stepping on a live square does not clear it; passing its live does.
             post(conn, "/v1/out_quest_live/grade/set_quest_action", {"grade_quest_square_id": 31034101})
             status, _, body = post(conn, "/v1/out_quest_live/grade/set_quest_start", {"grade_quest_series_id": 10341})
             squares = grade_status(body)
-            check("grade quest action opens the next squares",
+            check("grade quest live square stays open until its live is passed",
+                  squares.get(31034101) == 1 and squares.get(31034102) == 0, body[:300].decode())
+            _, _, body = post(conn, "/v1/out_quest_live/set_live_setting",
+                              {"stage_id": 531034101, "deck_id": "", "music_id": 0, "quest_live_type": 4,
+                               "resource_value": 1})
+            live_id = json.loads(body).get("quest_live_id", "")
+            post(conn, "/v1/in_quest_live/set_start", {"quest_live_id": live_id})
+            post(conn, "/v1/in_quest_live/set_finish", {"quest_live_id": live_id, "score": 100_000_000,
+                                                        "play_report": ""})
+            post(conn, "/v1/out_quest_live/grade/get_result", {})
+            status, _, body = post(conn, "/v1/out_quest_live/grade/set_quest_start", {"grade_quest_series_id": 10341})
+            squares = grade_status(body)
+            check("grade quest live clear opens the next squares",
                   squares.get(31034101) == 2 and squares.get(31034102) == 1 and squares.get(61034101) == 1,
                   body[:300].decode())
+            post(conn, "/v1/out_quest_live/grade/set_quest_retire", {"grade_quest_series_id": 10341})
 
             # Unlocks follow GradeQuestSeriesReleaseCond: SUMMER..WINTER open after 103 SPRING rank 2,
             # every GRADUATION (a single series numbered 6) after 103 SPRING rank 5.
@@ -265,6 +279,84 @@ def main() -> int:
             check("grade quest: SPRING rank 5 opens every GRADUATION",
                   all(seasons[i]["is_lock"] is False and series_locked(seasons, i) == [False]
                       for i in (1035, 1045, 1055)), json.dumps(seasons[1035])[:300])
+
+            # Grade Pt. builds up from GradeQuestRewards (a fresh player starts at Grade 1, 0 Pt).
+            # Clearing 103 SPRING rank 1 meets all 5 rewards: 750 Grade Pt., Grade 5.
+            def grade_detail() -> dict:
+                _, _, body = post(conn, "/v1/out_quest_live/get_quest_top", {})
+                return json.loads(body)["grade_detail"]
+
+            def play(square: int, score: int) -> dict:
+                with sqlite3.connect(db_path) as db:
+                    squares = {s["grade_quest_square_id"]: s for row in db.execute(
+                        "SELECT squares_json FROM grade_quest_series") for s in json.loads(row[0])}
+                post(conn, "/v1/out_quest_live/grade/set_quest_action", {"grade_quest_square_id": square})
+                if squares[square]["square_type"] not in (3, 7):
+                    return {}
+                _, _, body = post(conn, "/v1/out_quest_live/set_live_setting",
+                                  {"stage_id": squares[square]["target_id"], "deck_id": "", "music_id": 0,
+                                   "quest_live_type": 4, "resource_value": 1})
+                live_id = json.loads(body).get("quest_live_id", "")
+                post(conn, "/v1/in_quest_live/set_start", {"quest_live_id": live_id})
+                post(conn, "/v1/in_quest_live/set_finish", {"quest_live_id": live_id, "score": score, "play_report": ""})
+                _, _, body = post(conn, "/v1/out_quest_live/grade/get_result", {})
+                return json.loads(body)
+            with sqlite3.connect(db_path) as db:
+                db.execute("DELETE FROM grade_quest_progress")
+            detail = grade_detail()
+            check("grade starts at 1 with 0 Pt", detail["grade_num"] == 1 and detail["total_grade_point"] == 0 and
+                  {r["reward_status"] for r in detail["grade_rewards"]} == {1}, json.dumps(detail)[:200])
+            post(conn, "/v1/out_quest_live/grade/set_quest_start", {"grade_quest_series_id": 10311})
+            for square, score in ((21031101, 0), (31031101, 5_000_000), (41031101, 0), (31031102, 9_000_000),
+                                  (41031102, 0)):
+                play(square, score)
+            goal = play(71031101, 50_000_000)["goal_clear_data"] or {}
+            check("grade quest clear pays its rewards",
+                  len(goal.get("clear_grade_quest_rewards_id_list", [])) == 5 and
+                  goal.get("grade_up_data") == {"before_grade_num": 1, "after_grade_num": 5} and
+                  goal.get("is_not_received_grade_reward") is True, json.dumps(goal)[:300])
+            detail = grade_detail()
+            reached = [r["grade_rewards_id"] for r in detail["grade_rewards"] if r["reward_status"] == 2]
+            check("grade detail follows the earned Grade Pt", detail["total_grade_point"] == 750 and
+                  detail["grade_num"] == 5 and reached == [100003, 100005], json.dumps(detail)[:300])
+            _, _, body = post(conn, "/v1/out_quest_live/grade/set_reward", {})
+            collected = {r["grade_rewards_id"]: r["reward_status"] for r in json.loads(body)["grade_rewards"]}
+            check("set_reward collects reached Grade rewards", collected[100003] == collected[100005] == 3 and
+                  collected[100010] == 1, body[:200].decode())
+
+            # Replaying a cleared series pays nothing twice.
+            post(conn, "/v1/out_quest_live/grade/set_quest_start", {"grade_quest_series_id": 10311})
+            for square, score in ((21031101, 0), (31031101, 5_000_000), (41031101, 0), (31031102, 9_000_000),
+                                  (41031102, 0)):
+                play(square, score)
+            goal = play(71031101, 50_000_000)["goal_clear_data"] or {}
+            check("grade quest rewards pay once", goal.get("clear_grade_quest_rewards_id_list") == [] and
+                  grade_detail()["total_grade_point"] == 750, json.dumps(goal)[:200])
+
+            # Retiring pays the main live stage ライブPt.獲得率 rewards reached so far.
+            with sqlite3.connect(db_path) as db:
+                rate_rewards = db.execute("SELECT rewards_id, conditions_value FROM grade_quest_reward "
+                                          "WHERE series_id=10312 AND conditions_type=1 ORDER BY order_id").fetchall()
+                goal_stage = next(s for s in json.loads(db.execute(
+                    "SELECT squares_json FROM grade_quest_series WHERE series_id=10312").fetchone()[0])
+                    if s["square_type"] == 7)
+                required = db.execute("SELECT live_point FROM grade_quest_stage WHERE stage_id=?",
+                                      (goal_stage["target_id"],)).fetchone()[0]
+            post(conn, "/v1/out_quest_live/grade/set_quest_start", {"grade_quest_series_id": 10312})
+            post(conn, "/v1/out_quest_live/grade/set_quest_action", {"grade_quest_square_id": goal_stage["grade_quest_square_id"]})
+            _, _, body = post(conn, "/v1/out_quest_live/set_live_setting",
+                              {"stage_id": goal_stage["target_id"], "deck_id": "", "music_id": 0,
+                               "quest_live_type": 4, "resource_value": 1})
+            live_id = json.loads(body).get("quest_live_id", "")
+            post(conn, "/v1/in_quest_live/set_start", {"quest_live_id": live_id})
+            post(conn, "/v1/in_quest_live/set_finish", {"quest_live_id": live_id, "score": required * 1000 * 65 // 100,
+                                                        "play_report": ""})
+            post(conn, "/v1/out_quest_live/grade/get_result", {})
+            _, _, body = post(conn, "/v1/out_quest_live/grade/set_quest_retire", {"grade_quest_series_id": 10312})
+            retire = json.loads(body)
+            expected = [rid for rid, value in rate_rewards if value <= 65]
+            check("grade quest retire pays the reached live Pt. rate", expected and
+                  retire["clear_grade_quest_rewards_id_list"] == expected, body[:300].decode())
             conn.close()
         finally:
             log += stop(proc)

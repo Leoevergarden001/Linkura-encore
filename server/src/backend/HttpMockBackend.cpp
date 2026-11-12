@@ -326,7 +326,14 @@ namespace LinkuraLocal::HttpMock {
             int actionPointCost = 0;
             int status = 0;
             int64_t livePoint = 0;
+            int64_t requiredLivePoint = 0;  // live squares (types 3 and 7): GradeQuestStages.LivePoint
             std::vector<int> openSquareIds;
+
+            // ライブPt.獲得率 in percent, capped at 100.
+            int LivePointRate() const {
+                if (requiredLivePoint <= 0) return 0;
+                return static_cast<int>(std::min<int64_t>(100, livePoint * 100 / requiredLivePoint));
+            }
         };
         struct GradeQuestState {
             bool active = false;
@@ -403,6 +410,17 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GradeGetStageDataLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GradeGetResultLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GradeSetQuestRetireLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> GradeSetRewardLocked();
+        std::optional<MockStoredResponse> OutQuestLiveGetQuestTopLocked();
+        int64_t GradeTotalPointLocked();
+        int GradeNumLocked(int64_t totalPoint);
+        int GradeLiveBonusLocked(int gradeNum);
+        bool GradeGrantRewardsLocked(const nlohmann::json& rewards, const std::string& sourceKey);
+        nlohmann::json GradeRewardStatusListLocked(int gradeNum, bool& anyReceivable);
+        nlohmann::json GradeDetailLocked();
+        nlohmann::json GradeQuestRewardListLocked(int seriesId);
+        std::optional<nlohmann::json> GradeAchieveQuestRewardsLocked(bool cleared);
+        std::string WalletHeadersLocked();
 
         std::optional<MockStoredResponse> GrandPrixGetTopInfoLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GrandPrixGetStageSelectLocked(std::string_view payloadJson);
@@ -717,7 +735,7 @@ namespace LinkuraLocal::HttpMock {
             ExecSql(db, "DELETE FROM grade_quest_series;");
             ExecSql(db, "DELETE FROM grade_quest_stage;");
             ExecSql(db, "DELETE FROM grade_add_skill;");
-            ExecSql(db, "DELETE FROM grade_quest_progress;");
+            ExecSql(db, "DELETE FROM grade_quest_progress; DELETE FROM grade_point_ledger; DELETE FROM grade_quest_reward_received; DELETE FROM grade_reward_received;");
             ExecSql(db, "DELETE FROM grand_prix_progress;");
             ExecSql(db, "DELETE FROM grand_prix;");
             ExecSql(db, "DELETE FROM grand_prix_series;");
@@ -728,7 +746,7 @@ namespace LinkuraLocal::HttpMock {
             std::filesystem::remove(resetCmdPath, ec);
         }
 
-        if ((hasPendingReset || !TableHasAnyRows(db, "archive_detail") || !TableHasAnyRows(db, "card_detail") || !TableHasAnyRows(db, "character_info") || !TableHasAnyRows(db, "item") || !TableHasAnyRows(db, "quest_stage") || !TableHasAnyRows(db, "daily_quest_stage") || !TableHasAnyRows(db, "dream_quest_stage") || !TableHasAnyRows(db, "grade_quest_stage") || !TableHasAnyRows(db, "grade_add_skill") || !TableHasAnyRows(db, "grade_quest_release") || !TableHasAnyRows(db, "grand_prix_stage") || !TableHasAnyRows(db, "learning_stage") || !TableHasAnyRows(db, "music_mastery") || !TableHasAnyRows(db, "music"))
+        if ((hasPendingReset || !TableHasAnyRows(db, "archive_detail") || !TableHasAnyRows(db, "card_detail") || !TableHasAnyRows(db, "character_info") || !TableHasAnyRows(db, "item") || !TableHasAnyRows(db, "quest_stage") || !TableHasAnyRows(db, "daily_quest_stage") || !TableHasAnyRows(db, "dream_quest_stage") || !TableHasAnyRows(db, "grade_quest_stage") || !TableHasAnyRows(db, "grade_add_skill") || !TableHasAnyRows(db, "grade_quest_release") || !TableHasAnyRows(db, "grade_quest_reward") || !TableHasAnyRows(db, "grade_data") || !TableHasAnyRows(db, "grade_reward") || !TableHasAnyRows(db, "grand_prix_stage") || !TableHasAnyRows(db, "learning_stage") || !TableHasAnyRows(db, "music_mastery") || !TableHasAnyRows(db, "music"))
             && !ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SeedScripts, "seed")) {
             persistentStorageAvailable = false;
             return false;
@@ -1004,7 +1022,7 @@ namespace LinkuraLocal::HttpMock {
         if (!ExecSql(db, "DELETE FROM offline_mission_event;") ||
             !ExecSql(db, "DELETE FROM offline_mission_award;") ||
             !ExecSql(db, "DELETE FROM offline_mission_meta;") ||
-            !ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
+            !ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress; DELETE FROM grade_point_ledger; DELETE FROM grade_quest_reward_received; DELETE FROM grade_reward_received;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
             return false;
         }
 
@@ -1963,6 +1981,9 @@ namespace LinkuraLocal::HttpMock {
             (*badge)["is_not_received_common_mission_reward"] =
                 (stageStars + showStars) / 15 > CommonMissionReceivedOrderLocked();
             (*badge)["is_not_read_sticker_exchange_new_arrival"] = false;
+            bool anyGradeReward = false;
+            GradeRewardStatusListLocked(GradeNumLocked(GradeTotalPointLocked()), anyGradeReward);
+            (*badge)["is_not_received_grade_reward"] = anyGradeReward;
         }
         return MockStoredResponse{
             result.dump(), GachaHeaders(gachaState->freeJewels, gachaState->paidJewels),
@@ -6022,6 +6043,274 @@ namespace LinkuraLocal::HttpMock {
         return response;
     }
 
+    // ─── Grade (Grade Pt., Grade rewards) ───
+    //
+    // Grade Pt. is an item (ItemType 8, ids 1005000-1005004) handed out by
+    // GradeQuestRewards and other rewards; the client derives nothing itself.
+    // The total decides the Grade through GradeDatas.RequireGradePoints.
+
+    int64_t HttpMockBackend::Impl::GradeTotalPointLocked() {
+        int64_t total = 0;
+        sqlite3_stmt* stmt = nullptr;
+        if (db && sqlite3_prepare_v2(db, "SELECT COALESCE(SUM(points), 0) FROM grade_point_ledger;", -1, &stmt,
+                                     nullptr) == SQLITE_OK && stmt && sqlite3_step(stmt) == SQLITE_ROW) {
+            total = sqlite3_column_int64(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return total;
+    }
+
+    int HttpMockBackend::Impl::GradeNumLocked(int64_t totalPoint) {
+        int gradeNum = 1;
+        sqlite3_stmt* stmt = nullptr;
+        if (db && sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(grade_num), 1) FROM grade_data WHERE require_points <= ?;",
+                                     -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int64(stmt, 1, totalPoint);
+            if (sqlite3_step(stmt) == SQLITE_ROW) gradeNum = sqlite3_column_int(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return gradeNum;
+    }
+
+    int HttpMockBackend::Impl::GradeLiveBonusLocked(int gradeNum) {
+        int bonus = 0;
+        sqlite3_stmt* stmt = nullptr;
+        if (db && sqlite3_prepare_v2(db, "SELECT live_bonus FROM grade_data WHERE grade_num = ?;", -1, &stmt,
+                                     nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, gradeNum);
+            if (sqlite3_step(stmt) == SQLITE_ROW) bonus = sqlite3_column_int(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return bonus;
+    }
+
+    // Pays one reward list ([{reward_type, item_id, num}]): Grade Pt. (reward_type 8)
+    // goes to grade_point_ledger, items to the Museum inventory (free SIsCa also
+    // to the gacha wallet). sourceKey makes every grant happen once.
+    bool HttpMockBackend::Impl::GradeGrantRewardsLocked(const nlohmann::json& rewards, const std::string& sourceKey) {
+        if (!db || !rewards.is_array()) return false;
+        int index = 0;
+        for (const auto& reward : rewards) {
+            const int type = reward.value("reward_type", 0);
+            const int itemId = reward.value("item_id", 0);
+            const int64_t num = reward.value("num", int64_t{0});
+            const std::string key = sourceKey + ":" + std::to_string(index++);
+            if (itemId <= 0 || num <= 0) continue;
+            sqlite3_stmt* stmt = nullptr;
+            if (type == 8) {
+                bool ok = sqlite3_prepare_v2(db,
+                    "INSERT OR IGNORE INTO grade_point_ledger(source_key, item_id, points) VALUES(?, ?, ?);",
+                    -1, &stmt, nullptr) == SQLITE_OK && stmt && BindText(stmt, 1, key) &&
+                    sqlite3_bind_int(stmt, 2, itemId) == SQLITE_OK && sqlite3_bind_int64(stmt, 3, num) == SQLITE_OK &&
+                    sqlite3_step(stmt) == SQLITE_DONE;
+                if (stmt) sqlite3_finalize(stmt);
+                if (!ok) return false;
+                continue;
+            }
+            bool ok = sqlite3_prepare_v2(db,
+                "INSERT INTO museum_item_inventory(d_item_datas_id,item_num) "
+                "SELECT d_item_datas_id,?1 FROM item WHERE item_id=?2 LIMIT 1 "
+                "ON CONFLICT(d_item_datas_id) DO UPDATE SET item_num=item_num+excluded.item_num;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt && sqlite3_bind_int64(stmt, 1, num) == SQLITE_OK &&
+                sqlite3_bind_int(stmt, 2, itemId) == SQLITE_OK && sqlite3_step(stmt) == SQLITE_DONE;
+            const bool granted = ok && sqlite3_changes(db) > 0;
+            if (stmt) sqlite3_finalize(stmt);
+            if (!ok) return false;
+            if (!granted) {
+                Log::InfoFmt("[HttpMockBackend] grade reward item %d is not in the item catalog; skipped", itemId);
+                continue;
+            }
+            if (itemId == 1002001) {
+                sqlite3_stmt* wallet = nullptr;
+                ok = sqlite3_prepare_v2(db, "UPDATE museum_gacha_state SET free_jewels=free_jewels+? WHERE series_id=1055003;",
+                                        -1, &wallet, nullptr) == SQLITE_OK && wallet &&
+                     sqlite3_bind_int64(wallet, 1, num) == SQLITE_OK && sqlite3_step(wallet) == SQLITE_DONE;
+                if (wallet) sqlite3_finalize(wallet);
+                if (!ok) return false;
+            }
+        }
+        return true;
+    }
+
+    // GradeRewards with reward_status 1 = Grade not reached, 2 = reached and not
+    // collected, 3 = collected (as in the captured get_quest_top).
+    nlohmann::json HttpMockBackend::Impl::GradeRewardStatusListLocked(int gradeNum, bool& anyReceivable) {
+        anyReceivable = false;
+        nlohmann::json list = nlohmann::json::array();
+        sqlite3_stmt* stmt = nullptr;
+        if (db && sqlite3_prepare_v2(db,
+                "SELECT r.grade_rewards_id, r.grade_num, rr.grade_rewards_id IS NOT NULL FROM grade_reward r "
+                "LEFT JOIN grade_reward_received rr ON rr.grade_rewards_id = r.grade_rewards_id "
+                "ORDER BY r.grade_num, r.grade_rewards_id;", -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const bool received = sqlite3_column_int(stmt, 2) != 0;
+                const int status = received ? 3 : (sqlite3_column_int(stmt, 1) <= gradeNum ? 2 : 1);
+                if (status == 2) anyReceivable = true;
+                list.push_back({{"grade_rewards_id", sqlite3_column_int(stmt, 0)}, {"reward_status", status}});
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return list;
+    }
+
+    nlohmann::json HttpMockBackend::Impl::GradeDetailLocked() {
+        const int64_t total = GradeTotalPointLocked();
+        const int gradeNum = GradeNumLocked(total);
+        bool anyReceivable = false;
+        auto rewards = GradeRewardStatusListLocked(gradeNum, anyReceivable);
+        // Season Grade belongs to the live seasons (rankings); offline there is none.
+        return {
+            {"grade_num", gradeNum},
+            {"season_grade_id", 0},
+            {"season_grade_point", 0},
+            {"total_grade_point", total},
+            {"season_grade_point_rank", 0},
+            {"is_not_received_grade_reward", anyReceivable},
+            {"grade_rewards", std::move(rewards)},
+        };
+    }
+
+    nlohmann::json HttpMockBackend::Impl::GradeQuestRewardListLocked(int seriesId) {
+        nlohmann::json list = nlohmann::json::array();
+        sqlite3_stmt* stmt = nullptr;
+        if (db && sqlite3_prepare_v2(db,
+                "SELECT q.rewards_id, rr.rewards_id IS NOT NULL FROM grade_quest_reward q "
+                "LEFT JOIN grade_quest_reward_received rr ON rr.rewards_id = q.rewards_id "
+                "WHERE q.series_id = ? ORDER BY q.order_id, q.rewards_id;", -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, seriesId);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                list.push_back({{"grade_quest_rewards_id", sqlite3_column_int(stmt, 0)},
+                                {"is_received", sqlite3_column_int(stmt, 1) != 0}});
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return list;
+    }
+
+    // Achieves the current series' GradeQuestRewards and pays the new ones.
+    // ConditionsType: 1 main live stage ライブPt.獲得率, 2 remaining 行動Pt.,
+    // 14 live stages at 100%, 15 add effects taken, 16 add effects removed.
+    // ConditionsValue2: 2 = at least, 3 = at most. Only type 1 counts without
+    // clearing the map (retire); the others read "...でクリア".
+    std::optional<nlohmann::json> HttpMockBackend::Impl::GradeAchieveQuestRewardsLocked(bool cleared) {
+        int mainRate = 0;
+        int fullStages = 0;
+        int removedEffects = 0;
+        for (const auto& sq : gradeQuest.squares) {
+            if (sq.squareType == 7) mainRate = std::max(mainRate, sq.LivePointRate());
+            if ((sq.squareType == 3 || sq.squareType == 7) && sq.LivePointRate() >= 100) ++fullStages;
+            if (sq.squareType == 5 && sq.status == 2) ++removedEffects;
+        }
+        const int takenEffects = static_cast<int>(gradeQuest.activeAddSkillIds.size());
+
+        nlohmann::json achieved = nlohmann::json::array();
+        if (!db || !ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        sqlite3_stmt* stmt = nullptr;
+        bool ok = sqlite3_prepare_v2(db,
+            "SELECT q.rewards_id, q.conditions_type, q.conditions_value, q.conditions_value2, q.rewards_json "
+            "FROM grade_quest_reward q WHERE q.series_id = ? AND NOT EXISTS "
+            "(SELECT 1 FROM grade_quest_reward_received rr WHERE rr.rewards_id = q.rewards_id) "
+            "ORDER BY q.order_id, q.rewards_id;", -1, &stmt, nullptr) == SQLITE_OK && stmt;
+        std::vector<std::pair<int, std::string>> met;
+        if (ok) {
+            sqlite3_bind_int(stmt, 1, gradeQuest.seriesId);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const int type = sqlite3_column_int(stmt, 1);
+                const int value = sqlite3_column_int(stmt, 2);
+                const int compare = sqlite3_column_int(stmt, 3);
+                int measured = 0;
+                switch (type) {
+                    case 1: measured = mainRate; break;
+                    case 2: measured = gradeQuest.actionPoint; break;
+                    case 14: measured = fullStages; break;
+                    case 15: measured = takenEffects; break;
+                    case 16: measured = removedEffects; break;
+                    default:
+                        Log::InfoFmt("[HttpMockBackend] grade quest reward condition type %d is not supported", type);
+                        continue;
+                }
+                if (type != 1 && !cleared) continue;
+                if (compare == 3 ? measured > value : measured < value) continue;
+                const auto* json = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+                met.emplace_back(sqlite3_column_int(stmt, 0), json ? json : "[]");
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        for (const auto& [rewardsId, json] : met) {
+            if (!ok) break;
+            sqlite3_stmt* mark = nullptr;
+            ok = sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO grade_quest_reward_received(rewards_id) VALUES(?);",
+                                    -1, &mark, nullptr) == SQLITE_OK && mark &&
+                 sqlite3_bind_int(mark, 1, rewardsId) == SQLITE_OK && sqlite3_step(mark) == SQLITE_DONE;
+            if (mark) sqlite3_finalize(mark);
+            ok = ok && GradeGrantRewardsLocked(nlohmann::json::parse(json, nullptr, false),
+                                               "grade_quest:" + std::to_string(rewardsId));
+            achieved.push_back(rewardsId);
+        }
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        return achieved;
+    }
+
+    std::string HttpMockBackend::Impl::WalletHeadersLocked() {
+        const auto wallet = LoadGachaStateLocked();
+        return wallet ? GachaHeaders(wallet->freeJewels, wallet->paidJewels) : std::string{};
+    }
+
+    // out_quest_live/grade/set_reward (no request fields): collect every reached Grade reward.
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GradeSetRewardLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const int gradeNum = GradeNumLocked(GradeTotalPointLocked());
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        std::vector<std::pair<int, std::string>> due;
+        sqlite3_stmt* stmt = nullptr;
+        bool ok = sqlite3_prepare_v2(db,
+            "SELECT r.grade_rewards_id, r.rewards_json FROM grade_reward r WHERE r.grade_num <= ? AND NOT EXISTS "
+            "(SELECT 1 FROM grade_reward_received rr WHERE rr.grade_rewards_id = r.grade_rewards_id) "
+            "ORDER BY r.grade_num, r.grade_rewards_id;", -1, &stmt, nullptr) == SQLITE_OK && stmt;
+        if (ok) {
+            sqlite3_bind_int(stmt, 1, gradeNum);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const auto* json = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                due.emplace_back(sqlite3_column_int(stmt, 0), json ? json : "[]");
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        for (const auto& [rewardsId, json] : due) {
+            if (!ok) break;
+            sqlite3_stmt* mark = nullptr;
+            ok = sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO grade_reward_received(grade_rewards_id) VALUES(?);",
+                                    -1, &mark, nullptr) == SQLITE_OK && mark &&
+                 sqlite3_bind_int(mark, 1, rewardsId) == SQLITE_OK && sqlite3_step(mark) == SQLITE_DONE;
+            if (mark) sqlite3_finalize(mark);
+            ok = ok && GradeGrantRewardsLocked(nlohmann::json::parse(json, nullptr, false),
+                                               "grade_reward:" + std::to_string(rewardsId));
+        }
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        Log::InfoFmt("[HttpMockBackend] grade rewards collected: %d (grade %d)", static_cast<int>(due.size()), gradeNum);
+        bool anyReceivable = false;
+        nlohmann::json result;
+        result["grade_rewards"] = GradeRewardStatusListLocked(gradeNum, anyReceivable);
+        return MockStoredResponse{result.dump(), WalletHeadersLocked(), 200, "OK"};
+    }
+
+    // The captured get_quest_top with the offline player's own Grade.
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::OutQuestLiveGetQuestTopLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        nlohmann::json result = OfflineApiMockBuiltIn::OutQuestLiveGetQuestTopJsonObj();
+        result["grade_detail"] = GradeDetailLocked();
+        MockStoredResponse response;
+        response.body = result.dump();
+        return response;
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GradeGetQuestListLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) {
             return std::nullopt;
@@ -6051,6 +6340,15 @@ namespace LinkuraLocal::HttpMock {
                 while (sqlite3_step(stmt) == SQLITE_ROW) {
                     requiredSeries[sqlite3_column_int(stmt, 0)] = sqlite3_column_int(stmt, 1);
                 }
+                sqlite3_finalize(stmt);
+            }
+        }
+        std::unordered_set<int> receivedRewards;
+        {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT rewards_id FROM grade_quest_reward_received;", -1, &stmt, nullptr) == SQLITE_OK &&
+                stmt) {
+                while (sqlite3_step(stmt) == SQLITE_ROW) receivedRewards.insert(sqlite3_column_int(stmt, 0));
                 sqlite3_finalize(stmt);
             }
         }
@@ -6093,9 +6391,10 @@ namespace LinkuraLocal::HttpMock {
                             auto rp = nlohmann::json::parse(rwJson ? rwJson : "[]", nullptr, false);
                             if (rp.is_array()) {
                                 for (const auto& r : rp) {
+                                    const int rewardsId = r.value("grade_quest_rewards_id", 0);
                                     rewardList.push_back({
-                                        {"grade_quest_rewards_id", r.value("grade_quest_rewards_id", 0)},
-                                        {"is_received", cleared},
+                                        {"grade_quest_rewards_id", rewardsId},
+                                        {"is_received", receivedRewards.count(rewardsId) > 0},
                                     });
                                 }
                             }
@@ -6206,6 +6505,19 @@ namespace LinkuraLocal::HttpMock {
                 }
                 gradeQuest.squares.push_back(ss);
             }
+            {
+                sqlite3_stmt* lpStmt = nullptr;
+                if (sqlite3_prepare_v2(db, "SELECT live_point FROM grade_quest_stage WHERE stage_id = ?;", -1, &lpStmt,
+                                       nullptr) == SQLITE_OK && lpStmt) {
+                    for (auto& sq : gradeQuest.squares) {
+                        if (sq.squareType != 3 && sq.squareType != 7) continue;
+                        sqlite3_reset(lpStmt);
+                        sqlite3_bind_int(lpStmt, 1, sq.targetId);
+                        if (sqlite3_step(lpStmt) == SQLITE_ROW) sq.requiredLivePoint = sqlite3_column_int64(lpStmt, 0);
+                    }
+                    sqlite3_finalize(lpStmt);
+                }
+            }
 
             gradeQuest.OpenReachableSquares();
         }
@@ -6219,15 +6531,7 @@ namespace LinkuraLocal::HttpMock {
             });
         }
 
-        nlohmann::json rewardList = nlohmann::json::array();
-        if (gradeQuest.rewardsJson.is_array()) {
-            for (const auto& r : gradeQuest.rewardsJson) {
-                rewardList.push_back({
-                    {"grade_quest_rewards_id", r.value("grade_quest_rewards_id", 0)},
-                    {"is_received", false},
-                });
-            }
-        }
+        nlohmann::json rewardList = GradeQuestRewardListLocked(seriesId);
 
         nlohmann::json activeSkills = nlohmann::json::array();
         for (int id : gradeQuest.activeAddSkillIds) {
@@ -6259,18 +6563,9 @@ namespace LinkuraLocal::HttpMock {
                     sqlite3_finalize(bStmt);
                 }
             }
-            int globalClearedCount = 0;
-            {
-                sqlite3_stmt* gcStmt = nullptr;
-                constexpr const char* gcSql = "SELECT COUNT(*) FROM grade_quest_progress WHERE clear_status > 0;";
-                if (sqlite3_prepare_v2(db, gcSql, -1, &gcStmt, nullptr) == SQLITE_OK && gcStmt) {
-                    if (sqlite3_step(gcStmt) == SQLITE_ROW) {
-                        globalClearedCount = sqlite3_column_int(gcStmt, 0);
-                    }
-                    sqlite3_finalize(gcStmt);
-                }
-            }
-            const int gradeNum = 300 + globalClearedCount;
+            // Grade bonus: GradeDatas.GradeLiveBonus (%) of the player's Grade, in 1/100 %.
+            const int gradeNum = GradeNumLocked(GradeTotalPointLocked());
+            const int gradeLiveBonus = GradeLiveBonusLocked(gradeNum);
             nlohmann::json bonusList = nlohmann::json::array();
             if (bonusCount > 0) {
                 bonusList.push_back({
@@ -6278,10 +6573,12 @@ namespace LinkuraLocal::HttpMock {
                     {"target_num", gradeQuest.generation}, {"bonus_value", bonusCount * 500},
                 });
             }
-            bonusList.push_back({
-                {"bonus_type", 1}, {"target_detail", 0},
-                {"target_num", gradeNum}, {"bonus_value", 10000},
-            });
+            if (gradeLiveBonus > 0) {
+                bonusList.push_back({
+                    {"bonus_type", 1}, {"target_detail", 0},
+                    {"target_num", gradeNum}, {"bonus_value", gradeLiveBonus * 100},
+                });
+            }
             result["point_bonus_list"] = std::move(bonusList);
         }
 
@@ -6302,7 +6599,8 @@ namespace LinkuraLocal::HttpMock {
                 squareType = sq.squareType;
                 targetId = sq.targetId;
                 actionCost = sq.actionPointCost;
-                sq.status = 2;
+                // A live square is cleared by its live (get_result), not by stepping on it.
+                if (sq.squareType != 3 && sq.squareType != 7) sq.status = 2;
                 gradeQuest.currentSquareId = squareId;
                 break;
             }
@@ -6523,74 +6821,58 @@ namespace LinkuraLocal::HttpMock {
                     {"live_point", sq.livePoint},
                 });
             }
-            nlohmann::json rewardList = nlohmann::json::array();
-            nlohmann::json clearRewardIds = nlohmann::json::array();
-            if (gradeQuest.rewardsJson.is_array()) {
-                for (const auto& r : gradeQuest.rewardsJson) {
-                    const int rwId = r.value("grade_quest_rewards_id", 0);
-                    clearRewardIds.push_back(rwId);
-                    rewardList.push_back({
-                        {"grade_quest_rewards_id", rwId},
-                        {"is_received", true},
-                    });
-                }
-            }
-            int globalClearedCount = 0;
-            if (db) {
-                sqlite3_stmt* cStmt = nullptr;
-                constexpr const char* cSql = "SELECT COUNT(*) FROM grade_quest_progress WHERE clear_status > 0;";
-                if (sqlite3_prepare_v2(db, cSql, -1, &cStmt, nullptr) == SQLITE_OK && cStmt) {
-                    if (sqlite3_step(cStmt) == SQLITE_ROW) {
-                        globalClearedCount = sqlite3_column_int(cStmt, 0);
-                    }
-                    sqlite3_finalize(cStmt);
-                }
-            }
-            const int afterGradeNum = 300 + globalClearedCount;
+            const int beforeGradeNum = GradeNumLocked(GradeTotalPointLocked());
+            auto clearRewardIds = GradeAchieveQuestRewardsLocked(true);
+            if (!clearRewardIds) return std::nullopt;
+            const int afterGradeNum = GradeNumLocked(GradeTotalPointLocked());
+            bool anyGradeReward = false;
+            GradeRewardStatusListLocked(afterGradeNum, anyGradeReward);
             result["goal_clear_data"] = {
                 {"character_id", gradeQuest.characterId},
                 {"current_square_id", gradeQuest.currentSquareId},
                 {"quest_square_list", std::move(goalSquares)},
-                {"clear_grade_quest_rewards_id_list", std::move(clearRewardIds)},
-                {"reward_list", std::move(rewardList)},
+                {"clear_grade_quest_rewards_id_list", std::move(*clearRewardIds)},
+                {"reward_list", GradeQuestRewardListLocked(gradeQuest.seriesId)},
                 {"grade_up_data", {
-                    {"before_grade_num", afterGradeNum - 1},
+                    {"before_grade_num", beforeGradeNum},
                     {"after_grade_num", afterGradeNum},
                 }},
-                {"is_not_received_grade_reward", false},
+                {"is_not_received_grade_reward", anyGradeReward},
             };
             gradeQuest.active = false;
         } else {
             result["goal_clear_data"] = nullptr;
         }
 
-        MockStoredResponse response;
-        response.body = result.dump();
-        return response;
+        return MockStoredResponse{result.dump(), WalletHeadersLocked(), 200, "OK"};
     }
 
+    // Retiring keeps what the main live stage reached: ライブPt.獲得率 rewards pay out.
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GradeSetQuestRetireLocked(std::string_view payloadJson) {
-        nlohmann::json rewardList = nlohmann::json::array();
-        if (gradeQuest.rewardsJson.is_array()) {
-            for (const auto& r : gradeQuest.rewardsJson) {
-                rewardList.push_back({
-                    {"grade_quest_rewards_id", r.value("grade_quest_rewards_id", 0)},
-                    {"is_received", false},
-                });
-            }
-        }
-
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
         nlohmann::json result;
-        result["clear_grade_quest_rewards_id_list"] = nlohmann::json::array();
-        result["live_point"] = 0;
-        result["reward_list"] = std::move(rewardList);
-        result["grade_up_data"] = nullptr;
+        nlohmann::json achieved = nlohmann::json::array();
+        nlohmann::json gradeUp = nullptr;
+        int64_t mainLivePoint = 0;
+        if (gradeQuest.active) {
+            for (const auto& sq : gradeQuest.squares) {
+                if (sq.squareType == 7) mainLivePoint = std::max(mainLivePoint, sq.livePoint);
+            }
+            const int beforeGradeNum = GradeNumLocked(GradeTotalPointLocked());
+            auto ids = GradeAchieveQuestRewardsLocked(false);
+            if (!ids) return std::nullopt;
+            achieved = std::move(*ids);
+            const int afterGradeNum = GradeNumLocked(GradeTotalPointLocked());
+            gradeUp = {{"before_grade_num", beforeGradeNum}, {"after_grade_num", afterGradeNum}};
+        }
+        result["clear_grade_quest_rewards_id_list"] = std::move(achieved);
+        result["live_point"] = mainLivePoint;
+        result["reward_list"] = GradeQuestRewardListLocked(gradeQuest.seriesId);
+        result["grade_up_data"] = std::move(gradeUp);
 
         gradeQuest = {};
 
-        MockStoredResponse response;
-        response.body = result.dump();
-        return response;
+        return MockStoredResponse{result.dump(), WalletHeadersLocked(), 200, "OK"};
     }
 
     // ─── Grand Prix ───
@@ -7031,7 +7313,7 @@ namespace LinkuraLocal::HttpMock {
                   ExecSql(db, "DELETE FROM grade_quest_series;") &&
                   ExecSql(db, "DELETE FROM grade_quest_stage;") &&
                   ExecSql(db, "DELETE FROM grade_add_skill;") &&
-                  ExecSql(db, "DELETE FROM grade_quest_progress;") &&
+                  ExecSql(db, "DELETE FROM grade_quest_progress; DELETE FROM grade_point_ledger; DELETE FROM grade_quest_reward_received; DELETE FROM grade_reward_received;") &&
                   ExecSql(db, "DELETE FROM grand_prix_progress;") &&
                   ExecSql(db, "DELETE FROM grand_prix;") &&
                   ExecSql(db, "DELETE FROM grand_prix_series;") &&
@@ -7536,6 +7818,16 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GradeGetStageData(std::string_view payloadJson) {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GradeGetStageDataLocked(payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GradeSetReward() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GradeSetRewardLocked();
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::OutQuestLiveGetQuestTop() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->OutQuestLiveGetQuestTopLocked();
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GradeGetResult(std::string_view payloadJson) {

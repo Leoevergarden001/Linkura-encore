@@ -15,3 +15,4 @@
 | SHOW | 0 分也显示 LIVE CLEAR；部分角色技能发动时没有语音 | 原版客户端行为：没有失败状态；技能语音不叠加，带「除外」技能的卡每局只发动一次 |
 | 画面 | 游戏默认分辨率和字体 | 原 linkura-localify 的渲染设置和字体替换已移除 |
 | 玩家 ID | 固定为 000000000 | 离线只有一个本地存档。资源包只带资源目录库、主数据库和新生成的存储密钥，不含原账号的 ID 和密钥 |
+| Grade | 从 Grade 1、0 Pt 开始，只有 Grade Quest 奖励会增加 Grade Pt；季度 Grade 和排名为 0 | Live Grand Prix 的 Grade Pt 是排名奖励，Grade Challenge 和季度 Grade 按已结束的期间计算，离线没有其他玩家和这些期间 |

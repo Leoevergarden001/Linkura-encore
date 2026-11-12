@@ -217,6 +217,34 @@ CREATE TABLE IF NOT EXISTS grade_quest_release (
     required_series_id INTEGER NOT NULL DEFAULT 0
 );
 
+-- GradeQuestRewards + GradeQuestRewardsDatas. conditions_value2: 2 = at least,
+-- 3 = at most. rewards_json: [{reward_type, item_id, num}], reward_type 8 = Grade Pt.
+CREATE TABLE IF NOT EXISTS grade_quest_reward (
+    rewards_id INTEGER NOT NULL PRIMARY KEY,
+    series_id INTEGER NOT NULL,
+    order_id INTEGER NOT NULL DEFAULT 0,
+    conditions_type INTEGER NOT NULL,
+    conditions_value INTEGER NOT NULL DEFAULT 0,
+    conditions_value2 INTEGER NOT NULL DEFAULT 2,
+    rewards_json TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS idx_grade_quest_reward_series ON grade_quest_reward(series_id);
+
+-- GradeDatas: Grade N needs require_points total Grade Pt; live_bonus is its Grade bonus (%).
+CREATE TABLE IF NOT EXISTS grade_data (
+    grade_num INTEGER NOT NULL PRIMARY KEY,
+    require_points INTEGER NOT NULL,
+    live_bonus INTEGER NOT NULL DEFAULT 0
+);
+
+-- GradeRewards + GradeRewardDatas: rewards for reaching grade_num.
+CREATE TABLE IF NOT EXISTS grade_reward (
+    grade_rewards_id INTEGER NOT NULL PRIMARY KEY,
+    grade_num INTEGER NOT NULL,
+    rewards_json TEXT NOT NULL DEFAULT '[]'
+);
+
 CREATE TABLE IF NOT EXISTS grade_quest_progress (
     series_id INTEGER NOT NULL PRIMARY KEY,
     clear_status INTEGER NOT NULL DEFAULT 0,
