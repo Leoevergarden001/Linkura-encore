@@ -240,27 +240,40 @@ namespace LinkuraLocal::Standalone {
 
     OfflineHttpServer::~OfflineHttpServer() { Stop(); }
 
+    namespace {
+        int OpenListenSocket(std::uint16_t port, std::string* error) {
+            const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (fd < 0) {
+                if (error) *error = std::string("socket: ") + std::strerror(errno);
+                return -1;
+            }
+            int yes = 1;
+            ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+            sockaddr_in address{};
+            address.sin_family = AF_INET;
+            address.sin_port = htons(port);
+            address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            if (::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 || ::listen(fd, 64) != 0) {
+                if (error) *error = std::string("bind/listen 127.0.0.1:") + std::to_string(port) + ": " +
+                                    std::strerror(errno);
+                ::close(fd);
+                return -1;
+            }
+            return fd;
+        }
+
+        // iOS takes the listening socket of a suspended app away: accept() then
+        // fails with ECONNABORTED (or EBADF) for good, so the socket is replaced.
+        bool ListenSocketGone(int err) {
+            return err == ECONNABORTED || err == EBADF || err == EINVAL || err == ENOTSOCK;
+        }
+    }
+
     bool OfflineHttpServer::Start(std::string* error) {
         if (running_) return true;
-        listenFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (listenFd_ < 0) {
-            if (error) *error = std::string("socket: ") + std::strerror(errno);
-            return false;
-        }
-        int yes = 1;
-        ::setsockopt(listenFd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-        sockaddr_in address{};
-        address.sin_family = AF_INET;
-        address.sin_port = htons(config_.port);
-        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        if (::bind(listenFd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 ||
-            ::listen(listenFd_, 64) != 0) {
-            if (error) *error = std::string("bind/listen 127.0.0.1:") + std::to_string(config_.port) +
-                                ": " + std::strerror(errno);
-            ::close(listenFd_);
-            listenFd_ = -1;
-            return false;
-        }
+        const int fd = OpenListenSocket(config_.port, error);
+        if (fd < 0) return false;
+        listenFd_ = fd;
         running_ = true;
         acceptThread_ = std::thread([this] { AcceptLoop(); });
         Log::InfoFmt("[OfflineServer] listening on 127.0.0.1:%u", static_cast<unsigned>(config_.port));
@@ -269,22 +282,49 @@ namespace LinkuraLocal::Standalone {
 
     void OfflineHttpServer::Stop() {
         if (!running_.exchange(false)) return;
-        ::shutdown(listenFd_, SHUT_RDWR);
-        ::close(listenFd_);
-        listenFd_ = -1;
+        const int fd = listenFd_.exchange(kStopped);
+        if (fd >= 0) {
+            ::shutdown(fd, SHUT_RDWR);
+            ::close(fd);
+        }
         if (acceptThread_.joinable()) acceptThread_.join();
     }
 
     void OfflineHttpServer::AcceptLoop() {
+        bool failing = false;  // log a failure streak once, not every retry
         while (running_) {
-            const int fd = ::accept(listenFd_, nullptr, nullptr);
+            const int listenFd = listenFd_.load();
+            if (listenFd == kStopped) break;
+            const int fd = listenFd >= 0 ? ::accept(listenFd, nullptr, nullptr) : -1;
             if (fd < 0) {
-                if (errno == EINTR) continue;
+                const int err = listenFd >= 0 ? errno : EBADF;
+                if (err == EINTR) continue;
                 if (!running_) break;
-                Log::WarnFmt("[OfflineServer] accept failed: %s", std::strerror(errno));
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                if (!failing) {
+                    Log::WarnFmt("[OfflineServer] accept failed: %s", std::strerror(err));
+                    failing = true;
+                }
+                if (ListenSocketGone(err)) {
+                    int expected = listenFd;
+                    if (listenFd >= 0 && listenFd_.compare_exchange_strong(expected, -1)) ::close(listenFd);
+                    std::string error;
+                    const int fresh = OpenListenSocket(config_.port, &error);
+                    if (fresh >= 0) {
+                        expected = -1;
+                        if (!listenFd_.compare_exchange_strong(expected, fresh)) {  // stopped meanwhile
+                            ::close(fresh);
+                            break;
+                        }
+                        Log::InfoFmt("[OfflineServer] listening again on 127.0.0.1:%u",
+                                     static_cast<unsigned>(config_.port));
+                        failing = false;
+                        continue;
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 continue;
             }
+            failing = false;
 #ifdef SO_NOSIGPIPE
             int yes = 1;
             ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));

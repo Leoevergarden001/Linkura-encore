@@ -64,7 +64,9 @@ namespace LinkuraLocal::Standalone {
         void ServeConnection(int fd);
 
         ServerConfig config_;
-        int listenFd_ = -1;
+        // -1: no socket (being reopened), kStopped: Stop() ran.
+        static constexpr int kStopped = -2;
+        std::atomic<int> listenFd_{-1};
         std::atomic<bool> running_{false};
         std::thread acceptThread_;
     };
