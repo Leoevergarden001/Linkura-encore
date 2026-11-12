@@ -1,4 +1,4 @@
-<!-- Translation source: 60f383ea76a885c71ddad0e2d24e2955fc4c6c78 (docs/zh/patching-ios.md) -->
+<!-- Translation source: 2a8c50d48381b9141744817e98706c34efe15eda (docs/zh/patching-ios.md) -->
 
 # iOS パッチ：調査と追加
 
