@@ -593,6 +593,14 @@ namespace LinkuraLocal::HttpMock {
             return MockResponse{std::move(record->body), std::move(record->headersText), record->statusCode, std::move(record->statusDescription)};
         }
 
+        static std::optional<MockResponse> HandleQuestSetRetire(const MockRequestContext& request,
+                                                                  HttpMockBackend& backend) {
+            auto record = backend.QuestSetRetire(request.payloadJson);
+            if (!record.has_value()) return std::nullopt;
+            if (record->headersText.empty()) record->headersText = std::string(OfflineApiMockBuiltIn::DefaultHeadersView);
+            return MockResponse{std::move(record->body), std::move(record->headersText), record->statusCode, std::move(record->statusDescription)};
+        }
+
         static std::optional<MockResponse> HandleQuestGetResult(const MockRequestContext& request,
                                                                   HttpMockBackend& backend) {
             auto record = backend.QuestGetResult(request.payloadJson);
@@ -924,7 +932,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterStaticJson(routes, "/v1/rhythm_game_live/set_retire", "null");
             // Giving up a stage live: nothing to settle. What the session
             // already consumed at set_start stays consumed.
-            RegisterStaticJson(routes, "/v1/in_quest_live/set_retire", "null");
+            RegisterBackend(routes, "/v1/in_quest_live/set_retire", HandleQuestSetRetire);
             // Display notification only.
             RegisterStaticJson(routes, "/v1/activity_record/notify_month_displayed", "null");
             RegisterStaticJson(routes, "/v1/card/set_display_data", R"({"result":true})");

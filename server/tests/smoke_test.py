@@ -215,6 +215,28 @@ def main() -> int:
                                     "use_item_list": [{"item_id": 3001001, "item_num": 1}]})
             check("charge ticket cannot pass 999", status == 200 and
                   json.loads(body)["user_stamina"]["stamina_now"] == 999, body[:200].decode())
+            # Retiring a quest live answers an object (the client stops on null) and gives the
+            # プレイPt. spent at set_start back, once.
+            def stamina_now() -> int:
+                _, _, body = post(conn, "/v1/out_quest_live/get_stamina_recovery_info", {})
+                return json.loads(body)["user_stamina"]["stamina_now"]
+            with sqlite3.connect(db_path) as db:
+                stage_id, cost = db.execute("SELECT stage_id, use_num FROM quest_stage WHERE use_num > 0 "
+                                            "ORDER BY stage_id LIMIT 1").fetchone()
+            _, _, body = post(conn, "/v1/out_quest_live/set_live_setting",
+                              {"stage_id": stage_id, "deck_id": "", "music_id": 0, "quest_live_type": 1})
+            live_id = json.loads(body).get("quest_live_id", "")
+            post(conn, "/v1/in_quest_live/set_start", {"quest_live_id": live_id})
+            spent = stamina_now()
+            status, _, body = post(conn, "/v1/in_quest_live/set_retire",
+                                   {"quest_live_id": live_id, "character_voices_id_list": []})
+            retire = json.loads(body)
+            check("quest live retire returns the spent プレイPt.",
+                  status == 200 and retire == {"quest_live_type": 1, "return_resource": cost} and
+                  stamina_now() == spent + cost == 999, body[:200].decode())
+            _, _, body = post(conn, "/v1/in_quest_live/set_retire", {"quest_live_id": live_id})
+            check("quest live retire pays back once", json.loads(body)["return_resource"] == 0 and
+                  stamina_now() == 999, body[:200].decode())
             post(conn, "/v1/user/login", {"player_id": "ABCDEFGHJ", "device_specific_id": "", "version": 1})
             status, _, body = post(conn, "/v1/profile/get_info", {})
             check("login player id not echoed into profile",

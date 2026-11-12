@@ -315,6 +315,7 @@ namespace LinkuraLocal::HttpMock {
             int64_t score = 0;
             std::string playReport;
             bool finished = false;
+            bool retired = false;
             nlohmann::json rewardList = nlohmann::json::array();
         };
         QuestLiveState currentQuestLive;
@@ -375,6 +376,8 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> QuestSetStartLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> QuestGetLiveInfoLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> QuestSetFinishLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> QuestSetRetireLocked(std::string_view payloadJson);
+        void RefundStaminaLocked(int64_t amount);
         std::optional<MockStoredResponse> QuestGetResultLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> QuestSkipLocked(std::string_view payloadJson);
         bool LoadQuestSessionLocked();
@@ -4831,6 +4834,7 @@ namespace LinkuraLocal::HttpMock {
         currentQuestLive.characterBonus = start.value("character_bonus", nlohmann::json::object());
         currentQuestLive.startTime = startTime ? startTime : "";
         currentQuestLive.finished = state && std::string_view(state) == "FINISHED";
+        currentQuestLive.retired = state && std::string_view(state) == "RETIRED";
         if (currentQuestLive.finished && finishPayload) {
             const auto finish = nlohmann::json::parse(finishPayload, nullptr, false);
             if (finish.is_object()) {
@@ -4851,7 +4855,7 @@ namespace LinkuraLocal::HttpMock {
         if (!db || currentQuestLive.questLiveId.empty() || currentQuestLive.startTime.empty()) {
             return false;
         }
-        if (state != "PLAYING" && state != "FINISHED") {
+        if (state != "PLAYING" && state != "FINISHED" && state != "RETIRED") {
             return false;
         }
 
@@ -4950,6 +4954,7 @@ namespace LinkuraLocal::HttpMock {
         currentQuestLive.startTime = buf;
         ConsumeStaminaLocked(StageStaminaCostLocked(currentQuestLive.questLiveType, currentQuestLive.stageId));
         currentQuestLive.finished = false;
+        currentQuestLive.retired = false;
         currentQuestLive.score = 0;
         currentQuestLive.playReport.clear();
         if (!PersistQuestSessionLocked("PLAYING")) {
@@ -5132,6 +5137,40 @@ namespace LinkuraLocal::HttpMock {
         result["return_resource"] = 0;
         result["applied_campaign_types"] = nlohmann::json::array();
 
+        MockStoredResponse response;
+        response.body = result.dump();
+        return response;
+    }
+
+    // in_quest_live/set_retire (SetRetireResponse: quest_live_type, return_resource).
+    // The client reads the response object and stops on an empty one; a
+    // return_resource above 0 opens TPopupReturnPointsResult. The プレイPt.
+    // spent at set_start comes back; Grade action Pt. is charged only by a
+    // finished live, so a retired one costs none.
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::QuestSetRetireLocked(std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        if (currentQuestLive.questLiveId.empty() && !LoadQuestSessionLocked()) return std::nullopt;
+        int64_t returned = 0;
+        const bool playing = !currentQuestLive.questLiveId.empty() && !currentQuestLive.startTime.empty() &&
+                             !currentQuestLive.finished && !currentQuestLive.retired;
+        if (playing) {
+            if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+            returned = StageStaminaCostLocked(currentQuestLive.questLiveType, currentQuestLive.stageId);
+            RefundStaminaLocked(returned);
+            currentQuestLive.retired = true;
+            if (!PersistQuestSessionLocked("RETIRED") || !ExecSql(db, "COMMIT;")) {
+                ExecSql(db, "ROLLBACK;");
+                currentQuestLive.retired = false;
+                return std::nullopt;
+            }
+            if (currentQuestLive.questLiveType == 4) gradeQuest.resourceValue = 0;
+            Log::InfoFmt("[HttpMockBackend] quest live retired (type %d, stage %d, returned %lld)",
+                         currentQuestLive.questLiveType, currentQuestLive.stageId, static_cast<long long>(returned));
+        }
+        nlohmann::json result;
+        result["quest_live_type"] = currentQuestLive.questLiveType;
+        result["return_resource"] = returned;
         MockStoredResponse response;
         response.body = result.dump();
         return response;
@@ -5416,6 +5455,22 @@ namespace LinkuraLocal::HttpMock {
                 -1, &stmt, nullptr) == SQLITE_OK && stmt) {
             sqlite3_bind_int64(stmt, 1, std::max<int64_t>(0, current - amount));
             sqlite3_bind_int64(stmt, 2, current >= kStaminaMax ? now : base);
+            sqlite3_step(stmt);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+    }
+
+    // Gives back プレイPt. (a retired live), up to the hold limit.
+    void HttpMockBackend::Impl::RefundStaminaLocked(int64_t amount) {
+        if (!db || amount <= 0) return;
+        const int64_t target = std::min(CurrentStaminaLocked() + amount, kStaminaHoldLimit);
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "INSERT INTO offline_player_stamina(singleton_id, stamina, updated_at) VALUES(1, ?1, ?2) "
+                "ON CONFLICT(singleton_id) DO UPDATE SET stamina=excluded.stamina, updated_at=excluded.updated_at;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int64(stmt, 1, target);
+            sqlite3_bind_int64(stmt, 2, static_cast<int64_t>(std::time(nullptr)));
             sqlite3_step(stmt);
         }
         if (stmt) sqlite3_finalize(stmt);
@@ -7733,6 +7788,11 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::QuestGetLiveInfo(std::string_view payloadJson) {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->QuestGetLiveInfoLocked(payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::QuestSetRetire(std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->QuestSetRetireLocked(payloadJson);
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::QuestSetFinish(std::string_view payloadJson) {
