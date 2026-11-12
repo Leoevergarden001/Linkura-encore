@@ -237,6 +237,26 @@ def main() -> int:
             check("grade quest action opens the next squares",
                   squares.get(31034101) == 2 and squares.get(31034102) == 1 and squares.get(61034101) == 1,
                   body[:300].decode())
+
+            # 103 GRADUATION holds a single series numbered 6: it opens once all 24 series of
+            # 103 SPRING..WINTER are cleared.
+            def graduation() -> dict:
+                _, _, body = post(conn, "/v1/out_quest_live/grade/get_quest_list", {})
+                return next(s for s in json.loads(body)["quest_season_list"] if s["grade_quest_season_id"] == 1035)
+            check("graduation locked at start", graduation()["quest_series_list"][0]["is_lock"] is True)
+            with sqlite3.connect(db_path) as db:
+                earlier = [r[0] for r in db.execute(
+                    "SELECT series_id FROM grade_quest_series WHERE season_id IN (1031,1032,1033,1034) ORDER BY series_id")]
+                db.executemany("INSERT OR REPLACE INTO grade_quest_progress(series_id,clear_status) VALUES(?,1)",
+                               [(i,) for i in earlier[:-1]])
+            check("graduation locked with one earlier series left", len(earlier) == 24 and
+                  graduation()["quest_series_list"][0]["is_lock"] is True)
+            with sqlite3.connect(db_path) as db:
+                db.execute("INSERT OR REPLACE INTO grade_quest_progress(series_id,clear_status) VALUES(?,1)",
+                           (earlier[-1],))
+            season = graduation()
+            check("graduation opens after 103 SPRING..WINTER", season["is_lock"] is False and
+                  season["quest_series_list"][0]["is_lock"] is False, json.dumps(season)[:300])
             conn.close()
         finally:
             log += stop(proc)

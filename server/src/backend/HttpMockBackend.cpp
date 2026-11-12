@@ -397,6 +397,7 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> DreamGetResultLocked(std::string_view payloadJson);
 
         std::optional<MockStoredResponse> GradeGetQuestListLocked(std::string_view payloadJson);
+        bool GradeEarlierSeasonsClearedLocked(int generation, int season);
         std::optional<MockStoredResponse> GradeSetQuestStartLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GradeSetQuestActionLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GradeSetQuestAddSkillLocked(std::string_view payloadJson);
@@ -6022,6 +6023,27 @@ namespace LinkuraLocal::HttpMock {
         return response;
     }
 
+    bool HttpMockBackend::Impl::GradeEarlierSeasonsClearedLocked(int generation, int season) {
+        sqlite3_stmt* stmt = nullptr;
+        constexpr const char* sql =
+            "SELECT COUNT(*), COALESCE(SUM(COALESCE(p.clear_status, 0) > 0), 0) FROM grade_quest_series sr "
+            "JOIN grade_quest_season s ON s.season_id = sr.season_id "
+            "LEFT JOIN grade_quest_progress p ON p.series_id = sr.series_id "
+            "WHERE s.generation = ? AND s.season < ?;";
+        int total = 0;
+        int cleared = 0;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, generation);
+            sqlite3_bind_int(stmt, 2, season);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                total = sqlite3_column_int(stmt, 0);
+                cleared = sqlite3_column_int(stmt, 1);
+            }
+            sqlite3_finalize(stmt);
+        }
+        return total > 0 && cleared == total;
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GradeGetQuestListLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) {
             return std::nullopt;
@@ -6049,6 +6071,8 @@ namespace LinkuraLocal::HttpMock {
             if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
                 while (sqlite3_step(stmt) == SQLITE_ROW) {
                     const int seasonId = sqlite3_column_int(stmt, 0);
+                    const int generation = sqlite3_column_int(stmt, 1);
+                    const int season = sqlite3_column_int(stmt, 2);
 
                     nlohmann::json seriesList = nlohmann::json::array();
                     int clearNum = 0;
@@ -6070,7 +6094,10 @@ namespace LinkuraLocal::HttpMock {
                             const bool cleared = (clearStatus > 0);
 
                             if (isFirstSeries) {
-                                prevCleared = (orderId == 1);
+                                // GRADUATION (season 5) holds a single series numbered 6. The
+                                // original unlock rule was not archived; open it once every
+                                // series of the same generation's earlier seasons is cleared.
+                                prevCleared = (orderId == 1) || GradeEarlierSeasonsClearedLocked(generation, season);
                                 isFirstSeries = false;
                             }
 
