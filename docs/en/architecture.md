@@ -19,7 +19,7 @@ flowchart TD
 |---|---|
 | `server/src` | Offline server. `RouteRegistry.cpp` registers routes; `backend/HttpMockBackend.cpp` handles stateful ones (gacha, development, missions, SHOW results, stamina, etc.); `MockPlatform.hpp` abstracts the platform. |
 | `server/src/standalone` | Platform implementation independent of Android and a small HTTP server, shared by the iOS dylib and host build. |
-| `server/data/builtin` | Embedded response templates (`<接口>.json` and `default.headers`). |
+| `server/data/builtin` | Embedded response templates (`<route>.json` and `default.headers`). |
 | `server/db` | Embedded schemas (`schema/`), seed data (`seed/`), queries, and player-save migrations (`player-state/`). |
 | `server/generators` | Scripts that generate templates and seeds from master data (`third_party/link-like-diff`). |
 | `server/host`, `server/tests` | Desktop server and smoke tests. |

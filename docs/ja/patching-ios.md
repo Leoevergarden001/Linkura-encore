@@ -5,7 +5,7 @@
 iOS では実行時の Hook を使えないため、パッケージ化時に UnityFramework を静的に変更します。`tools/linkura_offline/ios_offline.py` のパッチ表は各項目を次の形式で定義します。
 
 ```python
-(地址, "说明", "原始字节（小端 hex）", "新字节")
+(アドレス, "説明", "元のバイト列（リトルエンディアン hex）", "置換後のバイト列")
 ```
 
 `patch_code` は元のバイト列を確認し、一致しなければエラーで停止します。検証済みの 5.0.1 ビルドだけに適用され、別バージョンを壊しません。
@@ -22,7 +22,7 @@ alias re='python3 tools/re/il2cpp_re.py -f UnityFramework -s sym.json'
 ## パッチ位置の調査（Chapter RANK の例）
 
 1. **名前で入口を探します**：`re find 'ChapterPoint::OnPointerClick'`。async メソッドの本体はコンパイラーが作るステートマシンにあります：`re find '<OnPointerClick>d__6::MoveNext'`。
-2. **逆アセンブルします**：`re dis <地址> 0x600`。呼び出し先が `-> Tecotec.CommonApiCache::get_CurrentChapterRank` のように表示され、その後に `cbz w0, <提示分支>` が続きます。
+2. **逆アセンブルします**：`re dis <アドレス> 0x600`。呼び出し先が `-> Tecotec.CommonApiCache::get_CurrentChapterRank` のように表示され、その後に `cbz w0, <通知分岐>` が続きます。
 3. **他の呼び出し元を調べます**：`re callers 'CommonApiCache::get_CurrentChapterRank$'`。この getter は上部パネルでも使うので、getter 自体ではなく呼び出し箇所の分岐を変えます。
 4. **元のバイト列を読みます**：`re bytes 0x2eb0fe8` の結果は `00070034`（`cbz w0, +0xe0`）です。
 5. **新しい命令を書きます**：無条件の `b +0xe0` は `0x14000000 | (0xe0 >> 2)` = `0x14000038` で、リトルエンディアンでは `38000014` です。

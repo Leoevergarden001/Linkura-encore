@@ -19,17 +19,17 @@ void Install(HookInstaller* hookInstaller) {
 }
 ```
 
-- `DEFINE_HOOK(返回类型, 名字, (参数...))` は `名字_Hook` と元の関数ポインター `名字_Orig` を生成します。インスタンスメソッドの最初の引数は `self`、最後は `MethodInfo*` です。
-- `ADD_HOOK(名字, 地址)` で導入し、ログに `ADD_HOOK: 名字 at 0x...` が出ます。
+- `DEFINE_HOOK(戻り値の型, 名前, (引数...))` は `名前_Hook` と元の関数ポインター `名前_Orig` を生成します。インスタンスメソッドの最初の引数は `self`、最後は `MethodInfo*` です。
+- `ADD_HOOK(名前, アドレス)` で導入し、ログに `ADD_HOOK: 名前 at 0x...` が出ます。
 - オフライン時だけ有効にする処理は `Config::enableOfflineApiMock` で判定します。
 
 ## よく使う検索方法
 
 | 用途 | 書き方 |
 |---|---|
-| 通常のメソッド | `Il2cppUtils::GetMethodPointer(程序集, 命名空间, 类名, 方法名)` |
-| 引数の数を指定 | `Il2cppUtils::GetMethodIl2cpp(klass, "方法名", 参数个数)` |
-| async ステートマシン | `Il2cppUtils::find_nested_class(klass, 判断函数)` で `"<方法名>d__"` の接頭辞に一致するものを探し、`MoveNext` を取得します |
+| 通常のメソッド | `Il2cppUtils::GetMethodPointer(アセンブリ, 名前空間, クラス名, メソッド名)` |
+| 引数の数を指定 | `Il2cppUtils::GetMethodIl2cpp(klass, "メソッド名", 引数の数)` |
+| async ステートマシン | `Il2cppUtils::find_nested_class(klass, 判定関数)` で `"<メソッド名>d__"` の接頭辞に一致するものを探し、`MoveNext` を取得します |
 | フィールドのオフセット | `Il2cppUtils::il2cpp_class_get_field_from_name(klass, "<>1__state")` |
 | 内部呼び出し（icall） | `Il2cppUtils::il2cpp_resolve_icall("UnityEngine.Application::get_version")` |
 

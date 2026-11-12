@@ -10,7 +10,7 @@ The game's external files directory is `/sdcard/Android/data/com.oddno.lovelive/
 
 | Path | Contents |
 |---|---|
-| `D/<两位前缀>/<RealName>` | Assets (Hailstorm cache): UnityFS bundles, audio (`acb`/`awb`), video (`usm`), encrypted text, etc. |
+| `D/<two-character prefix>/<RealName>` | Assets (Hailstorm cache): UnityFS bundles, audio (`acb`/`awb`), video (`usm`), encrypted text, etc. |
 | `M/` | Databases (SQLCipher) |
 
 Databases in `M/` are named and encrypted using **storage keys**. For each storage domain, the client stores a random 256-byte seed in PlayerPrefs (on Android, `shared_prefs/com.oddno.lovelive.v2.playerprefs.xml`):
@@ -41,8 +41,8 @@ adb pull /sdcard/game-external.tar /sdcard/game-private.tar .
 
 ```sh
 python3 -m tools.linkura_offline android-resource-pack-build \
-  --snapshot game-external.tar [--delta 之后的增量.tar ...] \
-  --private game-private.tar --output <资源包目录>
+  --snapshot game-external.tar [--delta <later-delta.tar> ...] \
+  --private game-private.tar --output <resource pack directory>
 ```
 
 The resource pack contains `D/`, freshly keyed catalog and master databases (the only two files in `M/`), their keys at `files/linkura-local/storage-key.json`, and `MANIFEST.json`. Rekeying requires the SQLCipher 4 CLI (`brew install sqlcipher`). `--keep-source-key` retains the original `M/` and storage keys instead. Do not use an exFAT output directory (macOS creates `._*` files). To transfer the pack, see [Android](android.md#android-import-resources).
@@ -53,10 +53,10 @@ An existing cache (for example, an older resource pack or iOS container) can als
 
 ```sh
 python3 -m tools.linkura_offline cache-rekey \
-  --m-dir <缓存的 M/> --storage-key <对应的 storage-key.json> --output <新目录>
+  --m-dir <cache M/> --storage-key <matching storage-key.json> --output <new directory>
 ```
 
-Replace the old `M/` and `storage-key.json` with the two databases under `<新目录>/M/` and `<新目录>/storage-key.json`. If the source `storage-key.json` lacks a master database entry (as may happen with an iOS device export), only the catalog database is processed and the tool warns you. Such a cache cannot supply master data on a new device.
+Replace the old `M/` and `storage-key.json` with the two databases under `<new directory>/M/` and `<new directory>/storage-key.json`. If the source `storage-key.json` lacks a master database entry (as may happen with an iOS device export), only the catalog database is processed and the tool warns you. Such a cache cannot supply master data on a new device.
 
 <a id="ios-from-android"></a>
 
@@ -66,10 +66,10 @@ The iOS client reads the same cache layout and storage keys, but Unity rejects a
 
 ```sh
 python3 tools/resources/android_to_ios.py \
-  --cache <包含 D/ 和 M/ 的目录（例如资源包的 files/）> \
-  --storage-key <资源包的 files/linkura-local/storage-key.json> \
-  --ipa <已解密的 5.0.1 IPA> \
-  --output <iOS 数据目录>
+  --cache <directory containing D/ and M/, e.g. resource pack files/> \
+  --storage-key <resource pack files/linkura-local/storage-key.json> \
+  --ipa <decrypted 5.0.1 IPA> \
+  --output <iOS data directory>
 ```
 
 - Retarget every UnityFS bundle from Android (13) to iOS (9).
@@ -81,7 +81,7 @@ Pass the resulting `container/` to `tools/ios_device_setup.py --backup`.
 ## Check cache coverage
 
 ```sh
-python3 tools/resources/hailstorm.py coverage --catalog <catalog.json> --cache <包含 D/ 的目录>
+python3 tools/resources/hailstorm.py coverage --catalog <catalog.json> --cache <directory containing D/>
 ```
 
 The tool reports, by category, how many catalog entries are present and how many gigabytes are missing. Failed downloads leave 0–28-byte placeholders, which count as missing. `catalog.json` is the Hailstorm asset catalog, for example one saved while using inspix-hailstorm.
@@ -89,6 +89,6 @@ The tool reports, by category, how many catalog entries are present and how many
 Encrypted raw assets (ResourceType 192), such as `story_main_*.txt` scripts, can be decrypted for inspection:
 
 ```sh
-python3 tools/resources/hailstorm.py decrypt --catalog <catalog.json> --cache <目录> \
+python3 tools/resources/hailstorm.py decrypt --catalog <catalog.json> --cache <directory> \
   --label story_main_10250101.txt --output story.txt
 ```

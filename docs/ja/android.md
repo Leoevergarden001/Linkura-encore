@@ -18,8 +18,8 @@ JAVA_HOME=<JDK 17> ./gradlew :app:assembleDebug
 
 ```sh
 python3 -m tools.linkura_offline android-repack \
-  --java <Java 21+ 的 java> \
-  --source <你的 5.1.0 APK> \
+  --java <Java 21+ の java> \
+  --source <手元の 5.1.0 APK> \
   --output Linkura-5.1.0-offline.apk
 ```
 
@@ -42,7 +42,7 @@ adb install -r Linkura-5.1.0-offline.apk
 リソースパックの作り方は[アセットの準備](resources.md)を参照してください。導入コマンドは次のとおりです。
 
 ```sh
-python3 -m tools.linkura_offline android-resource-pack-install --pack <资源包目录> --serial <adb serial>
+python3 -m tools.linkura_offline android-resource-pack-install --pack <リソースパックのディレクトリ> --serial <adb serial>
 ```
 
 ツールは一度ゲームを起動してモジュールにキャッシュディレクトリを作らせます（Android 11+ では adb が他のアプリの外部ディレクトリに新しいサブディレクトリを作れません）。その後、通常の adb でファイルを転送し、ファイル数を確認します。転送は約 11 分です。

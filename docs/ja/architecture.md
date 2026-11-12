@@ -19,7 +19,7 @@ flowchart TD
 |---|---|
 | `server/src` | オフラインサーバーです。`RouteRegistry.cpp` が全 API を登録し、`backend/HttpMockBackend.cpp` が状態を持つ API（ガチャ、育成、ミッション、SHOW の結果、スタミナなど）を実装します。`MockPlatform.hpp` はプラットフォーム抽象です。 |
 | `server/src/standalone` | Android に依存しない実装と最小限の HTTP サーバーです。iOS dylib とホスト版で共用します。 |
-| `server/data/builtin` | 内蔵レスポンステンプレート（`<接口>.json`、`default.headers`）です。ビルド時に組み込みます。 |
+| `server/data/builtin` | 内蔵レスポンステンプレート（`<API パス>.json`、`default.headers`）です。ビルド時に組み込みます。 |
 | `server/db` | スキーマ（`schema/`）、シードデータ（`seed/`）、クエリー、プレイヤーセーブの移行処理（`player-state/`）です。ビルド時に組み込みます。 |
 | `server/generators` | マスターデータ（`third_party/link-like-diff`）からテンプレートとシードを生成するスクリプトです。 |
 | `server/host`、`server/tests` | デスクトップ版サーバーとスモークテストです。 |

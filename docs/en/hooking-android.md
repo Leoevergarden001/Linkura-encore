@@ -19,17 +19,17 @@ void Install(HookInstaller* hookInstaller) {
 }
 ```
 
-- `DEFINE_HOOK(返回类型, 名字, (参数...))` generates `名字_Hook` and the original-function pointer `名字_Orig`. The first argument of an instance method is `self` and the last is `MethodInfo*`.
-- `ADD_HOOK(名字, 地址)` installs the hook; logs include `ADD_HOOK: 名字 at 0x...`.
+- `DEFINE_HOOK(return_type, name, (args...))` generates `name_Hook` and the original-function pointer `name_Orig`. The first argument of an instance method is `self` and the last is `MethodInfo*`.
+- `ADD_HOOK(name, address)` installs the hook; logs include `ADD_HOOK: name at 0x...`.
 - Use `Config::enableOfflineApiMock` for behavior that should apply only in offline mode.
 
 ## Common lookups
 
 | Need | Expression |
 |---|---|
-| Ordinary method | `Il2cppUtils::GetMethodPointer(程序集, 命名空间, 类名, 方法名)` |
-| Specific argument count | `Il2cppUtils::GetMethodIl2cpp(klass, "方法名", 参数个数)` |
-| Async state machine | `Il2cppUtils::find_nested_class(klass, 判断函数)`; match the `"<方法名>d__"` prefix and take `MoveNext` |
+| Ordinary method | `Il2cppUtils::GetMethodPointer(assembly, namespace, class_name, method_name)` |
+| Specific argument count | `Il2cppUtils::GetMethodIl2cpp(klass, "method_name", argument_count)` |
+| Async state machine | `Il2cppUtils::find_nested_class(klass, predicate)`; match the `"<method_name>d__"` prefix and take `MoveNext` |
 | Field offset | `Il2cppUtils::il2cpp_class_get_field_from_name(klass, "<>1__state")` |
 | Internal call (icall) | `Il2cppUtils::il2cpp_resolve_icall("UnityEngine.Application::get_version")` |
 

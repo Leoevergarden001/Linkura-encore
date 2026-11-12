@@ -10,7 +10,7 @@
 
 | パス | 内容 |
 |---|---|
-| `D/<两位前缀>/<RealName>` | アセット（Hailstorm キャッシュ）：UnityFS バンドル、音声（`acb`/`awb`）、動画（`usm`）、暗号化テキストなど |
+| `D/<2文字の接頭辞>/<RealName>` | アセット（Hailstorm キャッシュ）：UnityFS バンドル、音声（`acb`/`awb`）、動画（`usm`）、暗号化テキストなど |
 | `M/` | データベース（SQLCipher） |
 
 `M/` のデータベースは**ストレージキー**から名前と暗号化キーが決まります。クライアントはストレージ領域ごとに 256 バイトのランダムな seed を PlayerPrefs に保存します（Android では `shared_prefs/com.oddno.lovelive.v2.playerprefs.xml`）。
@@ -41,8 +41,8 @@ adb pull /sdcard/game-external.tar /sdcard/game-private.tar .
 
 ```sh
 python3 -m tools.linkura_offline android-resource-pack-build \
-  --snapshot game-external.tar [--delta 之后的增量.tar ...] \
-  --private game-private.tar --output <资源包目录>
+  --snapshot game-external.tar [--delta <後続の差分.tar> ...] \
+  --private game-private.tar --output <リソースパックのディレクトリ>
 ```
 
 リソースパックには `D/`、新しいキーに置き換えたカタログDBとマスターデータDB（`M/` にあるのはこの二つだけ）、対応するストレージキー（`files/linkura-local/storage-key.json`）、`MANIFEST.json` が入ります。キーの置き換えには SQLCipher 4 CLI（`brew install sqlcipher`）が必要です。`--keep-source-key` は元の `M/` とキーをそのまま保持します。exFAT を出力先にしないでください（macOS が `._*` ファイルを作ります）。導入は [Android](android.md#android-import-resources) を参照してください。
@@ -53,10 +53,10 @@ python3 -m tools.linkura_offline android-resource-pack-build \
 
 ```sh
 python3 -m tools.linkura_offline cache-rekey \
-  --m-dir <缓存的 M/> --storage-key <对应的 storage-key.json> --output <新目录>
+  --m-dir <キャッシュの M/> --storage-key <対応する storage-key.json> --output <新しいディレクトリ>
 ```
 
-出力された `<新目录>/M/` の二つのデータベースと `<新目录>/storage-key.json` を元の `M/` と `storage-key.json` に置き換えます。元の `storage-key.json` にマスターデータDBの項目がない場合（iOS 端末からの書き出しなど）は、カタログDBだけを処理して警告します。そのキャッシュだけでは新しい端末にマスターデータを用意できません。
+出力された `<新しいディレクトリ>/M/` の二つのデータベースと `<新しいディレクトリ>/storage-key.json` を元の `M/` と `storage-key.json` に置き換えます。元の `storage-key.json` にマスターデータDBの項目がない場合（iOS 端末からの書き出しなど）は、カタログDBだけを処理して警告します。そのキャッシュだけでは新しい端末にマスターデータを用意できません。
 
 <a id="ios-from-android"></a>
 
@@ -66,10 +66,10 @@ iOS クライアントは同じキャッシュ構成とストレージキーを�
 
 ```sh
 python3 tools/resources/android_to_ios.py \
-  --cache <包含 D/ 和 M/ 的目录（例如资源包的 files/）> \
-  --storage-key <资源包的 files/linkura-local/storage-key.json> \
-  --ipa <已解密的 5.0.1 IPA> \
-  --output <iOS 数据目录>
+  --cache <D/ と M/ を含むディレクトリ（例：リソースパックの files/）> \
+  --storage-key <リソースパックの files/linkura-local/storage-key.json> \
+  --ipa <復号済みの 5.0.1 IPA> \
+  --output <iOS データディレクトリ>
 ```
 
 - すべての UnityFS バンドルのプラットフォーム値を Android（13）から iOS（9）に変更します。
@@ -81,7 +81,7 @@ python3 tools/resources/android_to_ios.py \
 ## キャッシュの網羅率の確認
 
 ```sh
-python3 tools/resources/hailstorm.py coverage --catalog <catalog.json> --cache <包含 D/ 的目录>
+python3 tools/resources/hailstorm.py coverage --catalog <catalog.json> --cache <D/ を含むディレクトリ>
 ```
 
 カテゴリごとに、カタログ内で保存済みのファイル数と不足容量を表示します。ダウンロード失敗時に残る 0–28 バイトのプレースホルダーは不足として数えます。`catalog.json` は、たとえば inspix-hailstorm で保存した Hailstorm のアセットカタログです。
@@ -89,6 +89,6 @@ python3 tools/resources/hailstorm.py coverage --catalog <catalog.json> --cache <
 暗号化された raw アセット（ResourceType 192）、たとえば `story_main_*.txt` の脚本は復号して確認できます。
 
 ```sh
-python3 tools/resources/hailstorm.py decrypt --catalog <catalog.json> --cache <目录> \
+python3 tools/resources/hailstorm.py decrypt --catalog <catalog.json> --cache <ディレクトリ> \
   --label story_main_10250101.txt --output story.txt
 ```

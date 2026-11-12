@@ -2,9 +2,15 @@
 
 Use these terms consistently in the three documentation languages. Keep names shown in the game UI in Japanese, including `キャッシュ削除`, `プレイPt.`, and `Chapter RANK`. Do not translate commands, identifiers, paths, addresses, or hexadecimal values.
 
+Translate explanatory placeholders in commands and pseudocode, such as `<resource pack directory>` or `method_name`; they are prose for readers, not literal identifiers.
+
 三种语言的文档统一使用下表术语。游戏界面文字保留日文原文；命令、标识符、路径、地址和十六进制值不翻译。
 
+命令和伪代码中写给读者看的占位符要翻译，例如 `<资源包目录>`、`方法名`；它们不是程序的固定标识符。
+
 3 言語の文書では、以下の用語を統一して使います。ゲーム画面の表記は日本語のままにし、コマンド、識別子、パス、アドレス、16 進数の値は翻訳しません。
+
+コマンドや疑似コードで読者に示すプレースホルダーは翻訳します。たとえば `<リソースパックのディレクトリ>` や `メソッド名` は固定の識別子ではありません。
 
 | 中文 | English | 日本語 |
 |---|---|---|

@@ -18,8 +18,8 @@ The native build includes the offline server (`server/src`) and embedded data (`
 
 ```sh
 python3 -m tools.linkura_offline android-repack \
-  --java <Java 21+ 的 java> \
-  --source <你的 5.1.0 APK> \
+  --java <Java 21+ java> \
+  --source <your 5.1.0 APK> \
   --output Linkura-5.1.0-offline.apk
 ```
 
@@ -42,7 +42,7 @@ If the official client is already installed, its signature differs. You must bac
 See [Prepare assets](resources.md) to make a resource pack. Then import it:
 
 ```sh
-python3 -m tools.linkura_offline android-resource-pack-install --pack <资源包目录> --serial <adb serial>
+python3 -m tools.linkura_offline android-resource-pack-install --pack <resource pack directory> --serial <adb serial>
 ```
 
 The tool launches the game once to let the module create cache directories (on Android 11+, adb cannot create new subdirectories inside another app's external directory), then pushes the files with ordinary adb and checks the file count. The transfer takes roughly 11 minutes.

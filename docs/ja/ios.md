@@ -20,7 +20,7 @@ LINKURA_REMOTE=0 ios/build.sh  # 開発用のリモート操作・撮影ツー�
 
 ```sh
 python3 -m tools.linkura_offline ios-offline-stage \
-  --source <已解密的 5.0.1 IPA> \
+  --source <復号済みの 5.0.1 IPA> \
   --show-preview-bgm-fallback --disable-lyric-videos \
   --output Linkura-iOS-5.0.1-offline-unsigned.ipa
 ```
@@ -33,9 +33,9 @@ python3 -m tools.linkura_offline ios-offline-stage \
 
 ```sh
 python3 tools/ios_device_setup.py \
-  --backup <iOS 数据目录（包含 container/）> \
+  --backup <container/ を含む iOS データディレクトリ> \
   --unsigned Linkura-iOS-5.0.1-offline-unsigned.ipa \
-  --device "<设备名或 UDID>" --launch --port 8791
+  --device "<端末名または UDID>" --launch --port 8791
 ```
 
 スクリプトは、端末を含む有効期限内のプロファイルと一意の署名 ID を選びます。アプリをインストールし、アセットキャッシュ、マスターデータDB、ストレージキーを転送して各ファイルのサイズを比較し、最後に起動してオフラインサーバーの待ち受けを確認します。
@@ -47,7 +47,7 @@ python3 tools/ios_device_setup.py \
 
 iOS 用データディレクトリは Android のキャッシュから変換できます。[アセットの準備](resources.md#ios-from-android)をご覧ください。
 
-署名だけ行う場合：`tools/ios_sign_ipa.sh <unsigned.ipa> <profile.mobileprovision> "<签名身份>" <signed.ipa>`。
+署名だけ行う場合：`tools/ios_sign_ipa.sh <unsigned.ipa> <profile.mobileprovision> "<署名 ID>" <signed.ipa>`。
 
 ## デバッグ
 
@@ -58,6 +58,6 @@ dylib は実行情報をアプリの `Documents/LinkuraOffline/` に書き込み
 | `server.log` | 各リクエストのパスと状態コード、未登録ルート（`no route for`）、不足アセットのリクエスト |
 | `config.json` | 任意：`{"port": 52680, "resVersion": "..."}` |
 | `storage-key.json` | 起動前に PlayerPrefs に書き込むストレージキー |
-| `mock_api/v1/<路径>.json`（および `.headers`） | パスごとのレスポンス上書きファイル。素早い試験に使います。 |
+| `mock_api/v1/<パス>.json`（および `.headers`） | パスごとのレスポンス上書きファイル。素早い試験に使います。 |
 
 プレイヤーDBは `Library/Application Support/LinkuraOffline/HasuKikaisann.sqlite3` にあります。初回起動時にミュージアムセーブデータを自動生成します。

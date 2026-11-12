@@ -20,7 +20,7 @@ LINKURA_REMOTE=0 ios/build.sh  # omit development-only remote tap/screenshot too
 
 ```sh
 python3 -m tools.linkura_offline ios-offline-stage \
-  --source <已解密的 5.0.1 IPA> \
+  --source <decrypted 5.0.1 IPA> \
   --show-preview-bgm-fallback --disable-lyric-videos \
   --output Linkura-iOS-5.0.1-offline-unsigned.ipa
 ```
@@ -33,9 +33,9 @@ Connect the device to a Mac by cable, trust the computer, and enable Developer M
 
 ```sh
 python3 tools/ios_device_setup.py \
-  --backup <iOS 数据目录（包含 container/）> \
+  --backup <iOS data directory containing container/> \
   --unsigned Linkura-iOS-5.0.1-offline-unsigned.ipa \
-  --device "<设备名或 UDID>" --launch --port 8791
+  --device "<device name or UDID>" --launch --port 8791
 ```
 
 The script selects an unexpired profile that includes the device and an unambiguous signing identity. It installs the app, transfers the asset cache, master database, and storage key, compares each file size, launches the app, and checks that the offline server is listening.
@@ -47,7 +47,7 @@ The script selects an unexpired profile that includes the device and an unambigu
 
 An iOS data directory can be converted from an Android cache; see [Prepare assets](resources.md#ios-from-android).
 
-To sign without installing: `tools/ios_sign_ipa.sh <unsigned.ipa> <profile.mobileprovision> "<签名身份>" <signed.ipa>`.
+To sign without installing: `tools/ios_sign_ipa.sh <unsigned.ipa> <profile.mobileprovision> "<signing identity>" <signed.ipa>`.
 
 ## Debugging
 
@@ -58,6 +58,6 @@ The dylib writes runtime information to `Documents/LinkuraOffline/` inside the a
 | `server.log` | Each request's path and status, unmatched routes (`no route for`), and missing asset requests |
 | `config.json` | Optional: `{"port": 52680, "resVersion": "..."}` |
 | `storage-key.json` | Storage key written to PlayerPrefs before startup |
-| `mock_api/v1/<路径>.json` (and `.headers`) | Optional response override by path for quick experiments |
+| `mock_api/v1/<path>.json` (and `.headers`) | Optional response override by path for quick experiments |
 
 The player database is at `Library/Application Support/LinkuraOffline/HasuKikaisann.sqlite3`. The first launch generates a museum save automatically.

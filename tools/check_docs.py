@@ -27,6 +27,27 @@ LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*$")
 ANCHOR = re.compile(r'<a\s+id=["\x27]([^"\x27]+)["\x27]\s*></a>', re.IGNORECASE)
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+ANGLE_PLACEHOLDER = re.compile(r"<([^<>\n]+)>")
+HAN = re.compile(r"[\u3400-\u9fff]")
+# These simplified forms are not used in normal Japanese placeholders.
+SIMPLIFIED_HAN = re.compile(r"[资录设备缓两签说类应对后为这们个码载开关进检测试编译]")
+CHINESE_EXAMPLE_TERMS = (
+    "返回类型",
+    "名字_Hook",
+    "名字_Orig",
+    "ADD_HOOK(名字",
+    "参数个数",
+    "程序集",
+    "命名空间",
+    "类名",
+    "方法名",
+    "判断函数",
+    "原始字节",
+    "新字节",
+    "之后的增量",
+    "地址",
+    "说明",
+)
 
 
 def markdown_lines(path: Path) -> list[tuple[int, str]]:
@@ -119,6 +140,46 @@ def check_links(root: Path) -> list[str]:
     return errors
 
 
+def check_placeholders(root: Path) -> list[str]:
+    """Reject Chinese example placeholders left in English or Japanese docs."""
+    chinese = [root / "README.zh-CN.md", *sorted((root / "docs" / "zh").glob("*.md"))]
+    source_placeholders = {
+        token
+        for path in chinese if path.is_file()
+        for token in ANGLE_PLACEHOLDER.findall(path.read_text(encoding="utf-8"))
+        if HAN.search(token)
+    }
+    errors: list[str] = []
+    for lang, paths in (
+        ("en", [root / "README.md", *sorted((root / "docs" / "en").glob("*.md"))]),
+        ("ja", [root / "README.ja.md", *sorted((root / "docs" / "ja").glob("*.md"))]),
+    ):
+        for path in paths:
+            if not path.is_file():
+                continue
+            fence: str | None = None
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                marker = FENCE.match(line)
+                if marker:
+                    current = marker.group(1)
+                    if fence is None:
+                        fence = current
+                    elif current[0] == fence[0] and len(current) >= len(fence):
+                        fence = None
+                    continue
+                where = f"{path.relative_to(root)}:{number}"
+                for token in ANGLE_PLACEHOLDER.findall(line):
+                    if (token in source_placeholders
+                            or (lang == "en" and HAN.search(token))
+                            or (lang == "ja" and SIMPLIFIED_HAN.search(token))):
+                        errors.append(f"{where}: untranslated placeholder <{token}>")
+                if fence is not None or "`" in line:
+                    for term in CHINESE_EXAMPLE_TERMS:
+                        if term in line:
+                            errors.append(f"{where}: untranslated example term {term}")
+    return errors
+
+
 def git(*args: str, root: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args], cwd=root, text=True, capture_output=True, check=False
@@ -158,7 +219,7 @@ def check_translation_sources(root: Path) -> tuple[list[str], list[str]]:
 
 
 def main() -> int:
-    errors = check_file_parity(ROOT) + check_links(ROOT)
+    errors = check_file_parity(ROOT) + check_links(ROOT) + check_placeholders(ROOT)
     source_errors, warnings = check_translation_sources(ROOT)
     errors.extend(source_errors)
     for message in errors:

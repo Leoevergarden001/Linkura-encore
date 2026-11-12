@@ -5,7 +5,7 @@
 There are no runtime hooks on iOS. Client behavior is changed by statically patching UnityFramework during packaging. Each entry in `tools/linkura_offline/ios_offline.py` contains:
 
 ```python
-(地址, "说明", "原始字节（小端 hex）", "新字节")
+(address, "description", "original bytes (little-endian hex)", "replacement bytes")
 ```
 
 `patch_code` checks the original bytes and stops on a mismatch. This limits patches to the verified 5.0.1 build and avoids corrupting another version.
@@ -22,7 +22,7 @@ alias re='python3 tools/re/il2cpp_re.py -f UnityFramework -s sym.json'
 ## Find a patch site: Chapter RANK example
 
 1. **Find the entry by name:** `re find 'ChapterPoint::OnPointerClick'`. Async logic lives in a compiler-generated state machine: `re find '<OnPointerClick>d__6::MoveNext'`.
-2. **Disassemble:** `re dis <地址> 0x600` labels call targets, such as `-> Tecotec.CommonApiCache::get_CurrentChapterRank`, followed by `cbz w0, <提示分支>`.
+2. **Disassemble:** `re dis <address> 0x600` labels call targets, such as `-> Tecotec.CommonApiCache::get_CurrentChapterRank`, followed by `cbz w0, <notice branch>`.
 3. **Check other callers:** `re callers 'CommonApiCache::get_CurrentChapterRank$'`. The top bar also uses this getter, so change the branch at the call site, not the getter.
 4. **Read original bytes:** `re bytes 0x2eb0fe8` returns `00070034` (`cbz w0, +0xe0`).
 5. **Write the new instruction:** unconditional `b +0xe0` is `0x14000000 | (0xe0 >> 2)` = `0x14000038`, little-endian `38000014`.
