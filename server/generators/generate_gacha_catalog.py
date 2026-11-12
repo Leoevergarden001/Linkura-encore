@@ -8,7 +8,9 @@ server's per-card draw probabilities.
 from __future__ import annotations
 
 import argparse
+import calendar
 import hashlib
+import json
 from pathlib import Path
 
 import yaml
@@ -18,8 +20,52 @@ from paths import MASTER_DIR, SERVER_DIR
 
 DEFAULT_MASTER = MASTER_DIR
 OUTPUT = SERVER_DIR / "src" / "backend" / "MuseumGachaCatalog.hpp"
+# Series that ended before the service closed and are opened offline by
+# patching their Master EndTime (tools/linkura_offline master-open-gacha).
+OPENED_SERIES_OUTPUT = SERVER_DIR / "data" / "museum_gacha_opened_series.json"
 POOL_IDS = (1055001, 1055002, 1055003)
-EXCHANGE_POOL_IDS = (1050505, 1050506, 1050509, 1050511, *POOL_IDS)
+# The seven series still open when the service closed (Master OrderId 1-11).
+CLOSING_POOL_IDS = (1050505, 1050506, 1050509, 1050511, *POOL_IDS)
+# Birthday series follow them: OrderId 101.. in StartTime order.
+BIRTHDAY_ORDER_BASE = 101
+# Master EndTime of the series open at the end of service (2035-12-31 14:59:59 UTC, .NET ticks).
+OPEN_END_TICKS = 642183227990000000
+
+
+def birthday_pools(master: Path) -> list[dict]:
+    pools = [row for row in load(master, "GachaSeries.yaml")
+             if row["GachaType"] == 1 and "BIRTHDAY" in row["GachaSeriesName"].upper()]
+    return sorted(pools, key=lambda row: (row["StartTime"], row["Id"]))
+
+
+def _unix(value) -> int:
+    return calendar.timegm(value.utctimetuple())
+
+
+def standard_card_release(master: Path, card_ids: list[int]) -> dict[int, int]:
+    """Release time (Unix seconds) of each standard card.
+
+    CardSeries.StartTime is a 2022-12-31 placeholder for every card, so a card
+    is dated by its first appearance as a Gacha pickup or a point-exchange
+    offer. A card that never appeared there joined with its generation (the
+    third id digit: 102..105期) and takes that generation's earliest date.
+    """
+    first: dict[int, object] = {}
+    for pool in load(master, "GachaSeries.yaml"):
+        for i in range(1, 7):
+            series_id = pool[f"PickUpCardSeriesId_{i}"]
+            if series_id:
+                first[series_id] = min(first.get(series_id, pool["StartTime"]), pool["StartTime"])
+    for row in load(master, "ExchangePointRate.yaml"):
+        if row["ExchangeItemType"] == 2:
+            series_id = row["ExchangeItemId"] // 10
+            first[series_id] = min(first.get(series_id, row["StartTime"]), row["StartTime"])
+    dated = {card: first[card // 10] for card in card_ids if card // 10 in first}
+    by_generation: dict[str, object] = {}
+    for card, start in dated.items():
+        generation = str(card)[2]
+        by_generation[generation] = min(by_generation.get(generation, start), start)
+    return {card: _unix(dated.get(card) or by_generation[str(card)[2]]) for card in card_ids}
 
 
 def load(master: Path, name: str) -> list[dict]:
@@ -53,6 +99,24 @@ def generate(master: Path) -> str:
     if [len(by_rarity[r]) for r in (3, 4, 5)] != [46, 42, 73]:
         raise ValueError("unexpected R2606000 standard-card counts")
 
+    # Birthday pools: a series' standard candidates are the standard cards
+    # released by its start; the featured card is its BR pickup (whose first
+    # CardDatas record has EvolveTimes 1, so its id ends in 1, not 0).
+    cards_by_series: dict[int, list[dict]] = {}
+    for row in load(master, "CardDatas.yaml"):
+        cards_by_series.setdefault(row["CardSeriesId"], []).append(row)
+    card_start = standard_card_release(master, [c for r in (3, 4, 5) for c in by_rarity[r]])
+    birthdays = []
+    for order, pool in enumerate(birthday_pools(master), start=BIRTHDAY_ORDER_BASE):
+        pickups = [pool[f"PickUpCardSeriesId_{i}"] for i in range(1, 7) if pool[f"PickUpCardSeriesId_{i}"]]
+        if len(pickups) != 1:
+            raise ValueError(f"birthday series {pool['Id']} has {len(pickups)} pickups")
+        featured = min(cards_by_series[pickups[0]], key=lambda row: row["EvolveTimes"])
+        if featured["Id"] not in coordinates or featured["Id"] not in movies:
+            raise ValueError(f"birthday card {featured['Id']} lacks Gacha animation metadata")
+        birthdays.append({"id": pool["Id"], "exchange_point_id": pool["GachaExchangePointId"], "order_id": order,
+                          "start": _unix(pool["StartTime"]), "featured": featured["Id"]})
+
     digest = hashlib.sha256()
     for name in ("CardDatas.yaml", "CardSeries.yaml", "GachaSeries.yaml",
                  "CardCoordinates.yaml", "CardGetMovieSettings.yaml",
@@ -70,14 +134,32 @@ def generate(master: Path) -> str:
             lines.append("    " + ", ".join(map(str, ids[offset:offset + 8])) + ",")
         lines.append("}};")
         lines.append("")
+    lines.append("// CardSeries.StartTime (Unix seconds) of each standard card above.")
+    lines.append("struct MuseumCardStart { int cardId; long long start; };")
+    starts = sorted(card_start.items())
+    lines.append(f"inline constexpr std::array<MuseumCardStart, {len(starts)}> kMuseumStandardCardStart{{{{")
+    for offset in range(0, len(starts), 4):
+        lines.append("    " + " ".join(f"{{{c}, {t}}}," for c, t in starts[offset:offset + 4]))
+    lines.append("}};")
+    lines.append("")
+    lines.extend([
+        "// Birthday series (GachaType 1), after the seven closing series in this order.",
+        "struct MuseumBirthdayPool { int id; int exchangePointId; long long start; int featuredCard; };",
+        f"inline constexpr std::array<MuseumBirthdayPool, {len(birthdays)}> kMuseumBirthdayPools{{{{",
+    ])
+    for pool in birthdays:
+        lines.append(f"    {{{pool['id']}, {pool['exchange_point_id']}, {pool['start']}, {pool['featured']}}},")
+    lines.extend(["}};", ""])
+    exchange_pools = set(CLOSING_POOL_IDS) | {pool["id"] for pool in birthdays}
     offers = [row for row in load(master, "ExchangePointRate.yaml")
-              if row["GachaSeriesId"] in EXCHANGE_POOL_IDS and row["ExchangeItemType"] == 2]
+              if row["GachaSeriesId"] in exchange_pools and row["ExchangeItemType"] == 2]
     cards_by_id = {row["Id"]: row for row in load(master, "CardDatas.yaml")}
     for row in offers:
         card = cards_by_id.get(row["ExchangeItemId"])
         if (not card or card["Id"] not in coordinates or
                 (card["Rarity"] == 5 and (card["Id"] not in movies or
-                                          card["CardSeriesId"] not in acquisition_movies))):
+                                          card["CardSeriesId"] not in acquisition_movies)) or
+                (card["Rarity"] == 9 and card["Id"] not in movies)):
             raise ValueError(f"exchange offer {row['Id']} has no verified card animation")
     lines.extend([
         "struct MuseumExchangeOffer {",
@@ -93,18 +175,28 @@ def generate(master: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def opened_series(master: Path) -> str:
+    """The Master rows master-open-gacha patches: EndTime and OrderId."""
+    return json.dumps({
+        "end_ticks": OPEN_END_TICKS,
+        "series": [{"id": pool["Id"], "order_id": order}
+                   for order, pool in enumerate(birthday_pools(master), start=BIRTHDAY_ORDER_BASE)],
+    }, indent=2) + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--master-dir", type=Path, default=DEFAULT_MASTER)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    expected = generate(args.master_dir)
-    if args.check:
-        if OUTPUT.read_text(encoding="utf-8") != expected:
-            raise SystemExit("Gacha catalog is stale; regenerate it")
-    else:
-        OUTPUT.write_text(expected, encoding="utf-8")
-        print(f"wrote {OUTPUT}")
+    outputs = {OUTPUT: generate(args.master_dir), OPENED_SERIES_OUTPUT: opened_series(args.master_dir)}
+    for path, expected in outputs.items():
+        if args.check:
+            if path.read_text(encoding="utf-8") != expected:
+                raise SystemExit(f"{path.name} is stale; regenerate it")
+        else:
+            path.write_text(expected, encoding="utf-8")
+            print(f"wrote {path}")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,9 @@ history. Home and Gacha response headers report the wallet from that database.
 
 Seven preserved series are enabled: 1055003 (BRIGHT SEEDS), 1055002
 (FILM B.G.P.), 1055001 (PERENNIAL), and four graduation series (1050511,
-1050509, 1050506, 1050505). The original server probability
+1050509, 1050506, 1050505). These were still open when the service closed
+(Master EndTime 2035-12-31). The 26 BIRTHDAY LIMITED series (GachaType 1)
+follow them, in start order; see "Opening ended series" below. The original server probability
 table has not been recovered. The offline candidate catalog now includes
 every non-placeholder, non-limited R/SR/UR base card present before all three
 series started in the preserved R2606000 Master snapshot: 46 R, 42 SR and
@@ -97,3 +99,32 @@ failure. Opaque `D/` names cannot establish which specific cards have art,
 movie, or voice available. Recover the client's catalog mapping first, then
 verify those three asset classes and expand only with observed successful
 playback.
+
+## Opening ended series
+
+The client lists a series only while the server clock lies between its
+Master StartTime and EndTime (`GachaSceneController.SetGachaInfoList` compares
+both with `ServerTime.Now`), so the server alone cannot show a series that
+ended before the shutdown. `generate_gacha_catalog.py` writes
+`server/data/museum_gacha_opened_series.json`, and
+
+```sh
+python3 -m tools.linkura_offline master-open-gacha --m-dir <cache>/M \
+  --storage-key <cache>/storage-key.json --output <new dir>
+```
+
+copies the master database with those series' EndTime (and their
+ExchangePointRate offers') set to the closing series' 2035-12-31 and their
+OrderId set to 101.. so they follow the seven. The copy keeps its name and
+storage key and has the same size, so replace the device's `M/<name>` with it
+explicitly (a size comparison treats it as already present).
+
+A birthday series offers its BR pickup (the first CardDatas record has
+EvolveTimes 1, so its id ends in 1; the Museum record is the series' highest
+record, base + 3) and the standard cards released by its start. CardSeries
+StartTime is a 2022-12-31 placeholder for every card, so a standard card is
+dated by its first appearance as a Gacha pickup or a point-exchange offer;
+cards that never appeared there take their generation's earliest date
+(102/103期 at launch, 104期 2024-04-13, 105期 2025-04-10). The BR card shares
+the UR tier's featured half; the odds remain the provisional Museum split.
+

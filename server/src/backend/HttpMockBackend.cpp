@@ -33,7 +33,8 @@ namespace LinkuraLocal::HttpMock {
             int id;
             int exchangePointId;
             std::vector<int> featuredCards;
-            std::vector<int> cards;
+            std::vector<int> cards;           // every candidate (the series' card_list)
+            std::vector<int> rCards, srCards, urCards;  // standard candidates per rarity tier
         };
         // 10215210 occurred in a draw that reproduced a CardAnimationPlayer
         // null-reference on the offline client. The exact missing dependency
@@ -62,24 +63,47 @@ namespace LinkuraLocal::HttpMock {
         // that character instead, so every offline result has a recoverable
         // animation path.  This is a local preservation catalog, not a claim
         // about the retired server's original odds table.
+        //
+        // The seven series still open at the end of service come first; the
+        // birthday series (opened offline through their Master EndTime) follow
+        // in start order. A birthday series offers the standard cards released
+        // by its start plus its BR card.
         static const auto kMuseumGachaSeries = [] {
-            std::array<MuseumGachaSeries, 7> series{{
-                {1055003, 105503, {19415010, 19425010, 19435010, 19315020, 19525010}, {}},
-                {1055002, 105502, {19215020, 19235010, 19425020, 19515010}, {}},
-                {1055001, 105501, {19215010, 19225010, 19235010, 19315010, 19335010}, {}},
-                {1050511, 10505, {10305010}, {}},
-                {1050509, 10505, {10315390, 10325370, 10335360}, {}},
-                {1050506, 10505, {10215170, 10225170, 10225180, 10235140, 10115010}, {}},
-                {1050505, 10505, {10215270, 10225270, 10235240, 10205010}, {}},
-            }};
+            std::vector<MuseumGachaSeries> series{
+                {1055003, 105503, {19415010, 19425010, 19435010, 19315020, 19525010}, {}, {}, {}, {}},
+                {1055002, 105502, {19215020, 19235010, 19425020, 19515010}, {}, {}, {}, {}},
+                {1055001, 105501, {19215010, 19225010, 19235010, 19315010, 19335010}, {}, {}, {}, {}},
+                {1050511, 10505, {10305010}, {}, {}, {}, {}},
+                {1050509, 10505, {10315390, 10325370, 10335360}, {}, {}, {}, {}},
+                {1050506, 10505, {10215170, 10225170, 10225180, 10235140, 10115010}, {}, {}, {}, {}},
+                {1050505, 10505, {10215270, 10225270, 10235240, 10205010}, {}, {}, {}, {}},
+            };
             for (auto& pool : series) {
-                pool.cards.reserve(kMuseumStandardRCards.size() + kMuseumStandardSRCards.size() +
-                                   kMuseumStandardURCards.size() + pool.featuredCards.size());
-                pool.cards.insert(pool.cards.end(), kMuseumStandardRCards.begin(), kMuseumStandardRCards.end());
-                pool.cards.insert(pool.cards.end(), kMuseumStandardSRCards.begin(), kMuseumStandardSRCards.end());
-                for (const int cardId : kMuseumStandardURCards) {
-                    if (!IsMuseumAnimationQuarantined(cardId)) pool.cards.push_back(cardId);
+                pool.rCards.assign(kMuseumStandardRCards.begin(), kMuseumStandardRCards.end());
+                pool.srCards.assign(kMuseumStandardSRCards.begin(), kMuseumStandardSRCards.end());
+                pool.urCards.assign(kMuseumStandardURCards.begin(), kMuseumStandardURCards.end());
+            }
+            const auto releasedBy = [](int cardId, long long start) {
+                for (const auto& entry : kMuseumStandardCardStart) {
+                    if (entry.cardId == cardId) return entry.start <= start;
                 }
+                return false;
+            };
+            for (const auto& birthday : kMuseumBirthdayPools) {
+                MuseumGachaSeries pool{birthday.id, birthday.exchangePointId, {birthday.featuredCard}, {}, {}, {}, {}};
+                for (const int cardId : kMuseumStandardRCards) if (releasedBy(cardId, birthday.start)) pool.rCards.push_back(cardId);
+                for (const int cardId : kMuseumStandardSRCards) if (releasedBy(cardId, birthday.start)) pool.srCards.push_back(cardId);
+                for (const int cardId : kMuseumStandardURCards) if (releasedBy(cardId, birthday.start)) pool.urCards.push_back(cardId);
+                series.push_back(std::move(pool));
+            }
+            for (auto& pool : series) {
+                pool.urCards.erase(std::remove_if(pool.urCards.begin(), pool.urCards.end(), IsMuseumAnimationQuarantined),
+                                   pool.urCards.end());
+                pool.cards.reserve(pool.rCards.size() + pool.srCards.size() + pool.urCards.size() +
+                                   pool.featuredCards.size());
+                pool.cards.insert(pool.cards.end(), pool.rCards.begin(), pool.rCards.end());
+                pool.cards.insert(pool.cards.end(), pool.srCards.begin(), pool.srCards.end());
+                pool.cards.insert(pool.cards.end(), pool.urCards.begin(), pool.urCards.end());
                 pool.featuredCards.erase(
                     std::remove_if(pool.featuredCards.begin(), pool.featuredCards.end(),
                                    IsMuseumAnimationQuarantined),
@@ -98,14 +122,12 @@ namespace LinkuraLocal::HttpMock {
                 return ids[index(rng)];
             };
             const int roll = tier(rng);
-            if (roll < 80) return pick(kMuseumStandardRCards);
-            if (roll < 97) return pick(kMuseumStandardSRCards);
+            if (roll < 80) return pick(series.rCards);
+            if (roll < 97) return pick(series.srCards);
             std::bernoulli_distribution featured(0.5);
             if (featured(rng) && !series.featuredCards.empty()) return pick(series.featuredCards);
-            // Preserve the original approximate UR odds while substituting a
-            // known-good preserved card for a quarantined animation record.
-            const int candidate = pick(kMuseumStandardURCards);
-            return IsMuseumAnimationQuarantined(candidate) ? 10315140 : candidate;
+            // Quarantined UR cards are already left out of the tier.
+            return pick(series.urCards);
         }
         static const MuseumGachaSeries* FindMuseumGachaSeries(int id) {
             for (const auto& series : kMuseumGachaSeries) if (series.id == id) return &series;
@@ -883,7 +905,8 @@ namespace LinkuraLocal::HttpMock {
         // Clone the verified DTO shape from the matching developed row once;
         // only player-owned state is later written by the purchase transaction.
         constexpr const char* sourceSql =
-            "SELECT response_json FROM card_detail WHERE card_datas_id=? LIMIT 1;";
+            "SELECT response_json, card_datas_id FROM card_detail WHERE card_datas_id BETWEEN ? AND ? "
+            "ORDER BY card_datas_id DESC LIMIT 1;";
         constexpr const char* insertSql =
             "INSERT OR IGNORE INTO card_detail ("
             "d_card_datas_id,response_json,card_datas_id,card_name,style_level,max_style_level,"
@@ -908,17 +931,20 @@ namespace LinkuraLocal::HttpMock {
 
         for (const auto& series : kMuseumGachaSeries) {
             for (const int cardId : series.cards) {
-                const int sourceCardId = cardId + 4;
+                // The Museum owns each card fully evolved: the highest CardDatas
+                // record of its series (base + 4 for R/SR/UR; base + 3 for a BR
+                // card, whose first record already has EvolveTimes 1).
                 sqlite3_reset(source);
                 sqlite3_clear_bindings(source);
-                sqlite3_bind_int(source, 1, sourceCardId);
-                if (sqlite3_step(source) != SQLITE_ROW) {
-                    Log::ErrorFmt("[HttpMockBackend] gacha base card %d lacks Museum source %d",
-                                  cardId, sourceCardId);
+                sqlite3_bind_int(source, 1, cardId);
+                sqlite3_bind_int(source, 2, cardId / 10 * 10 + 9);
+                if (sqlite3_step(source) != SQLITE_ROW || sqlite3_column_int(source, 1) == cardId) {
+                    Log::ErrorFmt("[HttpMockBackend] gacha base card %d lacks a Museum source", cardId);
                     sqlite3_finalize(source);
                     sqlite3_finalize(insert);
                     return false;
                 }
+                const int sourceCardId = sqlite3_column_int(source, 1);
                 const auto* raw = reinterpret_cast<const char*>(sqlite3_column_text(source, 0));
                 auto dto = nlohmann::json::parse(raw ? raw : "{}", nullptr, false);
                 if (!dto.is_object() || !dto.contains("user_card_data") ||
@@ -1241,14 +1267,17 @@ namespace LinkuraLocal::HttpMock {
             ExecSql(db, "ROLLBACK;");
             return std::nullopt;
         }
-        if (!ExecSql(db,
-                "INSERT OR IGNORE INTO museum_gacha_state "
-                "(series_id, free_jewels, paid_jewels, exchange_point, draw_count) "
-                "VALUES (1055001, 0, 0, 0, 0), (1055002, 0, 0, 0, 0), "
-                "(1050505, 0, 0, 0, 0), (1050506, 0, 0, 0, 0), "
-                "(1050509, 0, 0, 0, 0), (1050511, 0, 0, 0, 0);")) {
-            ExecSql(db, "ROLLBACK;");
-            return std::nullopt;
+        {
+            std::string rows;
+            for (const auto& config : kMuseumGachaSeries) {
+                if (config.id == 1055003) continue;  // the wallet row, inserted above
+                rows += (rows.empty() ? "" : ", ") + ("(" + std::to_string(config.id) + ", 0, 0, 0, 0)");
+            }
+            if (!ExecSql(db, ("INSERT OR IGNORE INTO museum_gacha_state "
+                              "(series_id, free_jewels, paid_jewels, exchange_point, draw_count) VALUES " + rows + ";").c_str())) {
+                ExecSql(db, "ROLLBACK;");
+                return std::nullopt;
+            }
         }
         if (!ExecSql(db, "COMMIT;")) {
             ExecSql(db, "ROLLBACK;");

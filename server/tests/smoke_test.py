@@ -184,6 +184,39 @@ def main() -> int:
             status, _, body = post(conn, "/v1/gacha/get_series_list", {})
             first = json.loads(body)["gacha_series_list"][0]
             check("daily paid draw used up", not first["is_paid_enable"] and first["remaining_limited_paid_gacha_count"] == 0)
+            # Birthday series follow the seven series open at the end of service, in start order. A
+            # birthday series offers the standard cards released by its start plus its BR card; the BR
+            # card (first record ends in 1) resolves to its own Museum record and can be exchanged.
+            opened = json.loads((Path(__file__).resolve().parents[1] / "data" /
+                                 "museum_gacha_opened_series.json").read_text(encoding="utf-8"))
+            _, _, body = post(conn, "/v1/gacha/get_series_list", {})
+            series_list = json.loads(body)["gacha_series_list"]
+            ids = [s["gacha_series_id"] for s in series_list]
+            check("gacha lists the closing seven, then the birthday series",
+                  ids[:7] == [1055003, 1055002, 1055001, 1050511, 1050509, 1050506, 1050505] and
+                  ids[7:] == [s["id"] for s in opened["series"]], str(ids))
+            first_birthday = next(s for s in series_list if s["gacha_series_id"] == 1041031)
+            last_birthday = series_list[-1]
+            check("birthday pools grow with the release dates",
+                  10319011 in first_birthday["card_list"] and
+                  len(first_birthday["card_list"]) < len(last_birthday["card_list"]) <= 161, 
+                  f"{len(first_birthday['card_list'])} {len(last_birthday['card_list'])}")
+            drawn = set()
+            for _ in range(10):  # 100 draws: the 100 exchange points the BR card costs
+                status, _, body = post(conn, "/v1/gacha/set_purchase",
+                                       {"gacha_series_id": 1041031, "gacha_set_purchase_type": 2, "campaign_id": 0})
+                drawn |= {r["card_datas_id"] for r in json.loads(body).get("gacha_result_list", [])}
+            check("birthday draws stay in the pool", status == 200 and drawn and
+                  drawn <= set(first_birthday["card_list"]), str(sorted(drawn - set(first_birthday["card_list"]))))
+            status, _, body = post(conn, "/v1/gacha/set_guarantee_point_exchange",
+                                   {"gacha_series_id": 1041031, "exchange_point_id": 1041031,
+                                    "exchange_point_rate_id": 1001156, "exchange_num": 1})
+            check("birthday BR card can be exchanged", status == 200 and
+                  json.loads(body)["receipt_items"][0]["get_id"] == 10319011, body[:200].decode())
+            with sqlite3.connect(db_path) as db:
+                br = db.execute("SELECT card_datas_id FROM card_detail WHERE d_card_datas_id = "
+                                "'00000000-0000-0000-0000-000010319011'").fetchone()
+            check("BR base card has a Museum record", br == (10319011,), str(br))
             status, _, body = post(conn, "/v1/follow/search_id", {"player_id": "ABCDEFGHJ"})
             check("friend id search says not found", status == 200 and json.loads(body) == {"result_code": 1})
             # SHOW clear status: no fail state (the client shows LIVE CLEAR at MENTAL 0); AllPerfect when every note is Perfect+.

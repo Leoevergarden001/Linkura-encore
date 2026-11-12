@@ -88,6 +88,14 @@ def _android_storage_key(args: argparse.Namespace) -> int:
     return 0
 
 
+def _master_open_gacha(args: argparse.Namespace) -> int:
+    from .master_patch import open_gacha_series
+    result = open_gacha_series(args.m_dir, args.storage_key, args.output, sqlcipher=args.sqlcipher)
+    print(f"OK  {result.series} Gacha series opened ({result.exchange_offers} exchange offers): {result.database}")
+    print("    replace the device's M/ master database with it (same name, same storage key)")
+    return 0
+
+
 def _cache_rekey(args: argparse.Namespace) -> int:
     result = rekey_cache(args.m_dir, args.storage_key, args.output, sqlcipher=args.sqlcipher)
     for domain, database in result.databases.items():
@@ -173,6 +181,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", type=Path, required=True, help="new directory: M/<catalog> + storage-key.json")
     p.add_argument("--sqlcipher", default="sqlcipher", help="SQLCipher 4 command line tool")
     p.set_defaults(func=_cache_rekey)
+
+    p = sub.add_parser("master-open-gacha", help="copy the master database with ended Gacha series opened again")
+    p.add_argument("--m-dir", type=Path, required=True, help="the cache's M/ directory")
+    p.add_argument("--storage-key", type=Path, required=True, help="storage-key.json that pairs with it")
+    p.add_argument("--output", type=Path, required=True, help="directory for M/<master database>")
+    p.add_argument("--sqlcipher", default="sqlcipher", help="SQLCipher 4 command line tool")
+    p.set_defaults(func=_master_open_gacha)
 
     p = sub.add_parser("android-resource-pack-build", help="assemble a private resource pack (D/, M/, storage key)")
     p.add_argument("--snapshot", type=Path, required=True, help="tar of the game's external files dir")
