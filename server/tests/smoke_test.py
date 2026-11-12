@@ -237,6 +237,9 @@ def main() -> int:
             _, _, body = post(conn, "/v1/in_quest_live/set_retire", {"quest_live_id": live_id})
             check("quest live retire pays back once", json.loads(body)["return_resource"] == 0 and
                   stamina_now() == 999, body[:200].decode())
+            status, _, body = post(conn, "/v1/circle/get_detail", {"search_guild_key": ""})
+            check("circle detail answers no circle", status == 200 and json.loads(body)["circle_info"] is None,
+                  body[:200].decode())
             post(conn, "/v1/user/login", {"player_id": "ABCDEFGHJ", "device_specific_id": "", "version": 1})
             status, _, body = post(conn, "/v1/profile/get_info", {})
             check("login player id not echoed into profile",

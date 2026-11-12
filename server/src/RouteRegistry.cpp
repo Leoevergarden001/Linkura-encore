@@ -775,6 +775,10 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/item_exchange/set_purchase", HandleItemExchangeSetPurchase);
             RegisterStaticJson(routes, "/v1/circle/get_circle_top_info",
                                R"({"circle_info":null,"circle_member_list":[],"circle_ranking_info":null,"item_request_result":null,"emoji_list":[],"membership_list":[]})");
+            // The profile's サークル row asks for the player's own circle (search_guild_key "");
+            // there is none offline. Unrouted, the 404 froze the client.
+            RegisterStaticJson(routes, "/v1/circle/get_detail",
+                               R"({"circle_info":null,"circle_member_list":[],"circle_ranking_info":null})");
             // ID search: there are no other players offline. ResultCode enum
             // (5.0.1 metadata): Success=0, NotExists=1.
             RegisterStaticJson(routes, "/v1/follow/search_id", R"({"result_code":1})");
