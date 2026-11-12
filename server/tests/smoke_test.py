@@ -223,6 +223,20 @@ def main() -> int:
             fan = json.loads(body)
             check("fan level info", status == 200 and len(fan["fan_level_info_list"]) == len(profile["fan_level_list"]) > 0,
                   body[:200].decode())
+            # 103 Winter, first map: the square next to the start also lists the square after it,
+            # so it must open when either neighbour is cleared (not only when both are).
+            def grade_status(body: bytes) -> dict:
+                return {s["grade_quest_square_id"]: s["status"] for s in json.loads(body)["quest_square_list"]}
+            status, _, body = post(conn, "/v1/out_quest_live/grade/set_quest_start", {"grade_quest_series_id": 10341})
+            squares = grade_status(body)
+            check("grade quest start opens the first square", status == 200 and squares.get(31034101) == 1,
+                  body[:300].decode())
+            post(conn, "/v1/out_quest_live/grade/set_quest_action", {"grade_quest_square_id": 31034101})
+            status, _, body = post(conn, "/v1/out_quest_live/grade/set_quest_start", {"grade_quest_series_id": 10341})
+            squares = grade_status(body)
+            check("grade quest action opens the next squares",
+                  squares.get(31034101) == 2 and squares.get(31034102) == 1 and squares.get(61034101) == 1,
+                  body[:300].decode())
             conn.close()
         finally:
             log += stop(proc)

@@ -340,6 +340,24 @@ namespace LinkuraLocal::HttpMock {
             std::vector<GradeSquareState> squares;
             std::vector<int> activeAddSkillIds;
             nlohmann::json rewardsJson;
+
+            // open_square_ids lists a square's neighbours on the map (GradeQuestSquareDatas
+            // OpenGradeQuestSquareIds); clearing any one of them opens the square. Paths run both
+            // ways, so a square usually lists squares further along the path too.
+            void OpenReachableSquares() {
+                for (auto& sq : squares) {
+                    if (sq.status != 0) continue;
+                    for (int neighbour : sq.openSquareIds) {
+                        const bool cleared = std::any_of(squares.begin(), squares.end(), [&](const GradeSquareState& other) {
+                            return other.squareId == neighbour && other.status == 2;
+                        });
+                        if (cleared) {
+                            sq.status = 1;
+                            break;
+                        }
+                    }
+                }
+            }
         };
         GradeQuestState gradeQuest;
 
@@ -6179,23 +6197,7 @@ namespace LinkuraLocal::HttpMock {
                 gradeQuest.squares.push_back(ss);
             }
 
-            for (auto& sq : gradeQuest.squares) {
-                if (sq.status != 0 || sq.openSquareIds.empty()) continue;
-                bool allDepsMet = true;
-                for (int depId : sq.openSquareIds) {
-                    bool found = false;
-                    for (const auto& other : gradeQuest.squares) {
-                        if (other.squareId == depId && other.status == 2) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) { allDepsMet = false; break; }
-                }
-                if (allDepsMet) {
-                    sq.status = 1;
-                }
-            }
+            gradeQuest.OpenReachableSquares();
         }
 
         nlohmann::json questSquareList = nlohmann::json::array();
@@ -6298,23 +6300,7 @@ namespace LinkuraLocal::HttpMock {
 
         gradeQuest.actionPoint = std::max(0, gradeQuest.actionPoint - actionCost);
 
-        for (auto& sq : gradeQuest.squares) {
-            if (sq.status != 0) continue;
-            bool allDepsMet = true;
-            for (int depId : sq.openSquareIds) {
-                bool found = false;
-                for (const auto& other : gradeQuest.squares) {
-                    if (other.squareId == depId && other.status == 2) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) { allDepsMet = false; break; }
-            }
-            if (allDepsMet && !sq.openSquareIds.empty()) {
-                sq.status = 1;
-            }
-        }
+        gradeQuest.OpenReachableSquares();
 
         nlohmann::json result;
         result["action_point"] = gradeQuest.actionPoint;
@@ -6476,23 +6462,7 @@ namespace LinkuraLocal::HttpMock {
         }
 
         if (questResult) {
-            for (auto& sq : gradeQuest.squares) {
-                if (sq.status != 0) continue;
-                bool allDepsMet = true;
-                for (int depId : sq.openSquareIds) {
-                    bool found = false;
-                    for (const auto& other : gradeQuest.squares) {
-                        if (other.squareId == depId && other.status == 2) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) { allDepsMet = false; break; }
-                }
-                if (allDepsMet && !sq.openSquareIds.empty()) {
-                    sq.status = 1;
-                }
-            }
+            gradeQuest.OpenReachableSquares();
         }
 
         bool allCleared = true;
