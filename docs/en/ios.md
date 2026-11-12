@@ -43,6 +43,7 @@ The script selects an unexpired profile that includes the device and an unambigu
 - Assets are about 21 GB; leave at least 22 GB free. Keep the device unlocked and awake during transfer. A rerun skips files already transferred.
 - Use `--dry-run` to inspect the plan or `--verify-only` to verify without copying.
 - Player progress is not transferred by default. Use `--include-progress` to transfer it; if the destination already has a database, first pull it back and then use `--overwrite-progress`.
+- The first time a device installs an app from this signing identity, trust it on the device under Settings → General → VPN & Device Management (Developer App); otherwise the app fails to launch. You can trust it right after installation, while assets transfer. If the launch has already failed, trust it and rerun the same command.
 - Free signing expires after seven days. Rerun the same command to reinstall over the existing app and retain its data.
 
 An iOS data directory can be converted from an Android cache; see [Prepare assets](resources.md#ios-from-android).

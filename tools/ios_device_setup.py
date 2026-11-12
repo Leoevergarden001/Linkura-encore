@@ -193,6 +193,25 @@ def terminate_app(dev: Device, app: dict | None) -> None:
             time.sleep(2)
 
 
+# devicectl's launch error when iOS has not trusted the signing developer yet
+# (first app from this identity on the device).
+UNTRUSTED_MARKERS = ("explicitly trusted", "FBSOpenApplicationErrorDomain error 3")
+TRUST_STEPS = "设置 → 通用 → VPN 与设备管理，在“开发者 App”下点签名身份并信任"
+UNTRUSTED_DEVELOPER = ("{name} 还没有信任这个开发者，客户端无法启动：在设备上打开 " + TRUST_STEPS +
+                       "。然后重跑同一条命令即可（覆盖安装保留数据，已推送的文件会跳过），"
+                       "或者把 --unsigned/--ipa 换成 --skip-install 只启动和校验。")
+
+
+def launch_app(dev: "Device", bundle: str) -> None:
+    try:
+        devicectl(["device", "process", "launch", "--device", dev.udid, "--terminate-existing", bundle],
+                  want_json=False)
+    except SetupError as e:
+        if any(m in str(e) for m in UNTRUSTED_MARKERS):
+            raise SetupError(UNTRUSTED_DEVELOPER.format(name=dev.name)) from None
+        raise
+
+
 BACKUP_GONE = ("读不到备份文件 {src}：备份盘可能断开了。重新插好（最好直接接 Mac、换根线或换个口），"
                "再运行同一条命令，已经推送的文件会跳过")
 
@@ -526,8 +545,12 @@ def run(args) -> int:
             terminate_app(dev, app)
         if ipa:
             status.phase = "安装客户端"
+            first_install = app is None
             devicectl(["device", "install", "app", "--device", dev.udid, str(ipa)], timeout=900)
             log("  已安装（覆盖安装会保留设备上的数据）")
+            if first_install:
+                log("  首次安装：如果这台设备还没信任过这个签名身份，客户端会打不开。"
+                    "趁推送期间在设备上打开 " + TRUST_STEPS + "。")
             app = installed_app(dev, bundle)
         if not app:
             raise SetupError("设备上没有该客户端，无法推送数据（去掉 --skip-install 或指定 IPA）")
@@ -578,8 +601,7 @@ def run(args) -> int:
         if args.launch:
             status.phase = "启动"
             before = remote.get("Documents/LinkuraOffline/server.log", 0)
-            devicectl(["device", "process", "launch", "--device", dev.udid, "--terminate-existing", bundle],
-                      want_json=False)
+            launch_app(dev, bundle)
             ok = wait_for_server(dev, bundle, before, work)
             status.note("  离线服务已启动（server.log: listening）" if ok else
                         "  90 秒内没看到离线服务启动记录：请在设备上看是否停在标题页，并检查 server.log")

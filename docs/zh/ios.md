@@ -41,6 +41,7 @@ python3 tools/ios_device_setup.py \
 - 资源约 21 GB：设备至少留出 22 GB；推送期间保持解锁、亮屏；中断后重跑会跳过已推送的文件。
 - 只想看计划用 `--dry-run`，只校验用 `--verify-only`。
 - 玩家进度库默认不推；`--include-progress` 推送，设备上已有时需 `--overwrite-progress`（先把旧库拉回本地）。
+- 设备第一次安装这个签名身份的 App 时，要在设备上打开 设置 → 通用 → VPN 与设备管理，在“开发者 App”下信任它，否则客户端启动失败。安装后、推送期间就可以去信任；如果已经失败，信任后重跑同一条命令即可。
 - 免费签名 7 天过期，过期后重跑同一条命令（覆盖安装保留数据）。
 
 iOS 数据目录可以由 Android 缓存转换得到，见 [准备资源](resources.md#ios-from-android)。

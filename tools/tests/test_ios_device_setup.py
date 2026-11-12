@@ -116,5 +116,31 @@ class ProfileTest(unittest.TestCase):
         self.assertFalse(setup.profile_covers(expired, "org.example", "UDID1"))
 
 
+class LaunchTest(unittest.TestCase):
+    def _launch(self, error):
+        def fake(*a, **k):
+            raise setup.SetupError(error)
+        orig = setup.devicectl
+        setup.devicectl = fake
+        try:
+            dev = setup.Device("U", "iPhone", "m", "27", True, "enabled", None)
+            with self.assertRaises(setup.SetupError) as cm:
+                setup.launch_app(dev, "b")
+        finally:
+            setup.devicectl = orig
+        return str(cm.exception)
+
+    def test_untrusted_developer_explains_the_settings_step(self):
+        msg = self._launch("devicectl device process launch 失败: Unable to launch b because it has an "
+                           "invalid code signature, inadequate entitlements or its profile has not been "
+                           "explicitly trusted by the user. (FBSOpenApplicationErrorDomain error 3 (0x03))")
+        self.assertIn("VPN 与设备管理", msg)
+        self.assertIn("--skip-install", msg)
+
+    def test_other_launch_errors_pass_through(self):
+        self.assertEqual(self._launch("devicectl device process launch 失败: busy"),
+                         "devicectl device process launch 失败: busy")
+
+
 if __name__ == "__main__":
     unittest.main()
