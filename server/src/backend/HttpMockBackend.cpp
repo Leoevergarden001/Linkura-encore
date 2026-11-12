@@ -397,7 +397,6 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> DreamGetResultLocked(std::string_view payloadJson);
 
         std::optional<MockStoredResponse> GradeGetQuestListLocked(std::string_view payloadJson);
-        bool GradeEarlierSeasonsClearedLocked(int generation, int season);
         std::optional<MockStoredResponse> GradeSetQuestStartLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GradeSetQuestActionLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GradeSetQuestAddSkillLocked(std::string_view payloadJson);
@@ -729,7 +728,7 @@ namespace LinkuraLocal::HttpMock {
             std::filesystem::remove(resetCmdPath, ec);
         }
 
-        if ((hasPendingReset || !TableHasAnyRows(db, "archive_detail") || !TableHasAnyRows(db, "card_detail") || !TableHasAnyRows(db, "character_info") || !TableHasAnyRows(db, "item") || !TableHasAnyRows(db, "quest_stage") || !TableHasAnyRows(db, "daily_quest_stage") || !TableHasAnyRows(db, "dream_quest_stage") || !TableHasAnyRows(db, "grade_quest_stage") || !TableHasAnyRows(db, "grade_add_skill") || !TableHasAnyRows(db, "grand_prix_stage") || !TableHasAnyRows(db, "learning_stage") || !TableHasAnyRows(db, "music_mastery") || !TableHasAnyRows(db, "music"))
+        if ((hasPendingReset || !TableHasAnyRows(db, "archive_detail") || !TableHasAnyRows(db, "card_detail") || !TableHasAnyRows(db, "character_info") || !TableHasAnyRows(db, "item") || !TableHasAnyRows(db, "quest_stage") || !TableHasAnyRows(db, "daily_quest_stage") || !TableHasAnyRows(db, "dream_quest_stage") || !TableHasAnyRows(db, "grade_quest_stage") || !TableHasAnyRows(db, "grade_add_skill") || !TableHasAnyRows(db, "grade_quest_release") || !TableHasAnyRows(db, "grand_prix_stage") || !TableHasAnyRows(db, "learning_stage") || !TableHasAnyRows(db, "music_mastery") || !TableHasAnyRows(db, "music"))
             && !ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SeedScripts, "seed")) {
             persistentStorageAvailable = false;
             return false;
@@ -6023,27 +6022,6 @@ namespace LinkuraLocal::HttpMock {
         return response;
     }
 
-    bool HttpMockBackend::Impl::GradeEarlierSeasonsClearedLocked(int generation, int season) {
-        sqlite3_stmt* stmt = nullptr;
-        constexpr const char* sql =
-            "SELECT COUNT(*), COALESCE(SUM(COALESCE(p.clear_status, 0) > 0), 0) FROM grade_quest_series sr "
-            "JOIN grade_quest_season s ON s.season_id = sr.season_id "
-            "LEFT JOIN grade_quest_progress p ON p.series_id = sr.series_id "
-            "WHERE s.generation = ? AND s.season < ?;";
-        int total = 0;
-        int cleared = 0;
-        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
-            sqlite3_bind_int(stmt, 1, generation);
-            sqlite3_bind_int(stmt, 2, season);
-            if (sqlite3_step(stmt) == SQLITE_ROW) {
-                total = sqlite3_column_int(stmt, 0);
-                cleared = sqlite3_column_int(stmt, 1);
-            }
-            sqlite3_finalize(stmt);
-        }
-        return total > 0 && cleared == total;
-    }
-
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GradeGetQuestListLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) {
             return std::nullopt;
@@ -6064,6 +6042,23 @@ namespace LinkuraLocal::HttpMock {
             }
         }
 
+        // GradeQuestSeriesReleaseCond: the series that must be cleared first (0 = none).
+        std::unordered_map<int, int> requiredSeries;
+        {
+            sqlite3_stmt* stmt = nullptr;
+            constexpr const char* sql = "SELECT series_id, required_series_id FROM grade_quest_release;";
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                while (sqlite3_step(stmt) == SQLITE_ROW) {
+                    requiredSeries[sqlite3_column_int(stmt, 0)] = sqlite3_column_int(stmt, 1);
+                }
+                sqlite3_finalize(stmt);
+            }
+        }
+        const auto isCleared = [&](int seriesId) {
+            const auto it = progressMap.find(seriesId);
+            return it != progressMap.end() && it->second > 0;
+        };
+
         nlohmann::json questSeasonList = nlohmann::json::array();
         {
             sqlite3_stmt* stmt = nullptr;
@@ -6071,13 +6066,9 @@ namespace LinkuraLocal::HttpMock {
             if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
                 while (sqlite3_step(stmt) == SQLITE_ROW) {
                     const int seasonId = sqlite3_column_int(stmt, 0);
-                    const int generation = sqlite3_column_int(stmt, 1);
-                    const int season = sqlite3_column_int(stmt, 2);
 
                     nlohmann::json seriesList = nlohmann::json::array();
                     int clearNum = 0;
-                    bool prevCleared = false;
-                    bool isFirstSeries = true;
                     sqlite3_stmt* sStmt = nullptr;
                     constexpr const char* sSql =
                         "SELECT series_id, order_id, rewards_json FROM grade_quest_series "
@@ -6086,25 +6077,17 @@ namespace LinkuraLocal::HttpMock {
                         sqlite3_bind_int(sStmt, 1, seasonId);
                         while (sqlite3_step(sStmt) == SQLITE_ROW) {
                             const int seriesId = sqlite3_column_int(sStmt, 0);
-                            const int orderId = sqlite3_column_int(sStmt, 1);
                             const auto* rwJson = reinterpret_cast<const char*>(sqlite3_column_text(sStmt, 2));
 
                             auto pit = progressMap.find(seriesId);
                             const int clearStatus = (pit != progressMap.end()) ? pit->second : 0;
                             const bool cleared = (clearStatus > 0);
 
-                            if (isFirstSeries) {
-                                // GRADUATION (season 5) holds a single series numbered 6. The
-                                // original unlock rule was not archived; open it once every
-                                // series of the same generation's earlier seasons is cleared.
-                                prevCleared = (orderId == 1) || GradeEarlierSeasonsClearedLocked(generation, season);
-                                isFirstSeries = false;
-                            }
-
-                            const bool isLock = !prevCleared;
+                            const auto req = requiredSeries.find(seriesId);
+                            const bool isLock = req != requiredSeries.end() && req->second != 0 &&
+                                                !isCleared(req->second);
 
                             if (cleared) clearNum++;
-                            prevCleared = cleared;
 
                             nlohmann::json rewardList = nlohmann::json::array();
                             auto rp = nlohmann::json::parse(rwJson ? rwJson : "[]", nullptr, false);

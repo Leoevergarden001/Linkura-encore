@@ -57,6 +57,14 @@ def generate_schema_ddl() -> str:
         "",
         "CREATE INDEX IF NOT EXISTS idx_grade_add_skill_tier ON grade_add_skill(tier);",
         "",
+        "-- GradeQuestSeriesReleaseCond: a series opens once required_series_id is cleared",
+        "-- (0 = open from the start). GradeQuestSeasonReleaseCond repeats each season's",
+        "-- first-series condition, so a season is locked while its first series is.",
+        "CREATE TABLE IF NOT EXISTS grade_quest_release (",
+        "    series_id INTEGER NOT NULL PRIMARY KEY,",
+        "    required_series_id INTEGER NOT NULL DEFAULT 0",
+        ");",
+        "",
         "CREATE TABLE IF NOT EXISTS grade_quest_progress (",
         "    series_id INTEGER NOT NULL PRIMARY KEY,",
         "    clear_status INTEGER NOT NULL DEFAULT 0,",
@@ -82,6 +90,35 @@ TIER_3_SKILLS = [
     41014331, 41014411, 41014421, 41014431, 41014511, 41014521,
     41041610, 41041611, 41041612, 41041620, 41041621, 41041622,
 ]
+
+
+# ConditionsType: 0 = no condition, 1 = clear the series in ConditionsValue.
+RELEASE_NONE, RELEASE_CLEAR_SERIES = 0, 1
+
+
+def _release_conditions(series_list: list[dict]) -> dict[int, int]:
+    """series id -> series that must be cleared first (0 = none)."""
+    series_ids = {sr["Id"] for sr in series_list}
+    first_series = {}
+    for sr in sorted(series_list, key=lambda r: r["OrderId"]):
+        first_series.setdefault(sr["GradeQuestSeasonId"], sr["Id"])
+    required: dict[int, int] = {}
+    for cond in _load_yaml(YAML_DIR / "GradeQuestSeriesReleaseCond.yaml"):
+        kind, value = int(cond["ConditionsType"]), int(cond["ConditionsValue"])
+        if kind == RELEASE_NONE:
+            value = 0
+        elif kind != RELEASE_CLEAR_SERIES or value not in series_ids:
+            raise ValueError(f"unsupported grade quest release condition {cond}")
+        required[cond["GradeQuestSeriesId"]] = value
+    for cond in _load_yaml(YAML_DIR / "GradeQuestSeasonReleaseCond.yaml"):
+        kind, value = int(cond["ConditionsType"]), int(cond["ConditionsValue"])
+        first = first_series[cond["GradeQuestSeasonId"]]
+        if (value if kind == RELEASE_CLEAR_SERIES else 0) != required.get(first, 0):
+            raise ValueError(f"season condition {cond} differs from its first series {first}")
+    missing = series_ids - required.keys()
+    if missing:
+        raise ValueError(f"no release condition for grade quest series {sorted(missing)}")
+    return dict(sorted(required.items()))
 
 
 def generate_seed_statements() -> list[str]:
@@ -172,6 +209,12 @@ def generate_seed_statements() -> list[str]:
             f"INSERT OR IGNORE INTO grade_quest_stage "
             f"(stage_id, quest_musics_type, quest_musics_detail, live_point, section_skills_json) "
             f"VALUES ({stage_id}, {musics_type}, {musics_detail}, {live_point}, '{sec_json}');"
+        )
+
+    for series_id, required in _release_conditions(series_list).items():
+        statements.append(
+            f"INSERT OR IGNORE INTO grade_quest_release (series_id, required_series_id) "
+            f"VALUES ({series_id}, {required});"
         )
 
     for skill_id in TIER_1_SKILLS:

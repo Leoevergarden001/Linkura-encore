@@ -209,6 +209,14 @@ CREATE TABLE IF NOT EXISTS grade_add_skill (
 
 CREATE INDEX IF NOT EXISTS idx_grade_add_skill_tier ON grade_add_skill(tier);
 
+-- GradeQuestSeriesReleaseCond: a series opens once required_series_id is cleared
+-- (0 = open from the start). GradeQuestSeasonReleaseCond repeats each season's
+-- first-series condition, so a season is locked while its first series is.
+CREATE TABLE IF NOT EXISTS grade_quest_release (
+    series_id INTEGER NOT NULL PRIMARY KEY,
+    required_series_id INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS grade_quest_progress (
     series_id INTEGER NOT NULL PRIMARY KEY,
     clear_status INTEGER NOT NULL DEFAULT 0,
