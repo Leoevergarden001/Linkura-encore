@@ -4,8 +4,6 @@
 
 **非官方**的「Link！Like！ラブライブ！蓮ノ空スクールアイドルクラブ」（リンクラ）离线运行项目：在官方服务器于 2026-06-30 停止服务之后，让你自己手上的客户端和资源缓存继续离线游玩，并方便在此基础上继续开发和修复。
 
-An unofficial offline server and client patch set for Link! Like! LoveLive! (リンクラ). Bring your own client and asset cache; nothing here contains game files.
-
 > 本项目与官方无关，不提供、不分发任何游戏安装包、资源或账号数据。请只用于你自己合法持有的客户端和数据。
 
 ## 能做什么
