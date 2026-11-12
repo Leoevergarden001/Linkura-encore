@@ -8,8 +8,10 @@ history. Home and Gacha response headers report the wallet from that database.
 Seven preserved series are enabled: 1055003 (BRIGHT SEEDS), 1055002
 (FILM B.G.P.), 1055001 (PERENNIAL), and four graduation series (1050511,
 1050509, 1050506, 1050505). These were still open when the service closed
-(Master EndTime 2035-12-31). The 26 BIRTHDAY LIMITED series (GachaType 1)
-follow them, in start order; see "Opening ended series" below. The original server probability
+(Master EndTime 2035-12-31). The BIRTHDAY LIMITED series (GachaType 1)
+follow them in start order, one per birthday card: nine 2024 cards were run
+again a year later under the same name and art, and only each card's first
+series is kept (17 series). See "Opening ended series" below. The original server probability
 table has not been recovered. The offline candidate catalog now includes
 every non-placeholder, non-limited R/SR/UR base card present before all three
 series started in the preserved R2606000 Master snapshot: 46 R, 42 SR and

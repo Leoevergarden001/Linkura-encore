@@ -33,9 +33,19 @@ OPEN_END_TICKS = 642183227990000000
 
 
 def birthday_pools(master: Path) -> list[dict]:
-    pools = [row for row in load(master, "GachaSeries.yaml")
-             if row["GachaType"] == 1 and "BIRTHDAY" in row["GachaSeriesName"].upper()]
-    return sorted(pools, key=lambda row: (row["StartTime"], row["Id"]))
+    """Each birthday card's first series, in start order.
+
+    Nine 2024 birthday cards were run again a year later, next to the new
+    birthday series, under the same name and art. With every series open at
+    once the rerun only duplicates the first one, so it is left out.
+    """
+    pools = sorted((row for row in load(master, "GachaSeries.yaml")
+                    if row["GachaType"] == 1 and "BIRTHDAY" in row["GachaSeriesName"].upper()),
+                   key=lambda row: (row["StartTime"], row["Id"]))
+    first: dict[int, dict] = {}
+    for row in pools:
+        first.setdefault(row["PickUpCardSeriesId_1"], row)
+    return sorted(first.values(), key=lambda row: (row["StartTime"], row["Id"]))
 
 
 def _unix(value) -> int:

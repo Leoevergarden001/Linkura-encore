@@ -19,11 +19,12 @@ def _sql(db: Path, seed: bytes, statements: str) -> str:
 
 
 class SeriesFileTest(unittest.TestCase):
-    def test_checked_in_list_is_the_birthday_series_after_the_closing_seven(self):
+    def test_checked_in_list_is_each_birthday_cards_first_series(self):
         end, series = load_series(DEFAULT_SERIES)
         self.assertEqual(end, 642183227990000000)
-        self.assertEqual(len(series), 26)
-        self.assertEqual([order for _, order in series], list(range(101, 127)))
+        self.assertEqual(len(series), 17)  # one series per birthday card: its first run
+        self.assertEqual([order for _, order in series], list(range(101, 118)))
+        self.assertNotIn(1050112, [series_id for series_id, _ in series])  # Kaho's 2024 card rerun in 2025
 
 
 @unittest.skipUnless(HAVE_SQLCIPHER, "sqlcipher not installed")
