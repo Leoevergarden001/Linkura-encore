@@ -36,7 +36,7 @@ python3 tools/ios_device_setup.py \
   --device "<device name or UDID>" --skip-install --verify-only
 ```
 
-The setup tool compares transferred file sizes and checks that the offline server listens after launch. It skips player progress by default. Do not add `--include-progress` or `--overwrite-progress` unless the user specifically wants that transfer and the destination progress has been backed up. Free development signing may expire after seven days; reinstall the same Bundle ID and signing identity over the existing app to retain its data.
+The setup tool compares transferred file sizes and checks that the offline server listens after launch. It skips player progress by default. Do not add `--include-progress` or `--overwrite-progress` unless the user specifically wants that transfer. `--overwrite-progress` pulls the device's existing progress database back first; pass `--progress-backup-dir <private directory>` so that copy lands somewhere the user knows, and confirm it exists before continuing. Free development signing may expire after seven days; reinstall the same Bundle ID and signing identity over the existing app to retain its data.
 
 When using a nondefault Bundle ID, pass the same `--bundle-id` to the `--verify-only` command. The progress-page `--port` option is separate from the offline server's port.
 
