@@ -24,3 +24,11 @@ Use these terms consistently in the three documentation languages. Keep names sh
 | 描述文件 | provisioning profile | プロビジョニングプロファイル |
 | 回归检查 | regression check | 回帰確認 |
 | 覆盖文件 | override file | 上書きファイル |
+
+## Translation maintenance · 翻译维护 · 翻訳の保守
+
+`docs/zh/` and `README.zh-CN.md` are the source text. The English and Japanese files carry a `Translation source` comment with the Chinese source commit. After changing Chinese, review both translations and update their markers to the new source commit. Commit source changes first, then translations, so the marker can name an existing commit.
+
+中文原稿改动后，先提交原稿，再核对英文和日文并更新译文中的源提交标记。`python3 tools/check_docs.py` 检查三种语言的文件名、相对链接和锚点；原稿晚于标记提交发生变化时只给出提醒，不使 CI 失败。
+
+中国語の原稿を変更したら先にコミットし、英語版と日本語版を確認して参照コミットを更新してください。`python3 tools/check_docs.py` はファイル名、相対リンク、アンカーを検査します。原稿が参照コミットより新しい場合は警告だけを出し、CI は失敗させません。

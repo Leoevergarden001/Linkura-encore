@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Small reverse-engineering helpers for the iOS UnityFramework (IL2CPP).
 
-These are the tools used to find the iOS patch sites (see docs/patching-ios.md).
+These are the tools used to find the iOS patch sites (see docs/en/patching-ios.md).
 They work on files you extract from your own IPA:
 
     python3 -m tools.linkura_offline ios-symbols --ipa <ipa> --output sym.json

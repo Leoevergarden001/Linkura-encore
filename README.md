@@ -1,54 +1,54 @@
-[English](README.md) | **简体中文** | [日本語](README.ja.md)
+**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+
+<!-- Translation source: 32d73002987861dc6785db22505959c69dcba5f3 (README.zh-CN.md) -->
 
 # linkura-offline
 
-**非官方**的「Link！Like！ラブライブ！蓮ノ空スクールアイドルクラブ」（リンクラ）离线运行项目：在官方服务器于 2026-06-30 停止服务之后，让你自己手上的客户端和资源缓存继续离线游玩，并方便在此基础上继续开发和修复。
+An **unofficial** offline project for Link! Like! Love Live! (リンクラ). After the official service ended on June 30, 2026, it lets you continue using a client and asset cache you already have, and provides a base for further fixes and development.
 
-An unofficial offline server and client patch set for Link! Like! LoveLive! (リンクラ). Bring your own client and asset cache; nothing here contains game files.
+> This project is not affiliated with the official game. It does not provide or distribute game installers, assets, or account data. Use only a client and data that you lawfully possess.
 
-> 本项目与官方无关，不提供、不分发任何游戏安装包、资源或账号数据。请只用于你自己合法持有的客户端和数据。
+## Features
 
-## 能做什么
+- **Offline server** (`server/`): answers the game's APIs on the device at `127.0.0.1`. Player progress is stored in local SQLite. Android and iOS share the same server code.
+- **Android 5.1.0** (`android/`): an LSPatch module that intercepts API calls, fixes offline scene transitions, and disables actions that could erase irreplaceable assets.
+- **iOS / iPadOS 5.0.1** (`ios/` + `tools/`): bundles the offline server as a dylib into an IPA and applies byte-checked static patches. No jailbreak is required; sign the result yourself before installing.
+- **Tools** (`tools/`): packaging, signing, one-step iOS installation, Android resource pack creation and import, asset cache coverage analysis, and reverse-engineering helpers.
 
-- **离线服务器**（`server/`）：在设备本机 `127.0.0.1` 上回应游戏的全部 API，玩家进度保存在本地 SQLite。Android 和 iOS 共用同一份代码。
-- **Android 5.1.0**（`android/`）：LSPatch 模块，接管 API 请求、修复离线时的场景切换等问题，并禁用会清掉资源的危险操作。
-- **iOS / iPadOS 5.0.1**（`ios/` + `tools/`）：不越狱，把离线服务器作为 dylib 打进 IPA，并对客户端做按字节校验的静态补丁；自签名后安装。
-- **工具**（`tools/`）：打包、签名、一键安装（iOS）、资源包制作和导入（Android）、资源缓存覆盖率分析、逆向辅助。
+Login, Home, SHOW (リズムゲーム), Dream Live, gacha, card development, 編成, missions, profile, and collection are usable offline. Content that was never cached, such as story voices, lyric MVs, and archive videos, is covered under [known limitations](docs/en/known-limitations.md).
 
-登录、主页、SHOW（リズムゲーム）、Dream Live、扭蛋、卡牌养成、编成、任务、个人资料、收藏等主要功能可以离线使用。没保存下来的内容（剧情配音、歌词 MV、存档视频等）见 [已知限制](docs/zh/known-limitations.md)。
-
-## 需要准备
+## Requirements
 
 | | Android | iOS / iPadOS |
 |---|---|---|
-| 客户端 | 你自己的 5.1.0 APK | 你自己的、已解密的 5.0.1 IPA |
-| 资源 | 你设备上游戏的资源缓存（`files/D`、`files/M`）和存储密钥 | 同左（Android 缓存可转用） |
-| 环境 | Android SDK/NDK、JDK 17、Java 21+（LSPatch） | Xcode、Apple 账号（免费 Personal Team 即可） |
-| 打包资源 | SQLCipher 4 命令行（`brew install sqlcipher`），用来把缓存换成新生成的存储密钥 | 同左 |
+| Client | Your own 5.1.0 APK | Your own decrypted 5.0.1 IPA |
+| Assets | The game's asset cache from your device (`files/D`, `files/M`) and its storage key | The same; an Android cache can be converted |
+| Environment | Android SDK/NDK, JDK 17, Java 21+ for LSPatch | Xcode and an Apple account (a free Personal Team works) |
+| Resource pack preparation | SQLCipher 4 CLI (`brew install sqlcipher`) to replace source storage keys with fresh ones | Same |
 
-## 快速开始
+## Quick start
 
 ```sh
 git clone --recurse-submodules <this repo>
 ```
 
-- [入门与版本说明](docs/zh/getting-started.md)
-- [Android 构建与安装](docs/zh/android.md) ・ [iOS 构建与安装](docs/zh/ios.md) ・ [准备资源](docs/zh/resources.md)
+- [Getting started and supported versions](docs/en/getting-started.md)
+- [Build and install on Android](docs/en/android.md) · [Build and install on iOS](docs/en/ios.md) · [Prepare assets](docs/en/resources.md)
 
-## 开发
+## Development
 
-- [整体架构](docs/zh/architecture.md)
-- [离线服务器：接口、数据库、数据生成](docs/zh/server.md)
-- [iOS 补丁怎么找、怎么加](docs/zh/patching-ios.md) ・ [Android Hook](docs/zh/hooking-android.md)
-- [回归检查清单](docs/zh/regression-checklist.md)
-- [术语表](docs/glossary.md)
+- [Architecture](docs/en/architecture.md)
+- [Offline server: routes, databases, and generators](docs/en/server.md)
+- [Finding and adding iOS patches](docs/en/patching-ios.md) · [Android hooks](docs/en/hooking-android.md)
+- [Regression checklist](docs/en/regression-checklist.md)
+- [Terminology](docs/glossary.md)
 
 ```sh
-server/build-host.sh && python3 server/tests/smoke_test.py   # 在电脑上跑离线服务器的冒烟测试
-python3 -m unittest discover -s tools/tests -t .                # 工具测试
-python3 -m unittest discover -s server/generators/tests         # 数据生成测试（需要 PyYAML）
+server/build-host.sh && python3 server/tests/smoke_test.py   # host-server smoke test
+python3 -m unittest discover -s tools/tests -t .                # tool tests
+python3 -m unittest discover -s server/generators/tests         # generator tests (requires PyYAML)
 ```
 
-## 许可
+## License
 
-GPL-3.0（见 [LICENSE](LICENSE)）。本项目派生自 [ChocoLZS/linkura-localify](https://github.com/ChocoLZS/linkura-localify)，保留其提交历史；来源与第三方组件见 [NOTICE.md](NOTICE.md)。
+GPL-3.0; see [LICENSE](LICENSE). This project derives from [ChocoLZS/linkura-localify](https://github.com/ChocoLZS/linkura-localify) and retains its commit history. See [NOTICE.md](NOTICE.md) for origins and third-party components.
