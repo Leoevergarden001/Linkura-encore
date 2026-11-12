@@ -33,6 +33,8 @@ adb install -r Linkura-5.1.0-offline.apk
 
 已安装官方客户端时，签名不同，需要先卸载（会丢失官方客户端的数据，先备份）。
 
+<a id="android-import-resources"></a>
+
 ## 4. 导入资源
 
 资源包的制作见 [准备资源](resources.md)。导入：

@@ -43,7 +43,7 @@ python3 -m tools.linkura_offline android-resource-pack-build \
   --private game-private.tar --output <资源包目录>
 ```
 
-资源包包含 `D/`、换了新密钥的资源目录库和主数据库（`M/` 里只有这两个文件）和对应的存储密钥（`files/linkura-local/storage-key.json`），并带一份 `MANIFEST.json`。换密钥需要 SQLCipher 4 命令行工具（`brew install sqlcipher`）；`--keep-source-key` 保留原来的全部 `M/` 和原安装的密钥。输出目录不要放在 exFAT 上（macOS 会生成 `._*` 文件）。导入见 [Android](android.md#4-导入资源)。
+资源包包含 `D/`、换了新密钥的资源目录库和主数据库（`M/` 里只有这两个文件）和对应的存储密钥（`files/linkura-local/storage-key.json`），并带一份 `MANIFEST.json`。换密钥需要 SQLCipher 4 命令行工具（`brew install sqlcipher`）；`--keep-source-key` 保留原来的全部 `M/` 和原安装的密钥。输出目录不要放在 exFAT 上（macOS 会生成 `._*` 文件）。导入见 [Android](android.md#android-import-resources)。
 
 只想导出存储密钥：`python3 -m tools.linkura_offline android-storage-key --prefs <playerprefs.xml> --output storage-key.json`。
 
@@ -55,6 +55,8 @@ python3 -m tools.linkura_offline cache-rekey \
 ```
 
 输出 `<新目录>/M/` 下的两个库和 `<新目录>/storage-key.json`，用它们替换原来的 `M/` 和 storage-key.json。storage-key.json 里没有主数据库那一项（比如 iOS 设备上导出的）时只处理资源目录库，并给出警告：这样的缓存在新设备上没有主数据。
+
+<a id="ios-from-android"></a>
 
 ## iOS：从 Android 缓存转换
 

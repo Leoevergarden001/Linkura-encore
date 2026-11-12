@@ -43,7 +43,7 @@ python3 tools/ios_device_setup.py \
 - 玩家进度库默认不推；`--include-progress` 推送，设备上已有时需 `--overwrite-progress`（先把旧库拉回本地）。
 - 免费签名 7 天过期，过期后重跑同一条命令（覆盖安装保留数据）。
 
-iOS 数据目录可以由 Android 缓存转换得到，见 [准备资源](resources.md#ios-从-android-缓存转换)。
+iOS 数据目录可以由 Android 缓存转换得到，见 [准备资源](resources.md#ios-from-android)。
 
 只签名不安装：`tools/ios_sign_ipa.sh <unsigned.ipa> <profile.mobileprovision> "<签名身份>" <signed.ipa>`。
 

@@ -1,3 +1,5 @@
+[English](README.md) | **简体中文** | [日本語](README.ja.md)
+
 # linkura-offline
 
 **非官方**的「Link！Like！ラブライブ！蓮ノ空スクールアイドルクラブ」（リンクラ）离线运行项目：在官方服务器于 2026-06-30 停止服务之后，让你自己手上的客户端和资源缓存继续离线游玩，并方便在此基础上继续开发和修复。
@@ -13,7 +15,7 @@ An unofficial offline server and client patch set for Link! Like! LoveLive! (リ
 - **iOS / iPadOS 5.0.1**（`ios/` + `tools/`）：不越狱，把离线服务器作为 dylib 打进 IPA，并对客户端做按字节校验的静态补丁；自签名后安装。
 - **工具**（`tools/`）：打包、签名、一键安装（iOS）、资源包制作和导入（Android）、资源缓存覆盖率分析、逆向辅助。
 
-登录、主页、SHOW（リズムゲーム）、Dream Live、扭蛋、卡牌养成、编成、任务、个人资料、收藏等主要功能可以离线使用。没保存下来的内容（剧情配音、歌词 MV、存档视频等）见 [已知限制](docs/known-limitations.md)。
+登录、主页、SHOW（リズムゲーム）、Dream Live、扭蛋、卡牌养成、编成、任务、个人资料、收藏等主要功能可以离线使用。没保存下来的内容（剧情配音、歌词 MV、存档视频等）见 [已知限制](docs/zh/known-limitations.md)。
 
 ## 需要准备
 
@@ -30,15 +32,16 @@ An unofficial offline server and client patch set for Link! Like! LoveLive! (リ
 git clone --recurse-submodules <this repo>
 ```
 
-- [入门与版本说明](docs/getting-started.md)
-- [Android 构建与安装](docs/android.md) ・ [iOS 构建与安装](docs/ios.md) ・ [准备资源](docs/resources.md)
+- [入门与版本说明](docs/zh/getting-started.md)
+- [Android 构建与安装](docs/zh/android.md) ・ [iOS 构建与安装](docs/zh/ios.md) ・ [准备资源](docs/zh/resources.md)
 
 ## 开发
 
-- [整体架构](docs/architecture.md)
-- [离线服务器：接口、数据库、数据生成](docs/server.md)
-- [iOS 补丁怎么找、怎么加](docs/patching-ios.md) ・ [Android Hook](docs/hooking-android.md)
-- [回归检查清单](docs/regression-checklist.md)
+- [整体架构](docs/zh/architecture.md)
+- [离线服务器：接口、数据库、数据生成](docs/zh/server.md)
+- [iOS 补丁怎么找、怎么加](docs/zh/patching-ios.md) ・ [Android Hook](docs/zh/hooking-android.md)
+- [回归检查清单](docs/zh/regression-checklist.md)
+- [术语表](docs/glossary.md)
 
 ```sh
 server/build-host.sh && python3 server/tests/smoke_test.py   # 在电脑上跑离线服务器的冒烟测试
