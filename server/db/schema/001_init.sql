@@ -252,35 +252,76 @@ CREATE TABLE IF NOT EXISTS grade_quest_progress (
 );
 
 
+-- Live Grand Prix (quest live), all of GrandPrix.yaml. order_id follows StartTime;
+-- duration_days is the original length rounded up to whole days.
 CREATE TABLE IF NOT EXISTS grand_prix (
     grand_prix_id INTEGER NOT NULL PRIMARY KEY,
     grand_prix_type INTEGER NOT NULL DEFAULT 1,
     start_date TEXT NOT NULL DEFAULT '',
     end_date TEXT NOT NULL DEFAULT '',
-    rewards_json TEXT NOT NULL DEFAULT '[]'
+    rewards_json TEXT NOT NULL DEFAULT '[]',
+    order_id INTEGER NOT NULL DEFAULT 0,
+    duration_days INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS grand_prix_series (
     quest_id INTEGER NOT NULL PRIMARY KEY,
     grand_prix_id INTEGER NOT NULL,
-    order_id INTEGER NOT NULL DEFAULT 1
+    order_id INTEGER NOT NULL DEFAULT 1,
+    play_limit_count INTEGER NOT NULL DEFAULT 0,
+    retire_limit_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_gp_series_gp ON grand_prix_series(grand_prix_id);
 
+-- score1..3: the stage rank thresholds; bonus0..3: GP Pt. bonus per rank (1/100 %).
 CREATE TABLE IF NOT EXISTS grand_prix_stage (
     stage_id INTEGER NOT NULL PRIMARY KEY,
     quest_id INTEGER NOT NULL,
     order_id INTEGER NOT NULL DEFAULT 1,
     quest_musics_type INTEGER NOT NULL DEFAULT 0,
     quest_musics_detail INTEGER NOT NULL DEFAULT 0,
-    score_bonus_value INTEGER NOT NULL DEFAULT 10000,
     release_condition_type INTEGER NOT NULL DEFAULT 0,
     release_condition_value INTEGER NOT NULL DEFAULT 0,
-    section_skills_json TEXT NOT NULL DEFAULT '[]'
+    section_skills_json TEXT NOT NULL DEFAULT '[]',
+    score1 INTEGER NOT NULL DEFAULT 0,
+    score2 INTEGER NOT NULL DEFAULT 0,
+    score3 INTEGER NOT NULL DEFAULT 0,
+    bonus0 INTEGER NOT NULL DEFAULT 10000,
+    bonus1 INTEGER NOT NULL DEFAULT 10000,
+    bonus2 INTEGER NOT NULL DEFAULT 10000,
+    bonus3 INTEGER NOT NULL DEFAULT 10000
 );
 
 CREATE INDEX IF NOT EXISTS idx_gp_stage_quest ON grand_prix_stage(quest_id);
+
+-- GrandPrixPointBonuses: target_type 1 = card rarity (target_detail) at
+-- limit break target_num; target_type 2 = character (not applied offline).
+CREATE TABLE IF NOT EXISTS grand_prix_point_bonus (
+    grand_prix_id INTEGER NOT NULL,
+    target_type INTEGER NOT NULL,
+    target_detail INTEGER NOT NULL,
+    target_num INTEGER NOT NULL,
+    bonus_value INTEGER NOT NULL,
+    PRIMARY KEY (grand_prix_id, target_type, target_detail, target_num)
+);
+
+-- GrandPrixRewards + payable GrandPrixRewardDatas, by personal (or circle) rank.
+CREATE TABLE IF NOT EXISTS grand_prix_reward (
+    rewards_id INTEGER NOT NULL PRIMARY KEY,
+    grand_prix_id INTEGER NOT NULL,
+    min_rank INTEGER NOT NULL,
+    max_rank INTEGER NOT NULL,
+    rewards_json TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS idx_gp_reward_gp ON grand_prix_reward(grand_prix_id);
+
+-- CardDatas.Rarity, for the Grand Prix card bonus.
+CREATE TABLE IF NOT EXISTS card_rarity (
+    card_datas_id INTEGER NOT NULL PRIMARY KEY,
+    rarity INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS grand_prix_progress (
     stage_id INTEGER NOT NULL PRIMARY KEY,

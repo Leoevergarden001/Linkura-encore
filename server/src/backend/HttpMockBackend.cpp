@@ -14,7 +14,9 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <cmath>
 #include <map>
+#include <tuple>
 #include <mutex>
 #include <random>
 #include <string>
@@ -391,7 +393,21 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> RecoverStaminaLocked(std::string_view payloadJson);
         void ConsumeStaminaLocked(int64_t amount);
         int StageStaminaCostLocked(int questLiveType, int stageId);
-        int64_t GrandPrixTotalPointLocked(int grandPrixId);
+        struct GrandPrixInstance {
+            int64_t ordinal = -1;
+            int grandPrixId = 0;
+            int grandPrixType = 1;
+            int64_t startDay = 0;  // 04:00 JST business days, end exclusive
+            int64_t endDay = 0;
+        };
+        std::optional<GrandPrixInstance> GrandPrixInstanceLocked(int64_t ordinal);
+        std::optional<GrandPrixInstance> GrandPrixCurrentLocked();
+        bool GrandPrixSettleLocked(const GrandPrixInstance& inst);
+        int64_t GrandPrixTotalPointLocked(int64_t ordinal);
+        int64_t GrandPrixReferencePointLocked(int grandPrixId, int questId);
+        std::pair<int, int> GrandPrixPlayCountsLocked(int64_t ordinal, int questId);
+        int GrandPrixQuestOfStageLocked(int stageId);
+        static int64_t GrandPrixSimulatedRank(int64_t point, int64_t reference, int grandPrixType);
         nlohmann::json DailyTicketInfoLocked();
         bool ConsumeDailyTicketsLocked(int count);
         std::optional<MockStoredResponse> DailyGetRecoveryChallengeCountLocked();
@@ -701,7 +717,7 @@ namespace LinkuraLocal::HttpMock {
             if (sqlite3_prepare_v2(db, "PRAGMA table_info(grand_prix_stage);", -1, &pi, nullptr) == SQLITE_OK && pi) {
                 while (sqlite3_step(pi) == SQLITE_ROW) {
                     const auto* col = reinterpret_cast<const char*>(sqlite3_column_text(pi, 1));
-                    if (col && std::string(col) == "section_skills_json") { hasColumn = true; break; }
+                    if (col && std::string(col) == "score3") { hasColumn = true; break; }
                 }
                 sqlite3_finalize(pi);
             }
@@ -709,7 +725,6 @@ namespace LinkuraLocal::HttpMock {
                 ExecSql(db, "DROP TABLE IF EXISTS grand_prix_stage;");
                 ExecSql(db, "DROP TABLE IF EXISTS grand_prix_series;");
                 ExecSql(db, "DROP TABLE IF EXISTS grand_prix;");
-                ExecSql(db, "DROP TABLE IF EXISTS grand_prix_progress;");
                 ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SchemaScripts, "schema");
             }
         }
@@ -739,7 +754,7 @@ namespace LinkuraLocal::HttpMock {
             ExecSql(db, "DELETE FROM grade_quest_stage;");
             ExecSql(db, "DELETE FROM grade_add_skill;");
             ExecSql(db, "DELETE FROM grade_quest_progress; DELETE FROM grade_point_ledger; DELETE FROM grade_quest_reward_received; DELETE FROM grade_reward_received;");
-            ExecSql(db, "DELETE FROM grand_prix_progress;");
+            ExecSql(db, "DELETE FROM grand_prix_progress; DELETE FROM grand_prix_play; DELETE FROM grand_prix_settlement; DELETE FROM grand_prix_calendar;");
             ExecSql(db, "DELETE FROM grand_prix;");
             ExecSql(db, "DELETE FROM grand_prix_series;");
             ExecSql(db, "DELETE FROM grand_prix_stage;");
@@ -749,7 +764,7 @@ namespace LinkuraLocal::HttpMock {
             std::filesystem::remove(resetCmdPath, ec);
         }
 
-        if ((hasPendingReset || !TableHasAnyRows(db, "archive_detail") || !TableHasAnyRows(db, "card_detail") || !TableHasAnyRows(db, "character_info") || !TableHasAnyRows(db, "item") || !TableHasAnyRows(db, "quest_stage") || !TableHasAnyRows(db, "daily_quest_stage") || !TableHasAnyRows(db, "dream_quest_stage") || !TableHasAnyRows(db, "grade_quest_stage") || !TableHasAnyRows(db, "grade_add_skill") || !TableHasAnyRows(db, "grade_quest_release") || !TableHasAnyRows(db, "grade_quest_reward") || !TableHasAnyRows(db, "grade_data") || !TableHasAnyRows(db, "grade_reward") || !TableHasAnyRows(db, "grand_prix_stage") || !TableHasAnyRows(db, "learning_stage") || !TableHasAnyRows(db, "music_mastery") || !TableHasAnyRows(db, "music"))
+        if ((hasPendingReset || !TableHasAnyRows(db, "archive_detail") || !TableHasAnyRows(db, "card_detail") || !TableHasAnyRows(db, "character_info") || !TableHasAnyRows(db, "item") || !TableHasAnyRows(db, "quest_stage") || !TableHasAnyRows(db, "daily_quest_stage") || !TableHasAnyRows(db, "dream_quest_stage") || !TableHasAnyRows(db, "grade_quest_stage") || !TableHasAnyRows(db, "grade_add_skill") || !TableHasAnyRows(db, "grade_quest_release") || !TableHasAnyRows(db, "grade_quest_reward") || !TableHasAnyRows(db, "grade_data") || !TableHasAnyRows(db, "grade_reward") || !TableHasAnyRows(db, "grand_prix_stage") || !TableHasAnyRows(db, "grand_prix_point_bonus") || !TableHasAnyRows(db, "grand_prix_reward") || !TableHasAnyRows(db, "card_rarity") || !TableHasAnyRows(db, "learning_stage") || !TableHasAnyRows(db, "music_mastery") || !TableHasAnyRows(db, "music"))
             && !ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SeedScripts, "seed")) {
             persistentStorageAvailable = false;
             return false;
@@ -1025,7 +1040,7 @@ namespace LinkuraLocal::HttpMock {
         if (!ExecSql(db, "DELETE FROM offline_mission_event;") ||
             !ExecSql(db, "DELETE FROM offline_mission_award;") ||
             !ExecSql(db, "DELETE FROM offline_mission_meta;") ||
-            !ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress; DELETE FROM grade_point_ledger; DELETE FROM grade_quest_reward_received; DELETE FROM grade_reward_received;") || !ExecSql(db, "DELETE FROM grand_prix_progress;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
+            !ExecSql(db, "DELETE FROM archive_detail;") || !ExecSql(db, "DELETE FROM card_detail;") || !ExecSql(db, "DELETE FROM character_info;") || !ExecSql(db, "DELETE FROM item;") || !ExecSql(db, "DELETE FROM deck;") || !ExecSql(db, "DELETE FROM rhythm_music_score;") || !ExecSql(db, "DELETE FROM rhythm_game_deck;") || !ExecSql(db, "DELETE FROM rhythm_runtime_session;") || !ExecSql(db, "DELETE FROM quest_runtime_session;") || !ExecSql(db, "DELETE FROM quest_stage;") || !ExecSql(db, "DELETE FROM daily_quest_stage;") || !ExecSql(db, "DELETE FROM dream_quest_stage;") || !ExecSql(db, "DELETE FROM grade_quest_season;") || !ExecSql(db, "DELETE FROM grade_quest_series;") || !ExecSql(db, "DELETE FROM grade_quest_stage;") || !ExecSql(db, "DELETE FROM grade_add_skill;") || !ExecSql(db, "DELETE FROM grade_quest_progress; DELETE FROM grade_point_ledger; DELETE FROM grade_quest_reward_received; DELETE FROM grade_reward_received;") || !ExecSql(db, "DELETE FROM grand_prix_progress; DELETE FROM grand_prix_play; DELETE FROM grand_prix_settlement; DELETE FROM grand_prix_calendar;") || !ExecSql(db, "DELETE FROM grand_prix;") || !ExecSql(db, "DELETE FROM grand_prix_series;") || !ExecSql(db, "DELETE FROM grand_prix_stage;") || !ExecSql(db, "DELETE FROM learning_stage;") || !ExecSql(db, "DELETE FROM music_mastery;") || !ExecSql(db, "DELETE FROM music;")) {
             return false;
         }
 
@@ -4749,7 +4764,9 @@ namespace LinkuraLocal::HttpMock {
         result["init_hand_data"] = "";
         result["grand_prix_retry_count"] = 0;
         result["grand_prix_is_rehearsal"] = false;
-        result["grand_prix_id"] = (questLiveType == 6) ? 806101 : 0;
+        std::optional<GrandPrixInstance> grandPrix;
+        if (questLiveType == 6) grandPrix = GrandPrixCurrentLocked();
+        result["grand_prix_id"] = grandPrix ? grandPrix->grandPrixId : 0;
         result["grade_retry_count"] = (questLiveType == 4) ? 1 : 0;
         {
             nlohmann::json gradeSkills = nlohmann::json::array();
@@ -4762,17 +4779,9 @@ namespace LinkuraLocal::HttpMock {
         }
         int playCount = 0;
         int playableCount = 0;
-        if (questLiveType == 6 && stageId > 0) {
-            sqlite3_stmt* pcStmt = nullptr;
-            constexpr const char* pcSql = "SELECT play_count FROM grand_prix_progress WHERE stage_id = ?;";
-            if (sqlite3_prepare_v2(db, pcSql, -1, &pcStmt, nullptr) == SQLITE_OK && pcStmt) {
-                sqlite3_bind_int(pcStmt, 1, stageId);
-                if (sqlite3_step(pcStmt) == SQLITE_ROW) {
-                    playCount = sqlite3_column_int(pcStmt, 0);
-                }
-                sqlite3_finalize(pcStmt);
-            }
-            playableCount = 1;
+        if (grandPrix && stageId > 0) {
+            std::tie(playableCount, playCount) =
+                GrandPrixPlayCountsLocked(grandPrix->ordinal, GrandPrixQuestOfStageLocked(stageId));
         }
         result["playable_count"] = playableCount;
         result["play_count"] = playCount;
@@ -5007,23 +5016,17 @@ namespace LinkuraLocal::HttpMock {
         result["init_hand_data"] = "";
         result["grand_prix_retry_count"] = 0;
         result["grand_prix_is_rehearsal"] = false;
-        result["grand_prix_id"] = (currentQuestLive.questLiveType == 6) ? 806101 : 0;
+        std::optional<GrandPrixInstance> grandPrix;
+        if (currentQuestLive.questLiveType == 6 && db) grandPrix = GrandPrixCurrentLocked();
+        result["grand_prix_id"] = grandPrix ? grandPrix->grandPrixId : 0;
         result["grade_retry_count"] = (currentQuestLive.questLiveType == 4) ? 1 : 0;
         result["grade_add_skill_list"] = nlohmann::json::array();
         {
             int playCount = 0;
             int playableCount = 0;
-            if (currentQuestLive.questLiveType == 6 && currentQuestLive.stageId > 0 && db) {
-                sqlite3_stmt* pcStmt = nullptr;
-                constexpr const char* pcSql = "SELECT play_count FROM grand_prix_progress WHERE stage_id = ?;";
-                if (sqlite3_prepare_v2(db, pcSql, -1, &pcStmt, nullptr) == SQLITE_OK && pcStmt) {
-                    sqlite3_bind_int(pcStmt, 1, currentQuestLive.stageId);
-                    if (sqlite3_step(pcStmt) == SQLITE_ROW) {
-                        playCount = sqlite3_column_int(pcStmt, 0);
-                    }
-                    sqlite3_finalize(pcStmt);
-                }
-                playableCount = 1;
+            if (grandPrix && currentQuestLive.stageId > 0) {
+                std::tie(playableCount, playCount) =
+                    GrandPrixPlayCountsLocked(grandPrix->ordinal, GrandPrixQuestOfStageLocked(currentQuestLive.stageId));
             }
             result["playable_count"] = playableCount;
             result["play_count"] = playCount;
@@ -5595,6 +5598,22 @@ namespace LinkuraLocal::HttpMock {
         constexpr int kDailyTicketMax = 3;
         int64_t DailyBusinessDay(std::time_t now) {
             return (static_cast<int64_t>(now) + 9 * 3600 - 4 * 3600) / 86400;
+        }
+        constexpr int kGrandPrixUnlimitedPlays = 99;  // PlayLimitCount 0: no daily limit
+        constexpr int kGrandPrixMaxLimitBreak = 4;
+        // Simulated field sizes: personal battles rank players (rewards to 15,000 and
+        // beyond), circle battles rank circles (rewards to 2,000-5,000 and beyond).
+        constexpr double kGrandPrixPersonalRankSpace = 1000000.0;
+        constexpr double kGrandPrixCircleRankSpace = 50000.0;
+
+        std::string GrandPrixDayStartIso(int64_t businessDay) {
+            // A business day starts at 04:00 JST = 19:00 UTC of the previous day.
+            const std::time_t t = static_cast<std::time_t>(businessDay * 86400 - 5 * 3600);
+            std::tm tmUtc{};
+            gmtime_r(&t, &tmUtc);
+            char buf[32]{};
+            std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tmUtc);
+            return buf;
         }
     }
 
@@ -6361,6 +6380,11 @@ namespace LinkuraLocal::HttpMock {
         if (!db) return std::nullopt;
         nlohmann::json result = OfflineApiMockBuiltIn::OutQuestLiveGetQuestTopJsonObj();
         result["grade_detail"] = GradeDetailLocked();
+        if (const auto grandPrix = GrandPrixCurrentLocked()) {
+            result["grand_prix_id"] = grandPrix->grandPrixId;
+            result["grand_prix_start_datetime"] = GrandPrixDayStartIso(grandPrix->startDay);
+            result["grand_prix_end_datetime"] = GrandPrixDayStartIso(grandPrix->endDay);
+        }
         MockStoredResponse response;
         response.body = result.dump();
         return response;
@@ -6931,69 +6955,288 @@ namespace LinkuraLocal::HttpMock {
     }
 
     // ─── Grand Prix ───
+    //
+    // The Master's Live Grand Prix run one after another in real time from the
+    // first visit, each for its original number of days (04:00 JST days). A run
+    // is an "instance" (ordinal); after the last Grand Prix the order repeats.
+    // Circle battles are played under the personal rules (there are no circles).
+    //
+    // GP Pt. of a live = score x stage rank bonus (ScoreBonusValue of the rank the
+    // score reached: Score1..3) x card bonus (GrandPrixPointBonuses target_type 1:
+    // rarity and limit break, averaged over the deck's cards). Per series and day
+    // the best counted play counts; the total is their sum. The client only shows
+    // these numbers; the original formula was server-side and is not preserved.
+    //
+    // There are no other players, so ranks are simulated from the points: against
+    // a reference of the hardest stage's top rank with the best card bonus every
+    // day, rank = N ^ (1 - points / reference) with N = 1,000,000 players for a
+    // personal battle and 50,000 circles for a circle battle. Rewards follow the
+    // Master's rank ranges and are paid when the instance ends.
 
-    // Solo Grand Prix total: the sum of each quest's best daily point. There is
-    // no other player, so the personal ranking is 1 once anything is scored.
-    int64_t HttpMockBackend::Impl::GrandPrixTotalPointLocked(int grandPrixId) {
+    int64_t HttpMockBackend::Impl::GrandPrixSimulatedRank(int64_t point, int64_t reference, int grandPrixType) {
+        if (point <= 0) return 0;
+        const double space = grandPrixType == 2 ? kGrandPrixCircleRankSpace : kGrandPrixPersonalRankSpace;
+        const double ratio = reference > 0 ? std::min(1.0, static_cast<double>(point) / reference) : 1.0;
+        const auto rank = static_cast<int64_t>(std::llround(std::pow(space, 1.0 - ratio)));
+        return std::clamp<int64_t>(rank, 1, static_cast<int64_t>(space) - 1);
+    }
+
+    std::optional<HttpMockBackend::Impl::GrandPrixInstance> HttpMockBackend::Impl::GrandPrixInstanceLocked(int64_t ordinal) {
+        if (!db || ordinal < 0) return std::nullopt;
+        std::vector<std::tuple<int, int, int>> order;  // id, type, days
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT grand_prix_id, grand_prix_type, duration_days FROM grand_prix ORDER BY order_id;",
+                               -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                order.emplace_back(sqlite3_column_int(stmt, 0), sqlite3_column_int(stmt, 1),
+                                   std::max(1, sqlite3_column_int(stmt, 2)));
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        if (order.empty()) return std::nullopt;
+        int64_t epoch = -1;
+        if (sqlite3_prepare_v2(db, "SELECT epoch_day FROM grand_prix_calendar WHERE singleton_id = 1;", -1, &stmt,
+                               nullptr) == SQLITE_OK && stmt && sqlite3_step(stmt) == SQLITE_ROW) {
+            epoch = sqlite3_column_int64(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        if (epoch < 0) return std::nullopt;
+        int64_t cycleDays = 0;
+        for (const auto& entry : order) cycleDays += std::get<2>(entry);
+        const auto count = static_cast<int64_t>(order.size());
+        GrandPrixInstance inst;
+        inst.ordinal = ordinal;
+        inst.startDay = epoch + (ordinal / count) * cycleDays;
+        for (int64_t i = 0; i < ordinal % count; ++i) inst.startDay += std::get<2>(order[i]);
+        const auto& [id, type, days] = order[ordinal % count];
+        inst.grandPrixId = id;
+        inst.grandPrixType = type;
+        inst.endDay = inst.startDay + days;
+        return inst;
+    }
+
+    // The running instance; pays the rewards of every instance that ended since.
+    std::optional<HttpMockBackend::Impl::GrandPrixInstance> HttpMockBackend::Impl::GrandPrixCurrentLocked() {
+        if (!db) return std::nullopt;
+        const int64_t today = DailyBusinessDay(std::time(nullptr));
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO grand_prix_calendar(singleton_id, epoch_day) VALUES(1, ?);",
+                               -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int64(stmt, 1, today);
+            sqlite3_step(stmt);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        int64_t settled = -1;
+        if (sqlite3_prepare_v2(db, "SELECT settled_ordinal FROM grand_prix_calendar WHERE singleton_id = 1;", -1, &stmt,
+                               nullptr) == SQLITE_OK && stmt && sqlite3_step(stmt) == SQLITE_ROW) {
+            settled = sqlite3_column_int64(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+
+        auto inst = GrandPrixInstanceLocked(std::max<int64_t>(0, settled + 1));
+        while (inst && inst->endDay <= today) {
+            if (!GrandPrixSettleLocked(*inst)) return std::nullopt;
+            inst = GrandPrixInstanceLocked(inst->ordinal + 1);
+        }
+        return inst;
+    }
+
+    bool HttpMockBackend::Impl::GrandPrixSettleLocked(const GrandPrixInstance& inst) {
+        const int64_t total = GrandPrixTotalPointLocked(inst.ordinal);
+        const int64_t rank = GrandPrixSimulatedRank(total, GrandPrixReferencePointLocked(inst.grandPrixId, 0) *
+                                                               (inst.endDay - inst.startDay), inst.grandPrixType);
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return false;
+        bool ok = true;
+        int paid = 0;
+        if (rank > 0) {
+            std::vector<std::pair<int, std::string>> due;
+            sqlite3_stmt* stmt = nullptr;
+            ok = sqlite3_prepare_v2(db,
+                "SELECT rewards_id, rewards_json FROM grand_prix_reward "
+                "WHERE grand_prix_id = ? AND min_rank <= ? AND max_rank >= ? ORDER BY rewards_id;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt;
+            if (ok) {
+                sqlite3_bind_int(stmt, 1, inst.grandPrixId);
+                sqlite3_bind_int64(stmt, 2, rank);
+                sqlite3_bind_int64(stmt, 3, rank);
+                while (sqlite3_step(stmt) == SQLITE_ROW) {
+                    const auto* json = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                    due.emplace_back(sqlite3_column_int(stmt, 0), json ? json : "[]");
+                }
+            }
+            if (stmt) sqlite3_finalize(stmt);
+            for (const auto& [rewardsId, json] : due) {
+                if (!ok) break;
+                ok = GradeGrantRewardsLocked(nlohmann::json::parse(json, nullptr, false),
+                                             "grand_prix:" + std::to_string(inst.ordinal) + ":" + std::to_string(rewardsId));
+                ++paid;
+            }
+        }
+        sqlite3_stmt* save = nullptr;
+        ok = ok && sqlite3_prepare_v2(db,
+            "INSERT OR IGNORE INTO grand_prix_settlement(ordinal, grand_prix_id, total_point, personal_rank, settled_at) "
+            "VALUES(?, ?, ?, ?, ?);", -1, &save, nullptr) == SQLITE_OK && save;
+        if (ok) {
+            sqlite3_bind_int64(save, 1, inst.ordinal);
+            sqlite3_bind_int(save, 2, inst.grandPrixId);
+            sqlite3_bind_int64(save, 3, total);
+            sqlite3_bind_int64(save, 4, rank);
+            sqlite3_bind_int64(save, 5, static_cast<int64_t>(std::time(nullptr)));
+            ok = sqlite3_step(save) == SQLITE_DONE;
+        }
+        if (save) sqlite3_finalize(save);
+        sqlite3_stmt* mark = nullptr;
+        ok = ok && sqlite3_prepare_v2(db, "UPDATE grand_prix_calendar SET settled_ordinal = ? WHERE singleton_id = 1;",
+                                      -1, &mark, nullptr) == SQLITE_OK && mark &&
+             sqlite3_bind_int64(mark, 1, inst.ordinal) == SQLITE_OK && sqlite3_step(mark) == SQLITE_DONE;
+        if (mark) sqlite3_finalize(mark);
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return false;
+        }
+        if (total > 0) {
+            Log::InfoFmt("[HttpMockBackend] grand prix %d (instance %lld) settled: %lld Pt., rank %lld, %d reward rows",
+                         inst.grandPrixId, static_cast<long long>(inst.ordinal), static_cast<long long>(total),
+                         static_cast<long long>(rank), paid);
+        }
+        return true;
+    }
+
+    // Sum over days and series of the best counted GP Pt.
+    int64_t HttpMockBackend::Impl::GrandPrixTotalPointLocked(int64_t ordinal) {
         sqlite3_stmt* stmt = nullptr;
         int64_t total = 0;
         if (db && sqlite3_prepare_v2(db,
-                "SELECT COALESCE(SUM(best), 0) FROM ("
-                "SELECT s.quest_id, MAX(COALESCE(p.daily_best_score, 0)) AS best "
-                "FROM grand_prix_series gs JOIN grand_prix_stage s ON s.quest_id = gs.quest_id "
-                "LEFT JOIN grand_prix_progress p ON p.stage_id = s.stage_id "
-                "WHERE gs.grand_prix_id = ? GROUP BY s.quest_id);",
+                "SELECT COALESCE(SUM(best), 0) FROM (SELECT MAX(point) AS best FROM grand_prix_play "
+                "WHERE ordinal = ? AND counted = 1 GROUP BY business_day, quest_id);",
                 -1, &stmt, nullptr) == SQLITE_OK && stmt) {
-            sqlite3_bind_int(stmt, 1, grandPrixId);
+            sqlite3_bind_int64(stmt, 1, ordinal);
             if (sqlite3_step(stmt) == SQLITE_ROW) total = sqlite3_column_int64(stmt, 0);
         }
         if (stmt) sqlite3_finalize(stmt);
         return total;
     }
 
+    // Best possible GP Pt. of one day (questId 0: all series of the Grand Prix):
+    // the hardest stage at its top rank with the best card bonus.
+    int64_t HttpMockBackend::Impl::GrandPrixReferencePointLocked(int grandPrixId, int questId) {
+        int64_t cardBonus = 10000;
+        sqlite3_stmt* stmt = nullptr;
+        if (db && sqlite3_prepare_v2(db,
+                "SELECT COALESCE(MAX(bonus_value), 10000) FROM grand_prix_point_bonus "
+                "WHERE grand_prix_id = ? AND target_type = 1;", -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, grandPrixId);
+            if (sqlite3_step(stmt) == SQLITE_ROW) cardBonus = sqlite3_column_int64(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        int64_t reference = 0;
+        if (db && sqlite3_prepare_v2(db,
+                "SELECT s.score3, s.bonus3 FROM grand_prix_stage s JOIN grand_prix_series q ON q.quest_id = s.quest_id "
+                "WHERE q.grand_prix_id = ?1 AND (?2 = 0 OR q.quest_id = ?2) AND s.order_id = "
+                "(SELECT MAX(order_id) FROM grand_prix_stage WHERE quest_id = s.quest_id);",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, grandPrixId);
+            sqlite3_bind_int(stmt, 2, questId);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                reference += sqlite3_column_int64(stmt, 0) * sqlite3_column_int64(stmt, 1) / 10000 * cardBonus / 10000;
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return reference;
+    }
+
+    // Daily limit of the stage's series and the counted plays of today.
+    std::pair<int, int> HttpMockBackend::Impl::GrandPrixPlayCountsLocked(int64_t ordinal, int questId) {
+        int limit = 0;
+        int played = 0;
+        sqlite3_stmt* stmt = nullptr;
+        if (db && sqlite3_prepare_v2(db, "SELECT play_limit_count FROM grand_prix_series WHERE quest_id = ?;", -1,
+                                     &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, questId);
+            if (sqlite3_step(stmt) == SQLITE_ROW) limit = sqlite3_column_int(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        if (db && sqlite3_prepare_v2(db,
+                "SELECT COUNT(*) FROM grand_prix_play WHERE ordinal = ? AND business_day = ? AND quest_id = ? AND counted = 1;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int64(stmt, 1, ordinal);
+            sqlite3_bind_int64(stmt, 2, DailyBusinessDay(std::time(nullptr)));
+            sqlite3_bind_int(stmt, 3, questId);
+            if (sqlite3_step(stmt) == SQLITE_ROW) played = sqlite3_column_int(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return {limit > 0 ? limit : kGrandPrixUnlimitedPlays, played};
+    }
+
+    int HttpMockBackend::Impl::GrandPrixQuestOfStageLocked(int stageId) {
+        int questId = 0;
+        sqlite3_stmt* stmt = nullptr;
+        if (db && sqlite3_prepare_v2(db, "SELECT quest_id FROM grand_prix_stage WHERE stage_id = ?;", -1, &stmt,
+                                     nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, stageId);
+            if (sqlite3_step(stmt) == SQLITE_ROW) questId = sqlite3_column_int(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return questId;
+    }
+
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GrandPrixGetTopInfoLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) return std::nullopt;
         if (!db) return std::nullopt;
+        const auto inst = GrandPrixCurrentLocked();
+        if (!inst) return std::nullopt;
 
-        constexpr int gpId = 806101;
-
-        std::string startDate, endDate;
-        int gpType = 1;
         nlohmann::json rewardsJson = nlohmann::json::array();
         {
             sqlite3_stmt* stmt = nullptr;
-            constexpr const char* sql =
-                "SELECT grand_prix_type, start_date, end_date, rewards_json FROM grand_prix WHERE grand_prix_id = ?;";
-            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
-                sqlite3_bind_int(stmt, 1, gpId);
+            if (sqlite3_prepare_v2(db, "SELECT rewards_json FROM grand_prix WHERE grand_prix_id = ?;", -1, &stmt,
+                                   nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int(stmt, 1, inst->grandPrixId);
                 if (sqlite3_step(stmt) == SQLITE_ROW) {
-                    gpType = sqlite3_column_int(stmt, 0);
-                    const auto* sd = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                    const auto* ed = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-                    if (sd) startDate = sd;
-                    if (ed) endDate = ed;
-                    const auto* rj = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+                    const auto* rj = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
                     auto rp = nlohmann::json::parse(rj ? rj : "[]", nullptr, false);
                     if (rp.is_array()) rewardsJson = std::move(rp);
                 }
-                sqlite3_finalize(stmt);
             }
+            if (stmt) sqlite3_finalize(stmt);
         }
+        // GP Pt. history: the best counted play of each series and day.
+        nlohmann::json getPoints = nlohmann::json::array();
+        {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "SELECT quest_id, MAX(point), MAX(played_at) FROM grand_prix_play WHERE ordinal = ? AND counted = 1 "
+                    "GROUP BY business_day, quest_id ORDER BY business_day, quest_id;", -1, &stmt, nullptr) == SQLITE_OK &&
+                stmt) {
+                sqlite3_bind_int64(stmt, 1, inst->ordinal);
+                while (sqlite3_step(stmt) == SQLITE_ROW) {
+                    const std::time_t t = static_cast<std::time_t>(sqlite3_column_int64(stmt, 2));
+                    std::tm tmUtc{};
+                    gmtime_r(&t, &tmUtc);
+                    char buf[32]{};
+                    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tmUtc);
+                    getPoints.push_back({{"quest_id", sqlite3_column_int(stmt, 0)}, {"get_point_type", 1},
+                                         {"point", sqlite3_column_int64(stmt, 1)}, {"get_point_time", buf}});
+                }
+            }
+            if (stmt) sqlite3_finalize(stmt);
+        }
+        const int64_t totalPoint = GrandPrixTotalPointLocked(inst->ordinal);
+        const int64_t reference = GrandPrixReferencePointLocked(inst->grandPrixId, 0) * (inst->endDay - inst->startDay);
 
         nlohmann::json result;
-        result["start_date"] = startDate;
-        result["end_date"] = endDate;
-        result["grand_prix_type"] = gpType;
+        result["start_date"] = GrandPrixDayStartIso(inst->startDay);
+        result["end_date"] = GrandPrixDayStartIso(inst->endDay);
+        result["grand_prix_type"] = 1;
         result["status"] = 2;
         result["search_guild_key"] = "";
         result["guild_name"] = "";
         result["guild_total_point"] = 0;
         result["guild_ranking"] = 0;
         result["within_guild_ranking"] = 0;
-        const int64_t totalPoint = GrandPrixTotalPointLocked(gpId);
         result["personal_total_point"] = totalPoint;
-        result["personal_ranking"] = totalPoint > 0 ? 1 : 0;
-        result["get_points"] = nlohmann::json::array();
+        result["personal_ranking"] = GrandPrixSimulatedRank(totalPoint, reference, inst->grandPrixType);
+        result["get_points"] = std::move(getPoints);
         result["personal_rewards"] = std::move(rewardsJson);
 
         MockStoredResponse response;
@@ -7004,84 +7247,89 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GrandPrixGetStageSelectLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) return std::nullopt;
         if (!db) return std::nullopt;
-
-        constexpr int gpId = 806101;
+        const auto inst = GrandPrixCurrentLocked();
+        if (!inst) return std::nullopt;
+        const int64_t today = DailyBusinessDay(std::time(nullptr));
 
         nlohmann::json stages = nlohmann::json::array();
         int64_t dailyTotalPoint = 0;
-        int64_t bestPoint = 0;
+        std::vector<int> quests;
         {
             sqlite3_stmt* stmt = nullptr;
-            constexpr const char* sql =
-                "SELECT quest_id FROM grand_prix_series WHERE grand_prix_id = ? ORDER BY order_id;";
-            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
-                sqlite3_bind_int(stmt, 1, gpId);
-                while (sqlite3_step(stmt) == SQLITE_ROW) {
-                    const int questId = sqlite3_column_int(stmt, 0);
-
-                    int64_t questHighScore = 0;
-                    int64_t questDailyBest = 0;
-                    int totalPlayCount = 0;
-                    int dailyStageId = 0;
-                    int dailyMusicId = 0;
-                    {
-                        sqlite3_stmt* pStmt = nullptr;
-                        constexpr const char* pSql =
-                            "SELECT s.stage_id, p.high_score, p.daily_best_score, p.play_count "
-                            "FROM grand_prix_stage s "
-                            "LEFT JOIN grand_prix_progress p ON p.stage_id = s.stage_id "
-                            "WHERE s.quest_id = ? ORDER BY COALESCE(p.daily_best_score, 0) DESC;";
-                        if (sqlite3_prepare_v2(db, pSql, -1, &pStmt, nullptr) == SQLITE_OK && pStmt) {
-                            sqlite3_bind_int(pStmt, 1, questId);
-                            bool first = true;
-                            while (sqlite3_step(pStmt) == SQLITE_ROW) {
-                                const int64_t hs = sqlite3_column_int64(pStmt, 1);
-                                const int64_t ds = sqlite3_column_int64(pStmt, 2);
-                                const int pc = sqlite3_column_int(pStmt, 3);
-                                if (hs > questHighScore) questHighScore = hs;
-                                if (first && ds > 0) {
-                                    dailyStageId = sqlite3_column_int(pStmt, 0);
-                                    questDailyBest = ds;
-                                }
-                                totalPlayCount += pc;
-                                first = false;
-                            }
-                            sqlite3_finalize(pStmt);
-                        }
-                    }
-
-                    dailyTotalPoint += questDailyBest;
-                    if (questDailyBest > bestPoint) bestPoint = questDailyBest;
-
-                    stages.push_back({
-                        {"quest_id", questId},
-                        {"daily_stage_id", dailyStageId},
-                        {"daily_point", questDailyBest},
-                        {"daily_music_id", dailyMusicId},
-                        {"daily_rank", (questDailyBest > 0) ? 1 : 0},
-                        {"high_score", questHighScore},
-                        {"high_score_rank", (questHighScore > 0) ? 1 : 0},
-                        {"playable_count", 1},
-                        {"play_count", totalPlayCount > 0 ? 1 : 0},
-                        {"play_count_bonus_value", 10000},
-                    });
-                }
-                sqlite3_finalize(stmt);
+            if (sqlite3_prepare_v2(db, "SELECT quest_id FROM grand_prix_series WHERE grand_prix_id = ? ORDER BY order_id;",
+                                   -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int(stmt, 1, inst->grandPrixId);
+                while (sqlite3_step(stmt) == SQLITE_ROW) quests.push_back(sqlite3_column_int(stmt, 0));
             }
+            if (stmt) sqlite3_finalize(stmt);
+        }
+        for (const int questId : quests) {
+            int64_t dailyPoint = 0;
+            int dailyStageId = 0;
+            int dailyMusicId = 0;
+            int64_t highScore = 0;
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "SELECT point, stage_id, music_id FROM grand_prix_play WHERE ordinal = ? AND business_day = ? "
+                    "AND quest_id = ? AND counted = 1 ORDER BY point DESC, play_id LIMIT 1;", -1, &stmt, nullptr) == SQLITE_OK &&
+                stmt) {
+                sqlite3_bind_int64(stmt, 1, inst->ordinal);
+                sqlite3_bind_int64(stmt, 2, today);
+                sqlite3_bind_int(stmt, 3, questId);
+                if (sqlite3_step(stmt) == SQLITE_ROW) {
+                    dailyPoint = sqlite3_column_int64(stmt, 0);
+                    dailyStageId = sqlite3_column_int(stmt, 1);
+                    dailyMusicId = sqlite3_column_int(stmt, 2);
+                }
+            }
+            if (stmt) sqlite3_finalize(stmt);
+            if (sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(score), 0) FROM grand_prix_play WHERE ordinal = ? AND quest_id = ?;",
+                                   -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int64(stmt, 1, inst->ordinal);
+                sqlite3_bind_int(stmt, 2, questId);
+                if (sqlite3_step(stmt) == SQLITE_ROW) highScore = sqlite3_column_int64(stmt, 0);
+            }
+            if (stmt) sqlite3_finalize(stmt);
+            const auto [playable, played] = GrandPrixPlayCountsLocked(inst->ordinal, questId);
+            const int64_t questReference = GrandPrixReferencePointLocked(inst->grandPrixId, questId);
+            dailyTotalPoint += dailyPoint;
+            stages.push_back({
+                {"quest_id", questId},
+                {"daily_stage_id", dailyStageId},
+                {"daily_point", dailyPoint},
+                {"daily_music_id", dailyMusicId},
+                {"daily_rank", GrandPrixSimulatedRank(dailyPoint, questReference, inst->grandPrixType)},
+                {"high_score", highScore},
+                {"high_score_rank", GrandPrixSimulatedRank(highScore, questReference, inst->grandPrixType)},
+                {"playable_count", playable},
+                {"play_count", played},
+                {"play_count_bonus_value", 10000},
+            });
+        }
+        int64_t bestPoint = 0;  // best daily total of this run
+        {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "SELECT COALESCE(MAX(day_total), 0) FROM (SELECT SUM(best) AS day_total FROM "
+                    "(SELECT business_day, MAX(point) AS best FROM grand_prix_play WHERE ordinal = ? AND counted = 1 "
+                    "GROUP BY business_day, quest_id) GROUP BY business_day);", -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int64(stmt, 1, inst->ordinal);
+                if (sqlite3_step(stmt) == SQLITE_ROW) bestPoint = sqlite3_column_int64(stmt, 0);
+            }
+            if (stmt) sqlite3_finalize(stmt);
         }
 
+        const int64_t total = GrandPrixTotalPointLocked(inst->ordinal);
+        const int64_t reference = GrandPrixReferencePointLocked(inst->grandPrixId, 0) * (inst->endDay - inst->startDay);
         nlohmann::json result;
         result["daily_total_point"] = dailyTotalPoint;
         result["best_point"] = bestPoint;
         result["stages"] = std::move(stages);
         // quest_id 0 is the overall "合計グランプリPt." row.
-        const int64_t gpTotal = GrandPrixTotalPointLocked(gpId);
         result["stage_ranking_info_list"] = nlohmann::json::array({
-            {{"quest_id", 0}, {"rank_display_type", 1}, {"rank", gpTotal > 0 ? 1 : 0}, {"point", gpTotal}},
+            {{"quest_id", 0}, {"rank_display_type", 1}, {"rank", GrandPrixSimulatedRank(total, reference, inst->grandPrixType)}, {"point", total}},
         });
-        result["predicated_ranking_score_info"] = {
-            {"ranking_score", gpTotal}, {"contents_type", 2},
-        };
+        result["predicated_ranking_score_info"] = {{"ranking_score", total}, {"contents_type", 2}};
 
         MockStoredResponse response;
         response.body = result.dump();
@@ -7091,62 +7339,50 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GrandPrixGetStageListLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) return std::nullopt;
         if (!db) return std::nullopt;
+        const auto inst = GrandPrixCurrentLocked();
+        if (!inst) return std::nullopt;
 
         auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
         const int questId = payload.is_object() ? payload.value("quest_id", 0) : 0;
 
-        std::unordered_map<int, bool> clearedStages;
+        // A stage is cleared once played in this run; GrandPrixReleaseCondition
+        // type 1 opens a stage after its previous one.
+        std::unordered_set<int> played;
         {
             sqlite3_stmt* stmt = nullptr;
-            constexpr const char* sql =
-                "SELECT p.stage_id FROM grand_prix_progress p "
-                "JOIN grand_prix_stage s ON s.stage_id = p.stage_id "
-                "WHERE s.quest_id = ? AND p.play_count > 0;";
-            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
-                sqlite3_bind_int(stmt, 1, questId);
-                while (sqlite3_step(stmt) == SQLITE_ROW) {
-                    clearedStages[sqlite3_column_int(stmt, 0)] = true;
-                }
-                sqlite3_finalize(stmt);
+            if (sqlite3_prepare_v2(db, "SELECT DISTINCT stage_id FROM grand_prix_play WHERE ordinal = ? AND quest_id = ?;",
+                                   -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int64(stmt, 1, inst->ordinal);
+                sqlite3_bind_int(stmt, 2, questId);
+                while (sqlite3_step(stmt) == SQLITE_ROW) played.insert(sqlite3_column_int(stmt, 0));
             }
+            if (stmt) sqlite3_finalize(stmt);
         }
+        const auto [playable, playCount] = GrandPrixPlayCountsLocked(inst->ordinal, questId);
 
         nlohmann::json stageList = nlohmann::json::array();
-        {
-            sqlite3_stmt* stmt = nullptr;
-            constexpr const char* sql =
-                "SELECT stage_id, release_condition_type, release_condition_value "
-                "FROM grand_prix_stage WHERE quest_id = ? ORDER BY order_id;";
-            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
-                sqlite3_bind_int(stmt, 1, questId);
-                while (sqlite3_step(stmt) == SQLITE_ROW) {
-                    const int stageId = sqlite3_column_int(stmt, 0);
-                    const int condType = sqlite3_column_int(stmt, 1);
-                    const int condVal = sqlite3_column_int(stmt, 2);
-
-                    bool isLock = false;
-                    if (condType == 1) {
-                        isLock = (clearedStages.find(condVal) == clearedStages.end());
-                    }
-
-                    const int clearStatus = clearedStages.count(stageId) ? 3 : 0;
-
-                    stageList.push_back({
-                        {"stage_id", stageId},
-                        {"clear_status", clearStatus},
-                        {"is_lock", isLock},
-                        {"playable_count", 1},
-                        {"play_count", clearedStages.count(stageId) ? 1 : 0},
-                        {"play_count_bonus_value", 10000},
-                    });
-                }
-                sqlite3_finalize(stmt);
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT stage_id, release_condition_type, release_condition_value FROM grand_prix_stage "
+                "WHERE quest_id = ? ORDER BY order_id;", -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, questId);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const int stageId = sqlite3_column_int(stmt, 0);
+                const bool isLock = sqlite3_column_int(stmt, 1) == 1 && !played.count(sqlite3_column_int(stmt, 2));
+                stageList.push_back({
+                    {"stage_id", stageId},
+                    {"clear_status", played.count(stageId) ? 3 : 0},
+                    {"is_lock", isLock},
+                    {"playable_count", playable},
+                    {"play_count", playCount},
+                    {"play_count_bonus_value", 10000},
+                });
             }
         }
+        if (stmt) sqlite3_finalize(stmt);
 
         nlohmann::json result;
         result["stage_list"] = std::move(stageList);
-
         MockStoredResponse response;
         response.body = result.dump();
         return response;
@@ -7155,24 +7391,27 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GrandPrixGetStageDataLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) return std::nullopt;
         if (!db) return std::nullopt;
+        const auto inst = GrandPrixCurrentLocked();
+        if (!inst) return std::nullopt;
 
         auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
         const int stageId = payload.is_object() ? payload.value("stage_id", 0) : 0;
 
         int musicsType = 0;
         int musicsDetail = 0;
+        int questId = 0;
         {
             sqlite3_stmt* stmt = nullptr;
-            constexpr const char* sql =
-                "SELECT quest_musics_type, quest_musics_detail FROM grand_prix_stage WHERE stage_id = ?;";
-            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            if (sqlite3_prepare_v2(db, "SELECT quest_musics_type, quest_musics_detail, quest_id FROM grand_prix_stage WHERE stage_id = ?;",
+                                   -1, &stmt, nullptr) == SQLITE_OK && stmt) {
                 sqlite3_bind_int(stmt, 1, stageId);
                 if (sqlite3_step(stmt) == SQLITE_ROW) {
                     musicsType = sqlite3_column_int(stmt, 0);
                     musicsDetail = sqlite3_column_int(stmt, 1);
+                    questId = sqlite3_column_int(stmt, 2);
                 }
-                sqlite3_finalize(stmt);
             }
+            if (stmt) sqlite3_finalize(stmt);
         }
 
         nlohmann::json musicList = nlohmann::json::array();
@@ -7180,42 +7419,38 @@ namespace LinkuraLocal::HttpMock {
             musicList.push_back({{"m_musics_id", musicsDetail}, {"is_enable", true}});
         } else {
             sqlite3_stmt* mStmt = nullptr;
-            constexpr const char* mSql =
-                "SELECT music_id FROM music WHERE has_score = 1 ORDER BY music_id;";
-            if (sqlite3_prepare_v2(db, mSql, -1, &mStmt, nullptr) == SQLITE_OK && mStmt) {
+            if (sqlite3_prepare_v2(db, "SELECT music_id FROM music WHERE has_score = 1 ORDER BY music_id;", -1, &mStmt,
+                                   nullptr) == SQLITE_OK && mStmt) {
                 while (sqlite3_step(mStmt) == SQLITE_ROW) {
-                    musicList.push_back({
-                        {"m_musics_id", sqlite3_column_int(mStmt, 0)},
-                        {"is_enable", true},
-                    });
+                    musicList.push_back({{"m_musics_id", sqlite3_column_int(mStmt, 0)}, {"is_enable", true}});
                 }
-                sqlite3_finalize(mStmt);
             }
+            if (mStmt) sqlite3_finalize(mStmt);
         }
 
-        int playCount = 0;
+        bool stagePlayed = false;
         {
             sqlite3_stmt* stmt = nullptr;
-            constexpr const char* sql = "SELECT play_count FROM grand_prix_progress WHERE stage_id = ?;";
-            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
-                sqlite3_bind_int(stmt, 1, stageId);
-                if (sqlite3_step(stmt) == SQLITE_ROW) {
-                    playCount = sqlite3_column_int(stmt, 0);
-                }
-                sqlite3_finalize(stmt);
+            if (sqlite3_prepare_v2(db, "SELECT 1 FROM grand_prix_play WHERE ordinal = ? AND stage_id = ? LIMIT 1;", -1,
+                                   &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int64(stmt, 1, inst->ordinal);
+                sqlite3_bind_int(stmt, 2, stageId);
+                stagePlayed = sqlite3_step(stmt) == SQLITE_ROW;
             }
+            if (stmt) sqlite3_finalize(stmt);
         }
+        const auto [playable, played] = GrandPrixPlayCountsLocked(inst->ordinal, questId);
 
         nlohmann::json result;
         result["stage_name"] = "";
-        result["clear_status"] = (playCount > 0) ? 3 : 0;
+        result["clear_status"] = stagePlayed ? 3 : 0;
         result["stage_reward_list"] = nlohmann::json::array();
-        result["playable_count"] = 1;
-        result["play_count"] = playCount;
+        result["playable_count"] = playable;
+        result["play_count"] = played;
         result["play_count_bonus_value"] = 10000;
         result["skip_guarantee_point"] = 0;
         result["music_list"] = std::move(musicList);
-        result["is_today_playable"] = true;
+        result["is_today_playable"] = played < playable;
 
         MockStoredResponse response;
         response.body = result.dump();
@@ -7223,9 +7458,17 @@ namespace LinkuraLocal::HttpMock {
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GrandPrixGetRankingListLocked(std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        const auto inst = db ? GrandPrixCurrentLocked() : std::nullopt;
+        int64_t myRank = 0;
+        if (inst) {
+            myRank = GrandPrixSimulatedRank(GrandPrixTotalPointLocked(inst->ordinal),
+                                            GrandPrixReferencePointLocked(inst->grandPrixId, 0) * (inst->endDay - inst->startDay),
+                                            inst->grandPrixType);
+        }
         nlohmann::json result;
         result["status"] = 2;
-        result["my_rank"] = 0;
+        result["my_rank"] = myRank;
         result["lowest_rank"] = 0;
         result["point_rankings"] = nlohmann::json::array();
 
@@ -7236,19 +7479,143 @@ namespace LinkuraLocal::HttpMock {
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GrandPrixGetResultLocked(std::string_view payloadJson) {
         if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const auto inst = GrandPrixCurrentLocked();
+        if (!inst) return std::nullopt;
 
         const int64_t score = currentQuestLive.score;
         const int stageId = currentQuestLive.stageId;
         const int musicId = currentQuestLive.musicId;
-        const int64_t dailyScore = score / 1000;
+        const int questId = GrandPrixQuestOfStageLocked(stageId);
+        const int64_t today = DailyBusinessDay(std::time(nullptr));
+
+        // Stage rank bonus: the ScoreBonusValue of the rank the score reached.
+        int64_t stageBonus = 10000;
+        {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db, "SELECT score1, score2, score3, bonus0, bonus1, bonus2, bonus3 FROM grand_prix_stage "
+                                       "WHERE stage_id = ?;", -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int(stmt, 1, stageId);
+                if (sqlite3_step(stmt) == SQLITE_ROW) {
+                    int tier = 0;
+                    for (int i = 0; i < 3; ++i) {
+                        const int64_t threshold = sqlite3_column_int64(stmt, i);
+                        if (threshold > 0 && score >= threshold) tier = i + 1;
+                    }
+                    stageBonus = sqlite3_column_int64(stmt, 3 + tier);
+                }
+            }
+            if (stmt) sqlite3_finalize(stmt);
+        }
+        // Card bonus: rarity and limit break of every deck card (main and side styles), averaged.
+        std::map<std::pair<int, int>, int64_t> cardBonuses;  // (rarity, limit break) -> bonus
+        int64_t cardBonusSum = 0;
+        int cardCount = 0;
+        {
+            std::vector<std::string> cardIds;
+            for (const auto& slot : currentQuestLive.deckData.value("deck_cards_list", nlohmann::json::array())) {
+                if (!slot.is_object()) continue;
+                for (const auto& [key, value] : slot.items()) {
+                    if (value.is_string() && !value.get<std::string>().empty() && key.size() >= 15 &&
+                        key.compare(key.size() - 15, 15, "d_card_datas_id") == 0) {
+                        cardIds.push_back(value.get<std::string>());
+                    }
+                }
+            }
+            sqlite3_stmt* card = nullptr;
+            sqlite3_stmt* bonus = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "SELECT COALESCE(r.rarity, 0), COALESCE(ms.limit_break_times, cd.limit_break_times) FROM card_detail cd "
+                    "LEFT JOIN card_rarity r ON r.card_datas_id = cd.card_datas_id "
+                    "LEFT JOIN museum_card_state ms ON ms.d_card_datas_id = cd.d_card_datas_id "
+                    "WHERE cd.d_card_datas_id = ?;", -1, &card, nullptr) == SQLITE_OK && card &&
+                sqlite3_prepare_v2(db,
+                    "SELECT bonus_value FROM grand_prix_point_bonus WHERE grand_prix_id = ? AND target_type = 1 "
+                    "AND target_detail = ? AND target_num = ?;", -1, &bonus, nullptr) == SQLITE_OK && bonus) {
+                for (const auto& id : cardIds) {
+                    sqlite3_reset(card);
+                    BindText(card, 1, id);
+                    if (sqlite3_step(card) != SQLITE_ROW) continue;
+                    const int rarity = sqlite3_column_int(card, 0);
+                    const int limitBreak = std::clamp(sqlite3_column_int(card, 1), 0, kGrandPrixMaxLimitBreak);
+                    int64_t value = 10000;
+                    sqlite3_reset(bonus);
+                    sqlite3_bind_int(bonus, 1, inst->grandPrixId);
+                    sqlite3_bind_int(bonus, 2, rarity);
+                    sqlite3_bind_int(bonus, 3, limitBreak);
+                    if (sqlite3_step(bonus) == SQLITE_ROW) {
+                        value = sqlite3_column_int64(bonus, 0);
+                        cardBonuses[{rarity, limitBreak}] = value;
+                    }
+                    cardBonusSum += value;
+                    ++cardCount;
+                }
+            }
+            if (card) sqlite3_finalize(card);
+            if (bonus) sqlite3_finalize(bonus);
+        }
+        const int64_t cardBonus = cardCount > 0 ? cardBonusSum / cardCount : 10000;
+        const int64_t point = score * stageBonus / 10000 * cardBonus / 10000;
+
+        int64_t beforeDaily = 0;
+        int64_t beforeHighScore = 0;
+        {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "SELECT COALESCE(MAX(point), 0) FROM grand_prix_play WHERE ordinal = ? AND business_day = ? "
+                    "AND quest_id = ? AND counted = 1;", -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int64(stmt, 1, inst->ordinal);
+                sqlite3_bind_int64(stmt, 2, today);
+                sqlite3_bind_int(stmt, 3, questId);
+                if (sqlite3_step(stmt) == SQLITE_ROW) beforeDaily = sqlite3_column_int64(stmt, 0);
+            }
+            if (stmt) sqlite3_finalize(stmt);
+            if (sqlite3_prepare_v2(db, "SELECT high_score FROM grand_prix_progress WHERE stage_id = ?;", -1, &stmt,
+                                   nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int(stmt, 1, stageId);
+                if (sqlite3_step(stmt) == SQLITE_ROW) beforeHighScore = sqlite3_column_int64(stmt, 0);
+            }
+            if (stmt) sqlite3_finalize(stmt);
+        }
+        const auto [playable, played] = GrandPrixPlayCountsLocked(inst->ordinal, questId);
+        const bool counted = played < playable;
+        {
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "INSERT INTO grand_prix_play(ordinal, grand_prix_id, business_day, quest_id, stage_id, music_id, score, "
+                    "point, counted, played_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?);", -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int64(stmt, 1, inst->ordinal);
+                sqlite3_bind_int(stmt, 2, inst->grandPrixId);
+                sqlite3_bind_int64(stmt, 3, today);
+                sqlite3_bind_int(stmt, 4, questId);
+                sqlite3_bind_int(stmt, 5, stageId);
+                sqlite3_bind_int(stmt, 6, musicId);
+                sqlite3_bind_int64(stmt, 7, score);
+                sqlite3_bind_int64(stmt, 8, point);
+                sqlite3_bind_int(stmt, 9, counted ? 1 : 0);
+                sqlite3_bind_int64(stmt, 10, static_cast<int64_t>(std::time(nullptr)));
+                sqlite3_step(stmt);
+            }
+            if (stmt) sqlite3_finalize(stmt);
+            if (sqlite3_prepare_v2(db,
+                    "INSERT INTO grand_prix_progress (stage_id, high_score, daily_best_score, play_count) VALUES (?, ?, ?, 1) "
+                    "ON CONFLICT(stage_id) DO UPDATE SET high_score = MAX(high_score, excluded.high_score), "
+                    "daily_best_score = MAX(daily_best_score, excluded.daily_best_score), play_count = play_count + 1;",
+                    -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+                sqlite3_bind_int(stmt, 1, stageId);
+                sqlite3_bind_int64(stmt, 2, score);
+                sqlite3_bind_int64(stmt, 3, point);
+                sqlite3_step(stmt);
+            }
+            if (stmt) sqlite3_finalize(stmt);
+        }
 
         int masteryLevel = 1;
         int earnedMusicExp = 0;
-        if (db && musicId > 0) {
+        if (musicId > 0) {
             sqlite3_stmt* mastery = nullptr;
-            if (sqlite3_prepare_v2(db,
-                    "SELECT music_exp_level, earned_music_exp FROM music_mastery WHERE music_id=?;",
-                    -1, &mastery, nullptr) == SQLITE_OK && mastery) {
+            if (sqlite3_prepare_v2(db, "SELECT music_exp_level, earned_music_exp FROM music_mastery WHERE music_id=?;", -1,
+                                   &mastery, nullptr) == SQLITE_OK && mastery) {
                 sqlite3_bind_int(mastery, 1, musicId);
                 if (sqlite3_step(mastery) == SQLITE_ROW) {
                     masteryLevel = sqlite3_column_int(mastery, 0);
@@ -7258,35 +7625,10 @@ namespace LinkuraLocal::HttpMock {
             if (mastery) sqlite3_finalize(mastery);
         }
 
-        int64_t beforeHighScore = 0;
-        if (db) {
-            sqlite3_stmt* stmt = nullptr;
-            constexpr const char* sql = "SELECT high_score FROM grand_prix_progress WHERE stage_id = ?;";
-            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
-                sqlite3_bind_int(stmt, 1, stageId);
-                if (sqlite3_step(stmt) == SQLITE_ROW) {
-                    beforeHighScore = sqlite3_column_int64(stmt, 0);
-                }
-                sqlite3_finalize(stmt);
-            }
-        }
-
-        if (db) {
-            sqlite3_stmt* stmt = nullptr;
-            constexpr const char* sql =
-                "INSERT INTO grand_prix_progress (stage_id, high_score, daily_best_score, play_count) "
-                "VALUES (?, ?, ?, 1) "
-                "ON CONFLICT(stage_id) DO UPDATE SET "
-                "high_score = MAX(high_score, excluded.high_score), "
-                "daily_best_score = MAX(daily_best_score, excluded.daily_best_score), "
-                "play_count = play_count + 1;";
-            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt) {
-                sqlite3_bind_int(stmt, 1, stageId);
-                sqlite3_bind_int64(stmt, 2, score);
-                sqlite3_bind_int64(stmt, 3, dailyScore);
-                sqlite3_step(stmt);
-                sqlite3_finalize(stmt);
-            }
+        nlohmann::json bonusList = nlohmann::json::array();
+        for (const auto& [key, value] : cardBonuses) {
+            bonusList.push_back({{"target_type", 1}, {"target_detail", key.first}, {"target_num", key.second},
+                                 {"bonus_value", value}});
         }
 
         nlohmann::json result;
@@ -7308,11 +7650,12 @@ namespace LinkuraLocal::HttpMock {
         result["first_clear_flag"] = (beforeHighScore == 0);
         result["first_complete_clear_flag"] = (beforeHighScore == 0);
         result["is_limit_over_style_point"] = false;
-        result["daily_score"] = dailyScore;
+        result["daily_score"] = counted ? point : 0;
+        result["before_daily_score"] = beforeDaily;
         result["before_high_score"] = beforeHighScore;
-        result["is_rehearsal"] = false;
+        result["is_rehearsal"] = !counted;
         result["is_guarantee"] = false;
-        result["point_bonus_list"] = nlohmann::json::array();
+        result["point_bonus_list"] = std::move(bonusList);
 
         MockStoredResponse response;
         response.body = result.dump();
@@ -7369,7 +7712,7 @@ namespace LinkuraLocal::HttpMock {
                   ExecSql(db, "DELETE FROM grade_quest_stage;") &&
                   ExecSql(db, "DELETE FROM grade_add_skill;") &&
                   ExecSql(db, "DELETE FROM grade_quest_progress; DELETE FROM grade_point_ledger; DELETE FROM grade_quest_reward_received; DELETE FROM grade_reward_received;") &&
-                  ExecSql(db, "DELETE FROM grand_prix_progress;") &&
+                  ExecSql(db, "DELETE FROM grand_prix_progress; DELETE FROM grand_prix_play; DELETE FROM grand_prix_settlement; DELETE FROM grand_prix_calendar;") &&
                   ExecSql(db, "DELETE FROM grand_prix;") &&
                   ExecSql(db, "DELETE FROM grand_prix_series;") &&
                   ExecSql(db, "DELETE FROM grand_prix_stage;") &&

@@ -382,6 +382,77 @@ def main() -> int:
             expected = [rid for rid, value in rate_rewards if value <= 65]
             check("grade quest retire pays the reached live Pt. rate", expected and
                   retire["clear_grade_quest_rewards_id_list"] == expected, body[:300].decode())
+
+            # Live Grand Prix: the Master's Grand Prix run in order from the first visit, each for its
+            # original days. GP Pt. = score x stage rank bonus (no deck: no card bonus); the daily play
+            # limit makes further plays rehearsals; an ended run is settled and the next one starts.
+            def jst_day_start(offset: int = 0) -> str:
+                day = (int(time.time()) + 5 * 3600) // 86400 + offset
+                return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(day * 86400 - 5 * 3600))
+            with sqlite3.connect(db_path) as db:
+                first_gp, first_days = db.execute(
+                    "SELECT grand_prix_id, duration_days FROM grand_prix ORDER BY order_id LIMIT 1").fetchone()
+                quest_id, limit = db.execute("SELECT quest_id, play_limit_count FROM grand_prix_series "
+                                             "WHERE grand_prix_id=? ORDER BY order_id LIMIT 1", (first_gp,)).fetchone()
+                gp_stage = db.execute("SELECT stage_id, score1, score2, score3, bonus0, bonus1, bonus2, bonus3 "
+                                      "FROM grand_prix_stage WHERE quest_id=? ORDER BY order_id DESC LIMIT 1",
+                                      (quest_id,)).fetchone()
+            _, _, body = post(conn, "/v1/out_quest_live/get_quest_top", {})
+            top = json.loads(body)
+            check("grand prix starts with the Master's first one",
+                  top["grand_prix_id"] == first_gp and top["grand_prix_start_datetime"] == jst_day_start() and
+                  top["grand_prix_end_datetime"] == jst_day_start(first_days), json.dumps(top)[:300])
+
+            def gp_play(stage_id: int, score: int) -> dict:
+                _, _, body = post(conn, "/v1/out_quest_live/set_live_setting",
+                                  {"stage_id": stage_id, "deck_id": "", "music_id": 0, "quest_live_type": 6})
+                live_id = json.loads(body).get("quest_live_id", "")
+                post(conn, "/v1/in_quest_live/set_start", {"quest_live_id": live_id})
+                post(conn, "/v1/in_quest_live/set_finish", {"quest_live_id": live_id, "score": score, "play_report": ""})
+                _, _, body = post(conn, "/v1/out_quest_live/grand_prix/get_result", {"quest_live_id": live_id})
+                return json.loads(body)
+            stage_id, s1, s2, s3, b0, b1, b2, b3 = gp_stage
+            score = s2 + 1  # reaches rank 2
+            first = gp_play(stage_id, score)
+            check("grand prix GP Pt. = score x stage rank bonus",
+                  first["daily_score"] == score * b2 // 10000 and first["is_rehearsal"] is False, json.dumps(first)[:300])
+            second = gp_play(stage_id, s3 + 1)
+            check("grand prix plays past the daily limit are rehearsals",
+                  limit != 1 or (second["daily_score"] == 0 and second["is_rehearsal"] is True), json.dumps(second)[:200])
+            _, _, body = post(conn, "/v1/out_quest_live/grand_prix/get_stage_select", {"grand_prix_id": first_gp})
+            select = json.loads(body)
+            row = next(x for x in select["stages"] if x["quest_id"] == quest_id)
+            check("grand prix stage select shows today's best and the limit",
+                  row["daily_point"] == first["daily_score"] and row["play_count"] == min(2, limit or 99) and
+                  row["playable_count"] == (limit or 99) and row["daily_rank"] > 0, json.dumps(row))
+            _, _, body = post(conn, "/v1/out_quest_live/grand_prix/get_top_info", {"grand_prix_id": first_gp})
+            info = json.loads(body)
+            check("grand prix total and simulated rank",
+                  info["personal_total_point"] == first["daily_score"] and 1 < info["personal_ranking"] < 999999 and
+                  info["grand_prix_type"] == 1, json.dumps(info)[:300])
+            # End the run: move the calendar back by its length.
+            def item_num(item_id: int) -> int:
+                with sqlite3.connect(db_path) as db:
+                    row = db.execute("SELECT COALESCE(SUM(m.item_num),0) FROM museum_item_inventory m JOIN item i "
+                                     "USING(d_item_datas_id) WHERE i.item_id=?", (item_id,)).fetchone()
+                return row[0]
+            with sqlite3.connect(db_path) as db:
+                due = [r for row in db.execute(
+                    "SELECT rewards_json FROM grand_prix_reward WHERE grand_prix_id=? AND min_rank<=? AND max_rank>=?",
+                    (first_gp, info["personal_ranking"], info["personal_ranking"])) for r in json.loads(row[0])
+                    if r["reward_type"] in (1, 3)]
+                db.execute("UPDATE grand_prix_calendar SET epoch_day = epoch_day - ?", (first_days,))
+                second_gp = db.execute("SELECT grand_prix_id FROM grand_prix ORDER BY order_id LIMIT 1 OFFSET 1").fetchone()[0]
+            before = {r["item_id"]: item_num(r["item_id"]) for r in due}
+            _, _, body = post(conn, "/v1/out_quest_live/get_quest_top", {})
+            with sqlite3.connect(db_path) as db:
+                settled = db.execute("SELECT grand_prix_id, total_point, personal_rank FROM grand_prix_settlement").fetchall()
+            check("grand prix settles the ended run and starts the next",
+                  settled == [(first_gp, first["daily_score"], info["personal_ranking"])] and
+                  json.loads(body)["grand_prix_id"] == second_gp, f"{settled} {json.loads(body)['grand_prix_id']}")
+            check("grand prix rank rewards are paid",
+                  due and all(item_num(r["item_id"]) >= before[r["item_id"]] + r["num"] for r in due),
+                  f"{due} {before}")
             conn.close()
         finally:
             log += stop(proc)
