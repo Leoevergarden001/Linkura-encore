@@ -163,6 +163,27 @@ PLAYER_ID_PATCHES = (
     (0x31CEE90, "IdentityStorage::get_PlayerId: return", "012141f9", "c0035fd6"),
 )
 
+# IdentityStorage.get_DeviceSpecificId (same shape, field 0x40) is null for the
+# same reason. After login the client puts it into the API default headers
+# (APICommon.AddRequestHeaderValue "x-device-specific-id"); API calls tolerate
+# the null value, but every web view (メニュー > ヘルプ and the other support
+# pages) copies the default headers through WebViewObject.AddCustomHeader and
+# the null string aborts the app in -[NSPlaceholderString initWithBytes:...].
+# It returns the same offline id literal.
+DEVICE_ID_PATCHES = (
+    (0x31CEEC0, "IdentityStorage::get_DeviceSpecificId init: key slot -> player id literal slot", "c03103f0",
+     _adrp(0x31CEEC0, _PLAYER_ID_SLOT, 0)),
+    (0x31CEEC4, "IdentityStorage::get_DeviceSpecificId init: slot offset", "00000991",
+     _add_imm(0, 0, _PLAYER_ID_SLOT & 0xFFF)),
+    (0x31CEED4, "IdentityStorage::get_DeviceSpecificId: player id literal page", "602240f9",
+     _adrp(0x31CEED4, _PLAYER_ID_SLOT, 8)),
+    (0x31CEED8, "IdentityStorage::get_DeviceSpecificId: load player id literal", "e00000b4",
+     _ldr_x(0, 8, _PLAYER_ID_SLOT & 0xFFF)),
+    (0x31CEEDC, "IdentityStorage::get_DeviceSpecificId: restore frame", "c83103f0", "fd7b41a9"),
+    (0x31CEEE0, "IdentityStorage::get_DeviceSpecificId: restore registers", "1f2003d5", "f44fc2a8"),
+    (0x31CEEE4, "IdentityStorage::get_DeviceSpecificId: return", "012141f9", "c0035fd6"),
+)
+
 # Hailstorm's AssetCatalogSynchronizer.SynchronizeRemoteCatalog downloads the
 # resource manifest unless the saved resource version equals the requested
 # one. The saved version is per-player local storage: without the source
@@ -371,8 +392,8 @@ def rewrite_res_version_literal(data: bytes, res_version: str) -> tuple[bytes, l
 
 
 def fixed_player_id(framework: bytes) -> tuple[bytes, list[dict]]:
-    """Report the offline player id instead of reading it from PlayerPrefs."""
-    return patch_code(framework, PLAYER_ID_PATCHES)
+    """Report the offline id as player id and device id instead of reading PlayerPrefs."""
+    return patch_code(framework, PLAYER_ID_PATCHES + DEVICE_ID_PATCHES)
 
 
 def rewrite_player_id_literal(data: bytes, player_id: str = OFFLINE_PLAYER_ID) -> tuple[bytes, list[LiteralPatch]]:

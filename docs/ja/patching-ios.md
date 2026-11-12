@@ -51,6 +51,7 @@ alias re='python3 tools/re/il2cpp_re.py -f UnityFramework -s sym.json'
 | `RES_VERSION_PATCHES` | 個別のプレイヤーストレージを読まず、キャッシュのアセットバージョン（`--res-version`）を返します | `--per-player-res-version` |
 | `CATALOG_SYNC_PATCHES` | リソースカタログをダウンロードせず、キャッシュのカタログを保持します | `--allow-catalog-sync` |
 | `PLAYER_ID_PATCHES` | Android と同じくプレイヤー ID を 000000000 に固定し、元のアカウントの PlayerPrefs を不要にします | `--keep-player-id` |
+| `DEVICE_ID_PATCHES` | デバイス固有 ID も 000000000 を返します。null のままだとヘルプなどの Web ビューを開いたときにクラッシュしていました | `--keep-player-id` |
 
 最後の三つのグループにより、iOS はカタログDBのストレージキーだけで動きます。文字列を返す必要がある場合は、実行時に使われない文字列定数（Mono BTLS のエラーメッセージ）に必要な値を書き、メソッドの metadata 初期化がそのスロットを参照するようにします。
 

@@ -49,6 +49,7 @@ alias re='python3 tools/re/il2cpp_re.py -f UnityFramework -s sym.json'
 | `RES_VERSION_PATCHES` | 资源版本始终报告缓存的版本（`--res-version`），不读每个玩家的本地存储 | `--per-player-res-version` |
 | `CATALOG_SYNC_PATCHES` | 保留缓存里的资源目录，不下载资源清单 | `--allow-catalog-sync` |
 | `PLAYER_ID_PATCHES` | 玩家 ID 固定为 000000000（和 Android 一致），不需要原账号的 PlayerPrefs | `--keep-player-id` |
+| `DEVICE_ID_PATCHES` | 设备专属 ID 也返回 000000000。原本为空，打开ヘルプ等网页时会闪退 | `--keep-player-id` |
 
 后三组让 iOS 只凭资源目录库的存储密钥就能运行。需要返回一个字符串时，借用一个运行时不会用到的字符串常量（Mono BTLS 的报错信息），改写成需要的值，再把方法的元数据初始化指向它的槽位。
 

@@ -22,6 +22,7 @@ from tools.linkura_offline.ios_offline import (
     rewrite_player_id_literal,
     PLAYER_ID_LITERAL,
     PLAYER_ID_PATCHES,
+    DEVICE_ID_PATCHES,
     OFFLINE_PLAYER_ID,
     block_story_playback,
     hide_title_player_id,
@@ -229,7 +230,7 @@ class LyricVideoPatchTest(unittest.TestCase):
 
     def test_fixed_player_id_returns_carrier_literal(self):
         out, applied = fixed_player_id(self.framework)
-        self.assertEqual(len(applied), len(PLAYER_ID_PATCHES))
+        self.assertEqual(len(applied), len(PLAYER_ID_PATCHES) + len(DEVICE_ID_PATCHES))
 
         def word(pc):
             return int.from_bytes(out[pc:pc + 4], "little")
@@ -248,6 +249,13 @@ class LyricVideoPatchTest(unittest.TestCase):
         # epilogue is the original one, followed by ret
         self.assertEqual(out[0x31CEE88:0x31CEE90], self.framework[0x31CEE94:0x31CEE9C])
         self.assertEqual(out[0x31CEE90:0x31CEE94].hex(), "c0035fd6")
+        # get_DeviceSpecificId (web view headers) returns the same literal
+        self.assertEqual(adrp_target(0x31CEEC0) + ((word(0x31CEEC4) >> 10) & 0xFFF), 0x985C160)
+        ldr = word(0x31CEED8)
+        self.assertEqual(ldr & 0xFFC00000, 0xF9400000)
+        self.assertEqual(adrp_target(0x31CEED4) + (((ldr >> 10) & 0xFFF) << 3), 0x985C160)
+        self.assertEqual(out[0x31CEEDC:0x31CEEE4], self.framework[0x31CEEE8:0x31CEEF0])
+        self.assertEqual(out[0x31CEEE4:0x31CEEE8].hex(), "c0035fd6")
 
     def test_catalog_sync_takes_versions_equal_branch(self):
         before = int.from_bytes(self.framework[0x323B564:0x323B568], "little")

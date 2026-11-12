@@ -51,6 +51,7 @@ alias re='python3 tools/re/il2cpp_re.py -f UnityFramework -s sym.json'
 | `RES_VERSION_PATCHES` | Always report the cached asset version (`--res-version`), ignoring per-player local storage | `--per-player-res-version` |
 | `CATALOG_SYNC_PATCHES` | Keep the cached catalog instead of downloading a new one | `--allow-catalog-sync` |
 | `PLAYER_ID_PATCHES` | Fix player ID to 000000000, as on Android; no original account PlayerPrefs needed | `--keep-player-id` |
+| `DEVICE_ID_PATCHES` | Return 000000000 as the device-specific ID too. It was null, and opening a web view such as Help crashed the app | `--keep-player-id` |
 
 The last three groups let iOS run with only the catalog database's storage key. When a method must return a string, the patch repurposes an unused runtime string constant (a Mono BTLS error), writes the desired value, and points the method's metadata initialization at that slot.
 
