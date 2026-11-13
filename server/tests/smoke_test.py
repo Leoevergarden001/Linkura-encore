@@ -688,8 +688,10 @@ def main() -> int:
 
             # セレクトチケット: held tickets are listed; one ticket picks one card.
             _, _, body = post(conn, "/v1/gacha/get_series_list", {})
-            gacha_tickets = {e["select_ticket_series_id"]: e["user_exchange_ticket_num"]
-                             for e in json.loads(body)["select_ticket_series_list"]}
+            gacha_entries = json.loads(body)["select_ticket_series_list"]
+            gacha_tickets = {e["select_ticket_series_id"]: e["user_exchange_ticket_num"] for e in gacha_entries}
+            check("select tickets are not on sale offline", gacha_entries and
+                  not any(e["is_sale_select_ticket"] for e in gacha_entries))
             _, _, body = post(conn, "/v1/select_ticket_exchange/get_list", {})
             shop_tickets = {e["select_ticket_series_id"]: e["user_select_ticket_num"]
                             for e in json.loads(body)["select_ticket_exchange_list"]}

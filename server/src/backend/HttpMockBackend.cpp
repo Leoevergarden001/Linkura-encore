@@ -2502,12 +2502,15 @@ namespace LinkuraLocal::HttpMock {
             seriesList.push_back(std::move(series));
         }
         // セレクトチケット: the Gacha screen's ticket exchange lists the held tickets.
+        // is_sale_select_ticket marks a ticket that is on sale (the client then
+        // offers 「セレクトチケットを購入」 with the sale's 福袋 banner); nothing
+        // can be bought offline.
         nlohmann::json selectTickets = nlohmann::json::array();
         for (const auto& ticket : SelectTicketSeriesListLocked()) {
             selectTickets.push_back({
                 {"select_ticket_series_id", ticket["id"]},
                 {"user_exchange_ticket_num", ticket["held"]},
-                {"is_sale_select_ticket", true},
+                {"is_sale_select_ticket", false},
             });
         }
         response["select_ticket_series_list"] = std::move(selectTickets);
