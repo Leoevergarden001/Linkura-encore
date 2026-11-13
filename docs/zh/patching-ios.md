@@ -44,6 +44,7 @@ alias re='python3 tools/re/il2cpp_re.py -f UnityFramework -s sym.json'
 | `LYRIC_VIDEO_PATCHES` | SHOW 歌词 MV 视为关闭（MV 资源没有保存） | 默认关，`--disable-lyric-videos` 打开 |
 | `DESTRUCTIVE_ACTION_PATCHES` | 缓存删除、登出、删除用户等 8 个入口直接返回 | `--allow-destructive-actions` |
 | `STORY_PLAYBACK_PATCHES` | 剧情再生确认的 OK 改为关闭 | `--allow-story-playback` |
+| `ARCHIVE_PLAYBACK_PATCHES` | スクールアイドルコネクト ARCHIVES 里点存档不再进入回放（回放需要的 3D 资源没有保存，会弹下载错误） | `--allow-archive-playback` |
 | `TITLE_ID_PATCHES` | 标题页不显示玩家 ID | — |
 | `CHAPTER_PORTAL_PATCHES` | Chapter RANK 点击改为期间外提示 | `--allow-chapter-portal` |
 | `RES_VERSION_PATCHES` | 资源版本始终报告缓存的版本（`--res-version`），不读每个玩家的本地存储 | `--per-player-res-version` |

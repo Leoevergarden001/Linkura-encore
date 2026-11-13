@@ -83,6 +83,16 @@ STORY_PLAYBACK_PATCHES = (
     (0x2D3DE94, "TPopupPlayBackDialog::OnClickOk -> OnClickCancel", "ff0301d1", "4d000014"),
 )
 
+# スクールアイドルコネクト ARCHIVES: tapping an archive goes straight to the live
+# scene (SchoolConnectArchiveListView.EnterToLiveScene -> LiveSceneHelper.
+# OutGameToLiveAsync, no checks), which then downloads the replay's 3D stage,
+# costume and timeline assets.  Those were never saved and the CDN answers 404,
+# so the player gets 「ダウンロードエラー」.  Return from EnterToLiveScene at
+# once (an instance method returning void) so a tap does nothing.
+ARCHIVE_PLAYBACK_PATCHES = (
+    (0x23696B0, "SchoolConnectArchiveListView::EnterToLiveScene -> ret", "f657bda9", "c0035fd6"),
+)
+
 # Chapter RANK in the Home header opens the Chapter portal when the header
 # rank (CommonApiCache.CurrentChapterRank) is non-zero.  The portal loads
 # chapter_prefab_100031 and its three images, which were never saved (empty
@@ -371,6 +381,11 @@ def block_story_playback(framework: bytes) -> tuple[bytes, list[dict]]:
     return patch_code(framework, STORY_PLAYBACK_PATCHES)
 
 
+def block_archive_playback(framework: bytes) -> tuple[bytes, list[dict]]:
+    """Make an archive tap do nothing instead of starting a failing download."""
+    return patch_code(framework, ARCHIVE_PLAYBACK_PATCHES)
+
+
 def block_chapter_portal(framework: bytes) -> tuple[bytes, list[dict]]:
     """Show the Chapter period alert instead of opening the unsaved portal."""
     return patch_code(framework, CHAPTER_PORTAL_PATCHES)
@@ -446,6 +461,7 @@ def stage_offline_ios_client(
     guard_destructive: bool = True,
     compat_patches: bool = True,
     block_story: bool = True,
+    block_archive: bool = True,
     hide_title_id: bool = True,
     block_chapter: bool = True,
     skip_catalog: bool = True,
@@ -503,7 +519,7 @@ def stage_offline_ios_client(
             main: insert_dylib(main_data, DYLIB_INSTALL_NAME),
         }
         code_patches: list[dict] = []
-        if (disable_lyric_videos or guard_destructive or compat_patches or block_story or hide_title_id
+        if (disable_lyric_videos or guard_destructive or compat_patches or block_story or block_archive or hide_title_id
                 or block_chapter or skip_catalog or res_version or player_id):
             if framework not in members:
                 raise IosError("UnityFramework not found")
@@ -512,6 +528,7 @@ def stage_offline_ios_client(
                                      (disable_lyric_videos, disable_lyric_video),
                                      (guard_destructive, guard_destructive_actions),
                                      (block_story, block_story_playback),
+                                     (block_archive, block_archive_playback),
                                      (hide_title_id, hide_title_player_id),
                                      (block_chapter, block_chapter_portal),
                                      (skip_catalog, skip_catalog_sync),
@@ -563,6 +580,7 @@ def stage_offline_ios_client(
         "guardDestructiveActions": guard_destructive,
         "compatPatches": compat_patches,
         "blockStoryPlayback": block_story,
+        "blockArchivePlayback": block_archive,
         "hideTitlePlayerId": hide_title_id,
         "blockChapterPortal": block_chapter,
         "skipCatalogSync": skip_catalog,

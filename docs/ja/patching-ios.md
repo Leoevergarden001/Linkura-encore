@@ -46,6 +46,7 @@ alias re='python3 tools/re/il2cpp_re.py -f UnityFramework -s sym.json'
 | `LYRIC_VIDEO_PATCHES` | SHOW の歌詞 MV をオフ扱いにします（MV アセット未保存） | 既定ではオフ。`--disable-lyric-videos` で有効化 |
 | `DESTRUCTIVE_ACTION_PATCHES` | キャッシュ削除、ログアウト、ユーザー削除など八つの入口から即座に戻ります | `--allow-destructive-actions` |
 | `STORY_PLAYBACK_PATCHES` | ストーリー再生確認の OK でダイアログを閉じます | `--allow-story-playback` |
+| `ARCHIVE_PLAYBACK_PATCHES` | スクールアイドルコネクト ARCHIVES のアーカイブをタップしても再生に進みません（再生に必要な 3D アセットが保存されておらず、ダウンロードエラーになります） | `--allow-archive-playback` |
 | `TITLE_ID_PATCHES` | タイトル画面のプレイヤー ID を隠します | — |
 | `CHAPTER_PORTAL_PATCHES` | Chapter RANK タップ時に対象期間外の通知を出します | `--allow-chapter-portal` |
 | `RES_VERSION_PATCHES` | 個別のプレイヤーストレージを読まず、キャッシュのアセットバージョン（`--res-version`）を返します | `--per-player-res-version` |

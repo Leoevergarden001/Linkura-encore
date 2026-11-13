@@ -7,7 +7,7 @@
 | 活動記録的剧情播放 | 再生确认后弹窗关闭，不播放 | 剧情配音和大部分 3D 场景、动作没有保存。剧本文本（`story_main_*.txt`）通常完整，可以用 `hailstorm.py decrypt` 查看 |
 | SHOW 歌词 MV | 选项固定关闭（iOS 打包参数 `--disable-lyric-videos`） | MV 视频基本没有保存 |
 | Chapter RANK | 顶栏显示 SS，点击提示「Chapter対象期間外です」 | Chapter 页面资源从未保存；最后一个 Chapter 按主数据于 2026-06-30 结束 |
-| With×STATION、Fes×Live 存档 | 列表为空 | 视频没有保存 |
+| スクールアイドルコネクト 存档 | ARCHIVES 显示 16 个存档和各自的封面（封面需放在 `assets/` 下）；点存档没有反应（打包参数 `--allow-archive-playback` 可恢复）；With×STATION 列表为空 | 回放需要的 3D 舞台、服装、时间轴资源和视频没有保存，官方 CDN 已 404；官方 CDN 也删掉了大部分封面 |
 | お知らせ | 空白 | 公告由服务器下发，没有保存 |
 | キャッシュ削除、登出、删除用户 | 无效 | 离线下会清掉无法再下载的资源或本地身份 |
 | SIsCa 弹窗数字 | 末位被截断 | 原版界面宽度限制 |

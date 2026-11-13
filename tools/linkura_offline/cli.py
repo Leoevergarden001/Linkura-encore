@@ -37,6 +37,7 @@ def _ios_stage(args: argparse.Namespace) -> int:
         disable_lyric_videos=args.disable_lyric_videos,
         guard_destructive=not args.allow_destructive_actions,
         block_story=not args.allow_story_playback,
+        block_archive=not args.allow_archive_playback,
         block_chapter=not args.allow_chapter_portal,
         skip_catalog=not args.allow_catalog_sync,
         res_version=None if args.per_player_res_version else args.res_version,
@@ -140,6 +141,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="keep cache delete / logout / user delete working (default: buttons do nothing)")
     p.add_argument("--allow-story-playback", action="store_true",
                    help="let 活動記録 再生 start its download (default: the dialog just closes)")
+    p.add_argument("--allow-archive-playback", action="store_true",
+                   help="let a スクールアイドルコネクト archive start its replay download (default: a tap does nothing)")
     p.add_argument("--allow-chapter-portal", action="store_true",
                    help="let Chapter RANK open the Chapter portal (its assets were not saved)")
     p.add_argument("--res-version", default=DEFAULT_RES_VERSION,

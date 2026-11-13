@@ -46,6 +46,7 @@ alias re='python3 tools/re/il2cpp_re.py -f UnityFramework -s sym.json'
 | `LYRIC_VIDEO_PATCHES` | Treat SHOW lyric MV as off because MV assets were not saved | Off by default; enable with `--disable-lyric-videos` |
 | `DESTRUCTIVE_ACTION_PATCHES` | Return immediately from eight cache deletion, logout, and user deletion entry points | `--allow-destructive-actions` |
 | `STORY_PLAYBACK_PATCHES` | Make OK in the story playback confirmation close the dialog | `--allow-story-playback` |
+| `ARCHIVE_PLAYBACK_PATCHES` | Make a tap on a スクールアイドルコネクト ARCHIVES entry do nothing (the replay needs 3D assets that were not saved, so it ends in a download error) | `--allow-archive-playback` |
 | `TITLE_ID_PATCHES` | Hide player ID on the title screen | — |
 | `CHAPTER_PORTAL_PATCHES` | Tapping Chapter RANK shows the out-of-period notice | `--allow-chapter-portal` |
 | `RES_VERSION_PATCHES` | Always report the cached asset version (`--res-version`), ignoring per-player local storage | `--per-player-res-version` |

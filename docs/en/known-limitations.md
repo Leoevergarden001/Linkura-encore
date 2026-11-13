@@ -9,7 +9,7 @@ The offline edition depends on assets saved before shutdown. Missing assets cann
 | 活動記録 story playback | The confirmation closes without playback | Story voices and most 3D scenes and motions were not saved. Script text (`story_main_*.txt`) is usually complete and can be inspected with `hailstorm.py decrypt`. |
 | SHOW lyric MV | Option forced off (iOS packaging option `--disable-lyric-videos`) | Most MV videos were not saved. |
 | Chapter RANK | Top bar shows SS; tapping displays 「Chapter対象期間外です」 | Chapter page assets were never saved; the last Chapter ended June 30, 2026 according to master data. |
-| With×STATION and Fes×Live archives | Empty lists | Videos were not saved. |
+| スクールアイドルコネクト archives | ARCHIVES lists 16 archives with their own covers (the covers go under `assets/`); tapping an archive does nothing (packaging option `--allow-archive-playback` restores it); the With×STATION list is empty | The replays' 3D stage, costume and timeline assets and the videos were not saved, and the official CDN answers 404; the CDN also removed most covers. |
 | お知らせ | Blank | Notices came from the server and were not saved. |
 | キャッシュ削除, ログアウト, ユーザー削除 | No effect | Offline, these would erase assets or local identity that cannot be downloaded again. |
 | SIsCa dialog number | Last digit is clipped | Width limit in the original UI. |

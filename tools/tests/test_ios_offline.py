@@ -25,6 +25,7 @@ from tools.linkura_offline.ios_offline import (
     DEVICE_ID_PATCHES,
     OFFLINE_PLAYER_ID,
     block_story_playback,
+    block_archive_playback,
     hide_title_player_id,
     disable_lyric_video,
     guard_destructive_actions,
@@ -196,6 +197,11 @@ class LyricVideoPatchTest(unittest.TestCase):
         word = int.from_bytes(out[0x2D3DE94:0x2D3DE98], "little")
         self.assertEqual(word >> 26, 0b000101)  # B, not BL
         self.assertEqual(0x2D3DE94 + ((word & 0x3FFFFFF) << 2), 0x2D3DFC8)
+
+    def test_archive_tap_returns_at_once(self):
+        out, applied = block_archive_playback(self.framework)
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(out[0x23696B0:0x23696B4], bytes.fromhex("c0035fd6"))  # ret
 
     def test_chapter_rank_tap_takes_period_alert_branch(self):
         before = int.from_bytes(self.framework[0x2EB0FE8:0x2EB0FEC], "little")
