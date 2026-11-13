@@ -475,6 +475,9 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> RhythmGameSetFinishLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> ModifyRhythmGameDeckListLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> RhythmGameReceiveTotalMissionLocked();
+        bool AddFreeJewelsLocked(int64_t amount);
+        bool BackfillRhythmTotalMissionJewelsLocked();
+        bool LoadGachaStateOnlyIfPresentLocked();
         int GetRhythmTotalMissionReceivedOrderLocked();
     };
 
@@ -810,7 +813,7 @@ namespace LinkuraLocal::HttpMock {
             return false;
         }
 
-        if (!BackfillMissionHistoryLocked()) {
+        if (!BackfillMissionHistoryLocked() || !BackfillRhythmTotalMissionJewelsLocked()) {
             persistentStorageAvailable = false;
             return false;
         }
@@ -3851,6 +3854,9 @@ namespace LinkuraLocal::HttpMock {
                      sqlite3_bind_int(grant, 2, reward.value("item_id", 0)) == SQLITE_OK &&
                      sqlite3_step(grant) == SQLITE_DONE;
                 if (!ok) break;
+                // SIsCa is spent and shown from the gacha wallet, not the inventory row.
+                if (reward.value("item_id", 0) == 1002001) ok = AddFreeJewelsLocked(reward.value("num", int64_t{0}));
+                if (!ok) break;
             }
             if (!ok) break;
             receivedIds.push_back(mission.value("id", 0));
@@ -3875,9 +3881,70 @@ namespace LinkuraLocal::HttpMock {
             {"received_total_mission_ids", std::move(receivedIds)},
             {"received_total_mission_order", receivedAfter},
         };
-        MockStoredResponse response;
-        response.body = result.dump();
-        return response;
+        return MockStoredResponse{result.dump(), WalletHeadersLocked(), 200, "OK"};
+    }
+
+    bool HttpMockBackend::Impl::AddFreeJewelsLocked(int64_t amount) {
+        if (amount <= 0) return true;
+        sqlite3_stmt* wallet = nullptr;
+        const bool ok = sqlite3_prepare_v2(db,
+            "UPDATE museum_gacha_state SET free_jewels=free_jewels+? WHERE series_id=1055003;",
+            -1, &wallet, nullptr) == SQLITE_OK && wallet &&
+            sqlite3_bind_int64(wallet, 1, amount) == SQLITE_OK && sqlite3_step(wallet) == SQLITE_DONE;
+        if (wallet) sqlite3_finalize(wallet);
+        return ok;
+    }
+
+    // SHOW total-mission SIsCa used to reach only the inventory row, never the
+    // wallet the game spends and shows. Once per save, pay the wallet the SIsCa
+    // of the total missions received so far (orders 4, 8, ... carry SIsCa).
+    bool HttpMockBackend::Impl::BackfillRhythmTotalMissionJewelsLocked() {
+        static constexpr const char* kMarker = "rhythm_total_mission_sisca_wallet";
+        sqlite3_stmt* stmt = nullptr;
+        bool done = false;
+        if (sqlite3_prepare_v2(db, "SELECT 1 FROM offline_mission_meta WHERE key=?;", -1, &stmt, nullptr) == SQLITE_OK &&
+            stmt && BindText(stmt, 1, kMarker)) {
+            done = sqlite3_step(stmt) == SQLITE_ROW;
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        if (done) return true;
+        const int received = GetRhythmTotalMissionReceivedOrderLocked();
+        int64_t owed = 0;
+        const auto& catalog = OfflineApiMockBuiltIn::RhythmTotalMissionsJsonObj();
+        if (catalog.is_object() && catalog.contains("total_missions")) {
+            for (const auto& mission : catalog["total_missions"]) {
+                if (mission.value("order_id", 0) > received) continue;
+                for (const auto& reward : mission.value("rewards", nlohmann::json::array())) {
+                    if (reward.value("item_id", 0) == 1002001) owed += reward.value("num", int64_t{0});
+                }
+            }
+        }
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return false;
+        bool ok = true;
+        if (owed > 0 && LoadGachaStateOnlyIfPresentLocked()) {
+            ok = AddFreeJewelsLocked(owed) && ExecSql(db,
+                "UPDATE museum_item_inventory SET item_num=(SELECT free_jewels FROM museum_gacha_state WHERE series_id=1055003) "
+                "WHERE d_item_datas_id=(SELECT d_item_datas_id FROM item WHERE item_id=1002001 LIMIT 1);");
+        }
+        sqlite3_stmt* mark = nullptr;
+        ok = ok && sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO offline_mission_meta(key,value) VALUES(?,?);", -1, &mark,
+                                      nullptr) == SQLITE_OK && mark && BindText(mark, 1, kMarker) &&
+             BindText(mark, 2, std::to_string(owed)) && sqlite3_step(mark) == SQLITE_DONE;
+        if (mark) sqlite3_finalize(mark);
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return false;
+        }
+        if (owed > 0) Log::InfoFmt("[HttpMockBackend] SHOW total mission SIsCa paid to the wallet: %lld", static_cast<long long>(owed));
+        return true;
+    }
+
+    bool HttpMockBackend::Impl::LoadGachaStateOnlyIfPresentLocked() {
+        sqlite3_stmt* stmt = nullptr;
+        const bool present = sqlite3_prepare_v2(db, "SELECT 1 FROM museum_gacha_state WHERE series_id=1055003;", -1, &stmt,
+                                                nullptr) == SQLITE_OK && stmt && sqlite3_step(stmt) == SQLITE_ROW;
+        if (stmt) sqlite3_finalize(stmt);
+        return present;
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::RhythmGameSetStartLocked(std::string_view payloadJson) {

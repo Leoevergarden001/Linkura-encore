@@ -194,6 +194,19 @@ def main() -> int:
             check("receive total mission is idempotent", json.loads(body)["received_total_mission_ids"] == [])
             status, _, body = post(conn, "/v1/rhythm_game/home", {})
             check("rhythm home total order 1", json.loads(body)["received_total_mission_order"] == 1)
+            # Total mission 4 pays 500 SIsCa: it must reach the gacha wallet the game spends and shows.
+            def free_jewels() -> int:
+                with sqlite3.connect(db_path) as db:
+                    return db.execute("SELECT free_jewels FROM museum_gacha_state WHERE series_id=1055003").fetchone()[0]
+            jewels_before = free_jewels()
+            with sqlite3.connect(db_path) as db:
+                db.execute("INSERT OR REPLACE INTO rhythm_music_score(music_id,clear_count,total_score_accumulated,"
+                           "high_score) VALUES(1,40,50000000,30000000)")
+            status, headers, body = post(conn, "/v1/rhythm_game/receive_total_mission", {})
+            check("SHOW total mission SIsCa reaches the wallet",
+                  json.loads(body)["received_total_mission_order"] == 4 and free_jewels() == jewels_before + 500 and
+                  f"jewel_free: {jewels_before + 500}" in "\n".join(f"{k}: {v}" for k, v in headers.items()),
+                  f"{body[:120].decode()} {jewels_before} -> {free_jewels()}")
 
             # Archive / circle screens that used to 404.
             status, _, body = post(conn, "/v1/archive/get_ranking_list", {"member_id": 1021, "target_period": 1})
