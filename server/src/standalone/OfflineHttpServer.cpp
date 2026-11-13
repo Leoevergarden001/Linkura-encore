@@ -70,6 +70,37 @@ namespace LinkuraLocal::Standalone {
             return root / (path.substr(1) + suffix);
         }
 
+        // Archive covers (thumbnail_image_url) point at the official CDN, which
+        // no longer serves most of them. When <assetRoot> holds a file at the
+        // same path, point the URL at this server's /a/ instead; other URLs are
+        // left as they are.
+        void RedirectLocalAssets(std::string& body, const ServerConfig& config) {
+            static const std::string kCdn = "https://assets.link-like-lovelive.app/";
+            if (config.assetRoot.empty()) return;
+            const std::string local = "http://127.0.0.1:" + std::to_string(config.port) + "/a/";
+            size_t pos = 0;
+            while ((pos = body.find(kCdn, pos)) != std::string::npos) {
+                const size_t end = body.find('"', pos);
+                if (end == std::string::npos) break;
+                const auto file = MockFile(config.assetRoot, "/" + body.substr(pos + kCdn.size(), end - pos - kCdn.size()), "");
+                std::error_code ec;
+                if (!file.empty() && std::filesystem::is_regular_file(file, ec)) {
+                    body.replace(pos, kCdn.size(), local);
+                    pos += local.size();
+                } else {
+                    pos += kCdn.size();
+                }
+            }
+        }
+
+        const char* AssetContentType(const std::string& path) {
+            const auto dot = path.rfind('.');
+            const std::string ext = dot == std::string::npos ? std::string{} : Lower(path.substr(dot + 1));
+            if (ext == "jpg" || ext == "jpeg") return "image/jpeg";
+            if (ext == "png") return "image/png";
+            return "application/octet-stream";
+        }
+
         // The iOS client reads its paid balance from jewel_paid_apple; the
         // backend keeps the wallet in jewel_paid_google. Mirror the value.
         void MirrorAppleWallet(std::string& headers) {
@@ -171,7 +202,7 @@ namespace LinkuraLocal::Standalone {
             std::error_code ec;
             if (!file.empty() && std::filesystem::is_regular_file(file, ec)) {
                 Log::InfoFmt("[OfflineServer] asset %s -> %zu bytes", path.c_str(), content.size());
-                response.headersText = "content-type: application/octet-stream\n";
+                response.headersText = std::string("content-type: ") + AssetContentType(path) + "\n";
                 response.body = std::move(content);
                 return response;
             }
@@ -202,6 +233,7 @@ namespace LinkuraLocal::Standalone {
             }
             body = std::move(routed->body);
             headers = std::move(routed->headersText);
+            if (path.rfind("/v1/archive/", 0) == 0) RedirectLocalAssets(body, config);
             response.status = routed->statusCode;
             response.reason = response.status == 200 ? "OK" : "Offline";
             Log::InfoFmt("[OfflineServer] %s -> %d (%zu bytes)", path.c_str(), response.status, body.size());

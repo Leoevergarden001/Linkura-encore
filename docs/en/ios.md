@@ -59,6 +59,7 @@ The dylib writes runtime information to `Documents/LinkuraOffline/` inside the a
 | `server.log` | Each request's path and status, unmatched routes (`no route for`), and missing asset requests |
 | `config.json` | Optional: `{"port": 52680, "resVersion": "..."}` |
 | `storage-key.json` | Storage key written to PlayerPrefs before startup |
+| `assets/<path>` | Files the local server serves at `/a/<path>`. When an archive cover exists under `assets/` at the CDN path (for example `assets/with_meets/thumbnail_image/<id>.jpg`), the archive list points its cover there; the official CDN no longer serves most covers |
 | `mock_api/v1/<path>.json` (and `.headers`) | Optional response override by path for quick experiments; read only by the development build (built without `LINKURA_REMOTE=0`), ignored by the release build |
 
 The player database is at `Library/Application Support/LinkuraOffline/HasuKikaisann.sqlite3`. The first launch generates a museum save automatically.

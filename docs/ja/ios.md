@@ -59,6 +59,7 @@ dylib は実行情報をアプリの `Documents/LinkuraOffline/` に書き込み
 | `server.log` | 各リクエストのパスと状態コード、未登録ルート（`no route for`）、不足アセットのリクエスト |
 | `config.json` | 任意：`{"port": 52680, "resVersion": "..."}` |
 | `storage-key.json` | 起動前に PlayerPrefs に書き込むストレージキー |
+| `assets/<パス>` | ローカルサーバーが `/a/<パス>` で返すファイル。アーカイブ一覧のサムネイルが `assets/` の同じパス（例：`assets/with_meets/thumbnail_image/<id>.jpg`）にあれば、サムネイルの URL をローカルに向けます。公式 CDN からはほとんどのサムネイルが削除されています |
 | `mock_api/v1/<パス>.json`（および `.headers`） | パスごとのレスポンス上書きファイル。素早い試験に使います。開発版（`LINKURA_REMOTE=0` なしでビルド）だけが読み込み、リリース版は無視します。 |
 
 プレイヤーDBは `Library/Application Support/LinkuraOffline/HasuKikaisann.sqlite3` にあります。初回起動時にミュージアムセーブデータを自動生成します。

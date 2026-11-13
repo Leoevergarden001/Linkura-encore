@@ -45,8 +45,8 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def start(data: Path, port: int) -> subprocess.Popen:
-    proc = subprocess.Popen([str(BINARY), "--data", str(data), "--port", str(port)],
+def start(data: Path, port: int, *extra: str) -> subprocess.Popen:
+    proc = subprocess.Popen([str(BINARY), "--data", str(data), "--port", str(port), *extra],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     line = proc.stdout.readline()
     if not line.startswith("READY"):
@@ -745,6 +745,36 @@ def main() -> int:
         finally:
             log += stop(proc)
         check("no backend errors logged", "[E]" not in log, log[-400:])
+
+    # Archive covers: a file under --asset-root at the CDN path is served from /a/ and the
+    # archive list points at it; covers without a local file keep their CDN URL.
+    with tempfile.TemporaryDirectory() as tmp:
+        data, assets = Path(tmp) / "data", Path(tmp) / "assets"
+        data.mkdir()
+        archive = json.loads((Path(__file__).resolve().parents[1] / "data" / "builtin" /
+                              "archive_get_archive_list.json").read_text(encoding="utf-8"))["archive_list"]
+        cdn = "https://assets.link-like-lovelive.app/"
+        local_rel = archive[1]["thumbnail_image_url"][len(cdn):]
+        (assets / local_rel).parent.mkdir(parents=True)
+        (assets / local_rel).write_bytes(b"\xff\xd8\xff\xe0test-cover")
+        port = free_port()
+        proc = start(data, port, "--asset-root", str(assets))
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+            post(conn, "/v1/user/login", {"player_id": "", "device_specific_id": "", "version": 1})
+            _, _, body = post(conn, "/v1/archive/get_archive_list", {})
+            urls = [a["thumbnail_image_url"] for a in json.loads(body)["archive_list"]]
+            check("archive cover with a local file points at /a/",
+                  urls[1] == f"http://127.0.0.1:{port}/a/{local_rel}" and
+                  all(u.startswith(cdn) for i, u in enumerate(urls) if i != 1), str(urls[:3]))
+            conn.request("GET", f"/a/{local_rel}")
+            reply = conn.getresponse()
+            check("local archive cover is served as JPEG",
+                  reply.status == 200 and reply.getheader("content-type") == "image/jpeg" and
+                  reply.read() == b"\xff\xd8\xff\xe0test-cover")
+            conn.close()
+        finally:
+            stop(proc)
 
     print("PASS" if not failures else f"FAILED: {', '.join(failures)}")
     return 0 if not failures else 1
