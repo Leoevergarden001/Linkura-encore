@@ -225,8 +225,9 @@ def main() -> int:
             check("login bonus shows the Master's 7 days",
                   [(d["count"], d["rewards"][0]["reward_id"], d["rewards"][0]["amount"]) for d in days] == master_days,
                   str(master_days))
-            check("first home of the day opens the login bonus, stamp 1 pays 50 SIsCa",
-                  due and [d["is_get"] for d in days] == [True] + [False] * 6 and days[0]["is_now_get"] and
+            # The scene stalls on iOS for now: home never opens it, the route still stamps.
+            check("home does not open the login bonus scene; stamp 1 pays 50 SIsCa",
+                  not due and [d["is_get"] for d in days] == [True] + [False] * 6 and days[0]["is_now_get"] and
                   free_jewels() == jewels_before + 50, json.dumps(days[:2]))
             days = login_bonus()
             check("login bonus stamps once a day", not home_login_due() and not any(d["is_now_get"] for d in days)

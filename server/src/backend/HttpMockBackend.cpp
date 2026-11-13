@@ -2069,9 +2069,12 @@ namespace LinkuraLocal::HttpMock {
         // query result for the currently imported 5.1 Master subset rather than
         // a contradictory hard-coded profile assertion.
         result["plan_list"] = nlohmann::json::array();
-        // The first home of a 04:00 JST day opens the login bonus scene, which
-        // then calls home/get_login_bonus (where the stamp is taken).
-        result["is_login_bonus"] = LoginBonusDueLocked();
+        // The first home of a 04:00 JST day would open the login bonus scene,
+        // which then calls home/get_login_bonus (where the stamp is taken).
+        // On iOS the scene stays on Now Loading after that response
+        // (2026-11-13, under investigation), so home does not open it for now.
+        constexpr bool kLoginBonusSceneEnabled = false;
+        result["is_login_bonus"] = kLoginBonusSceneEnabled && LoginBonusDueLocked();
         result["has_daily_ticket"] = false;
         result["has_grand_prix_playable_count"] = false;
         if (auto badge = result.find("highlighted_badge_info");

@@ -10,6 +10,7 @@
 //   Documents/LinkuraOffline/server.log   request and error log
 //   Documents/LinkuraOffline/config.json  optional {"port":52680,"resVersion":"..."}
 //   Documents/LinkuraOffline/mock_api/... optional per-path JSON overrides
+//                                          (development build only)
 // The player database lives in Library/Application Support/LinkuraOffline.
 
 #import <Foundation/Foundation.h>
@@ -123,7 +124,11 @@ static void LinkuraOfflineStart() {
 
         LinkuraLocal::Standalone::ServerConfig config;
         if (visible) {
+#if defined(LINKURA_DEV_BUILD)
+            // Development only: a leftover override (for example an empty
+            // login bonus or mission list) must never shadow a release route.
             config.mockRoot = [visible URLByAppendingPathComponent:@"mock_api"].path.fileSystemRepresentation;
+#endif
             config.assetRoot = [visible URLByAppendingPathComponent:@"assets"].path.fileSystemRepresentation;
             NSData* raw = [NSData dataWithContentsOfURL:[visible URLByAppendingPathComponent:@"config.json"]];
             id parsed = raw ? [NSJSONSerialization JSONObjectWithData:raw options:0 error:nil] : nil;

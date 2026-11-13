@@ -14,11 +14,14 @@ source "$HERE/../server/build-common.sh"
 
 SOURCES=("$HERE/LinkuraOffline.mm" "$HERE/LinkuraPush.mm")
 LINK_FLAGS=()
-if [ "${LINKURA_REMOTE:-1}" = 0 ]; then LINK_FLAGS=(-Wl,-U,_LinkuraRemoteStart); else SOURCES+=("$HERE/LinkuraRemote.mm"); fi
+# The development build also reads per-path response overrides from
+# Documents/LinkuraOffline/mock_api; the release build (LINKURA_REMOTE=0) ignores them.
+DEV_FLAGS=()
+if [ "${LINKURA_REMOTE:-1}" = 0 ]; then LINK_FLAGS=(-Wl,-U,_LinkuraRemoteStart); else SOURCES+=("$HERE/LinkuraRemote.mm"); DEV_FLAGS=(-DLINKURA_DEV_BUILD=1); fi
 OBJECTS=("${SERVER_OBJECTS[@]}")
 for src in "${SOURCES[@]}"; do
     obj="$OBJ/$(basename "${src%.*}").o"
-    "${CXX[@]}" "${SERVER_CXXFLAGS[@]}" -fobjc-arc "${SERVER_INCLUDES[@]}" -c "$src" -o "$obj"
+    "${CXX[@]}" "${SERVER_CXXFLAGS[@]}" ${DEV_FLAGS[@]+"${DEV_FLAGS[@]}"} -fobjc-arc "${SERVER_INCLUDES[@]}" -c "$src" -o "$obj"
     OBJECTS+=("$obj")
 done
 "${CXX[@]}" -dynamiclib -install_name @executable_path/Frameworks/LinkuraOffline.dylib \

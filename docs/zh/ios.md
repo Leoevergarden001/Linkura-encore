@@ -57,6 +57,6 @@ dylib 把运行信息写在 App 的 `Documents/LinkuraOffline/`（文件共享�
 | `server.log` | 每个请求的路径和状态码、未匹配的路由（`no route for`）、未提供的资源请求 |
 | `config.json` | 可选：`{"port": 52680, "resVersion": "..."}` |
 | `storage-key.json` | 启动前写入 PlayerPrefs 的存储密钥 |
-| `mock_api/v1/<路径>.json`（及 `.headers`） | 可选：按路径覆盖响应，用于快速试验 |
+| `mock_api/v1/<路径>.json`（及 `.headers`） | 可选：按路径覆盖响应，用于快速试验；只有开发版（不带 `LINKURA_REMOTE=0` 构建）读取，正式版忽略 |
 
 玩家库在 `Library/Application Support/LinkuraOffline/HasuKikaisann.sqlite3`，首次启动自动生成博物馆存档。
