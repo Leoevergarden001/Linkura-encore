@@ -23,6 +23,22 @@ from pathlib import Path
 BINARY = Path(__file__).resolve().parents[1] / "build/host/linkura-offline-server"
 
 
+def yaml_rows(name: str) -> list[dict]:
+    """Rows of a link-like-diff Master YAML (flat "- Key: value" records, ints parsed)."""
+    rows, row = [], None
+    for line in (Path(__file__).resolve().parents[2] / "third_party" / "link-like-diff" / name).read_text(
+            encoding="utf-8").splitlines():
+        if line.startswith("- "):
+            row = {}
+            rows.append(row)
+            line = line[2:]
+        key, sep, value = line.strip().partition(": ")
+        if row is not None and sep:
+            value = value.strip().strip('"')
+            row[key] = int(value) if value.lstrip("-").isdigit() else value
+    return rows
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -98,12 +114,60 @@ def main() -> int:
             log = stop(proc)
         check("database created", (data / "HasuKikaisann.sqlite3").exists())
 
+        # An upgrade re-seeds the catalogs when a new catalog table is empty. With foreign keys on,
+        # the item rows' INSERT OR REPLACE cascaded into museum_item_inventory and emptied it. Here:
+        # a save that lost some inventory rows that way, a player-changed count, and a forced re-seed.
+        with sqlite3.connect(data / "HasuKikaisann.sqlite3") as db:
+            def inventory(item_id):
+                row = db.execute("SELECT m.item_num FROM item i JOIN museum_item_inventory m USING(d_item_datas_id) "
+                                 "WHERE i.item_id=?", (item_id,)).fetchone()
+                return row[0] if row else None
+            capped_lost = db.execute("SELECT i.item_id FROM item i JOIN museum_item_inventory m USING(d_item_datas_id) "
+                                     "WHERE i.item_num = 9999 LIMIT 1").fetchone()[0]
+            lost_value = inventory(capped_lost)
+            db.execute("UPDATE museum_item_inventory SET item_num=123 WHERE d_item_datas_id="
+                       "(SELECT d_item_datas_id FROM item WHERE item_id=3011001)")
+            db.execute("DELETE FROM museum_item_inventory WHERE d_item_datas_id IN (SELECT d_item_datas_id FROM item "
+                       "WHERE item_id IN (?, 1002001))", (capped_lost,))
+            db.execute("DELETE FROM museum_bootstrap_state WHERE domain='INVENTORY_CASCADE_REPAIR'")
+            db.execute("DELETE FROM grade_quest_release")  # the next start re-seeds every catalog
+            wallet_free = db.execute("SELECT free_jewels FROM museum_gacha_state WHERE series_id=1055003").fetchone()[0]
+            items_total = db.execute("SELECT COUNT(*) FROM item").fetchone()[0]
+
         # Restart on the same data directory: state persists, no re-bootstrap errors.
         proc = start(data, port)
         try:
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
             status, _, _ = post(conn, "/v1/home/get_home", {})
             check("home after restart", status == 200)
+            with sqlite3.connect(data / "HasuKikaisann.sqlite3") as db:
+                rows = db.execute("SELECT COUNT(*) FROM museum_item_inventory").fetchone()[0]
+                check("re-seed keeps the inventory and repairs lost rows",
+                      rows == items_total and inventory(3011001) == 123 and inventory(capped_lost) == lost_value == 999
+                      and inventory(1002001) == wallet_free,
+                      f"rows {rows}/{items_total}, 3011001={inventory(3011001)}, {capped_lost}={inventory(capped_lost)}"
+                      f"/{lost_value}, 1002001={inventory(1002001)}/{wallet_free}")
+
+            # The Items screen froze on an empty item_category_list: all four categories always come back.
+            status, _, body = post(conn, "/v1/user/items/get_list", {})
+            check("item list has every category", status == 200 and
+                  [c["item_category"] for c in json.loads(body)["item_category_list"]] == [0, 1, 2, 3])
+            # Exchange buttons: the client enables one when GetMaxCount > 0, i.e. enough material and
+            # (Items.LimitNum - held) >= ProductItemNum. Museum holdings at a 9999 / 999999 cap are
+            # lowered once (002, 004), so every standard exchange can be used.
+            item_limits = {r["Id"]: r["LimitNum"] for r in yaml_rows("Items.yaml")}
+            offers = {r["id"]: r for r in json.loads((Path(__file__).resolve().parents[1] / "data" / "builtin" /
+                                                      "item_exchange_catalog.json").read_text(encoding="utf-8"))}
+            status, _, body = post(conn, "/v1/item_exchange/get_list_new", {"category_list_id": 106001})
+            blocked = []
+            for entry in json.loads(body)["item_exchange_list"]:
+                offer = offers[entry["item_exchanges_id"]]
+                count = min(entry["user_material_item_num"] // offer["material_item_num"],
+                            (item_limits[offer["product_item_id"]] - entry["user_product_item_num"]) //
+                            offer["product_item_num"])
+                if count < 1:
+                    blocked.append(entry["item_exchanges_id"])
+            check("every standard item exchange is usable", status == 200 and not blocked, str(blocked[:10]))
 
             # SHOW total mission: nothing until all three class missions reach D2.
             db_path = data / "HasuKikaisann.sqlite3"

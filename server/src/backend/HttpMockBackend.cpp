@@ -567,6 +567,19 @@ namespace LinkuraLocal::HttpMock {
             return true;
         }
 
+        // The seed re-imports the immutable catalogs with INSERT OR REPLACE. With
+        // foreign keys on, REPLACE deletes the old parent row first, and ON DELETE
+        // CASCADE then removes the player rows that reference it: re-seeding an
+        // existing save (as an upgrade does when a new catalog table is empty)
+        // emptied museum_item_inventory. The keys do not change, so seed with the
+        // checks off. The seed runs its own transaction; PRAGMA foreign_keys is a
+        // no-op inside one, so this must not be called within a transaction.
+        static bool ExecSeedScripts(sqlite3* db) {
+            if (!ExecSql(db, "PRAGMA foreign_keys = OFF;")) return false;
+            const bool ok = ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SeedScripts, "seed");
+            return ExecSql(db, "PRAGMA foreign_keys = ON;") && ok;
+        }
+
         static bool TableHasAnyRows(sqlite3* db, const char* tableName) {
             sqlite3_stmt* stmt = nullptr;
             const std::string sql = "SELECT EXISTS(SELECT 1 FROM " + std::string(tableName) + " LIMIT 1);";
@@ -787,7 +800,7 @@ namespace LinkuraLocal::HttpMock {
         }
 
         if ((hasPendingReset || !TableHasAnyRows(db, "archive_detail") || !TableHasAnyRows(db, "card_detail") || !TableHasAnyRows(db, "character_info") || !TableHasAnyRows(db, "item") || !TableHasAnyRows(db, "quest_stage") || !TableHasAnyRows(db, "daily_quest_stage") || !TableHasAnyRows(db, "dream_quest_stage") || !TableHasAnyRows(db, "grade_quest_stage") || !TableHasAnyRows(db, "grade_add_skill") || !TableHasAnyRows(db, "grade_quest_release") || !TableHasAnyRows(db, "grade_quest_reward") || !TableHasAnyRows(db, "grade_data") || !TableHasAnyRows(db, "grade_reward") || !TableHasAnyRows(db, "grand_prix_stage") || !TableHasAnyRows(db, "grand_prix_point_bonus") || !TableHasAnyRows(db, "grand_prix_reward") || !TableHasAnyRows(db, "card_rarity") || !TableHasAnyRows(db, "learning_stage") || !TableHasAnyRows(db, "music_mastery") || !TableHasAnyRows(db, "music"))
-            && !ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SeedScripts, "seed")) {
+            && !ExecSeedScripts(db)) {
             persistentStorageAvailable = false;
             return false;
         }
@@ -1070,7 +1083,7 @@ namespace LinkuraLocal::HttpMock {
             return false;
         }
 
-        return ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SeedScripts, "seed") &&
+        return ExecSeedScripts(db) &&
                EnsureMuseumCatalogLocked() && BackfillMissionHistoryLocked();
     }
 
@@ -3068,30 +3081,19 @@ namespace LinkuraLocal::HttpMock {
             return std::nullopt;
         }
 
-        nlohmann::json categories = nlohmann::json::array();
-        int currentCategory = 0;
-        bool hasCategory = false;
-        nlohmann::json items = nlohmann::json::array();
-        auto flushCategory = [&]() {
-            if (hasCategory) {
-                categories.push_back({
-                    {"item_category", currentCategory},
-                    {"user_item_list", std::move(items)},
-                });
-                items = nlohmann::json::array();
-            }
-        };
+        // Every item category (0-3, as in the captured list) is always present:
+        // the client froze on the Items screen when an empty inventory produced
+        // an empty item_category_list.
+        std::map<int, nlohmann::json> byCategory;
+        for (int category = 0; category <= 3; ++category) byCategory[category] = nlohmann::json::array();
 
         int rc = SQLITE_ROW;
         while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
             const int category = sqlite3_column_int(stmt, 3);
-            if (!hasCategory || category != currentCategory) {
-                flushCategory();
-                currentCategory = category;
-                hasCategory = true;
-            }
             const auto* id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
             const auto* resource = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+            auto& items = byCategory[category];
+            if (!items.is_array()) items = nlohmann::json::array();
             items.push_back({
                 {"user_item_id", id ? id : ""},
                 {"item_id", sqlite3_column_int64(stmt, 1)},
@@ -3106,9 +3108,12 @@ namespace LinkuraLocal::HttpMock {
             sqlite3_finalize(stmt);
             return std::nullopt;
         }
-        flushCategory();
         sqlite3_finalize(stmt);
 
+        nlohmann::json categories = nlohmann::json::array();
+        for (auto& [category, items] : byCategory) {
+            categories.push_back({{"item_category", category}, {"user_item_list", std::move(items)}});
+        }
         nlohmann::json result;
         result["item_category_list"] = std::move(categories);
         return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
@@ -7748,7 +7753,7 @@ namespace LinkuraLocal::HttpMock {
                   ExecSql(db, "DELETE FROM learning_stage;") &&
                   ExecSql(db, "DELETE FROM music_mastery;") &&
                   ExecSql(db, "DELETE FROM music;") &&
-                  ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SeedScripts, "seed");
+                  ExecSeedScripts(db);
 
         sqlite3_close(db);
         return ok;
@@ -7772,7 +7777,7 @@ namespace LinkuraLocal::HttpMock {
         }
 
         bool ok = ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SchemaScripts, "schema") &&
-                  ExecBuiltInSqlScripts(db, HttpMockBackendBuiltInSql::SeedScripts, "seed");
+                  ExecSeedScripts(db);
 
         sqlite3_close(db);
         return ok;
