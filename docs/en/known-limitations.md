@@ -1,4 +1,4 @@
-<!-- Translation source: ee6bfb636aa01ac79083723f3be1b8d535bf5fa0 (docs/zh/known-limitations.md) -->
+<!-- Translation source: 7766c1442ccbf613b65b15391b22980a1bcf5372 (docs/zh/known-limitations.md) -->
 
 # Known limitations
 
