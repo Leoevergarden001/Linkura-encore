@@ -781,6 +781,7 @@ namespace LinkuraLocal::HttpMock {
                                        "sticker_exchange/get_list", "sticker_exchange/set_purchase",
                                        "sisca_store/get_list", "sisca_store/set_purchase",
                                        "select_ticket_exchange/get_list", "gacha/set_select_ticket_exchange",
+                                       "gacha/get_exchange_card_having_list",
                                        "item_exchange/get_limit_break_material_convert_list",
                                        "item_exchange/set_limit_break_material_convert"}) {
                 const std::string name(action);

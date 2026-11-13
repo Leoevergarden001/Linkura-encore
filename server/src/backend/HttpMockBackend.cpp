@@ -330,6 +330,7 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> SelectTicketExchangeGetListLocked();
         nlohmann::json SelectTicketSeriesListLocked();
         std::optional<MockStoredResponse> GachaSetSelectTicketExchangeLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> GachaGetExchangeCardHavingListLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> LimitBreakMaterialConvertListLocked();
         std::optional<MockStoredResponse> LimitBreakMaterialConvertLocked();
         struct LimitBreakExcess {
@@ -3366,6 +3367,8 @@ namespace LinkuraLocal::HttpMock {
     //   select_ticket_exchange/get_list -> {select_ticket_exchange_list[
     //       {select_ticket_series_id,user_select_ticket_num}]}
     //   gacha/set_select_ticket_exchange {select_ticket_exchange_rate_id} -> {receipt_items}
+    //   gacha/get_exchange_card_having_list {exchange_type, exchange_id} ->
+    //       {exchange_card_list[{card_datas_id,card_rarity,card_name,is_having}]}
     //   item_exchange/get_limit_break_material_convert_list ->
     //       {convert_limit_break_material_list[{rarity,limit_break_material_num}]}
     //   item_exchange/set_limit_break_material_convert (no body) -> {get_item_list[{item_id,get_num}]}
@@ -3426,6 +3429,7 @@ namespace LinkuraLocal::HttpMock {
         if (action == "sisca_store/set_purchase") return SiscaStoreSetPurchaseLocked(payloadJson);
         if (action == "select_ticket_exchange/get_list") return SelectTicketExchangeGetListLocked();
         if (action == "gacha/set_select_ticket_exchange") return GachaSetSelectTicketExchangeLocked(payloadJson);
+        if (action == "gacha/get_exchange_card_having_list") return GachaGetExchangeCardHavingListLocked(payloadJson);
         if (action == "item_exchange/get_limit_break_material_convert_list") return LimitBreakMaterialConvertListLocked();
         if (action == "item_exchange/set_limit_break_material_convert") return LimitBreakMaterialConvertLocked();
         return std::nullopt;
@@ -3831,6 +3835,56 @@ namespace LinkuraLocal::HttpMock {
             {"get_item_type", itemType}, {"get_id", receiptId}, {"get_num", quantity}, {"is_new", isNew.value_or(false)},
         }})}};
         return MockStoredResponse{response.dump(), WalletHeadersLocked(), 200, "OK (offline select ticket)"};
+    }
+
+    // The card list behind a select ticket's 選択 button (and the guarantee
+    // point exchange). GachaExchangeType (5.0.1 metadata): 1 GuaranteePoint
+    // (exchange_id = exchange point id), 2 SelectTicket (exchange_id =
+    // SelectTicketSeries id). Cards keep their Master id; held is decided by
+    // card series (id / 10), as the Museum keeps one record per series.
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GachaGetExchangeCardHavingListLocked(
+            std::string_view payloadJson) {
+        const auto type = ShopPayloadInt(payloadJson, "exchange_type");
+        const auto exchangeId = ShopPayloadInt(payloadJson, "exchange_id");
+        if (!type || !exchangeId) return ShopRequestError("invalid exchange card request");
+        std::vector<int> cards;
+        if (*type == 2) {
+            for (const auto& rate : ShopRows("select_ticket_rates")) {
+                if (rate.value("series_id", int64_t{0}) == *exchangeId && rate.value("item_type", 0) == 2)
+                    cards.push_back(rate.value("item_id", 0));
+            }
+        } else {
+            for (const auto& offer : kMuseumExchangeOffers) {
+                if (offer.pointId == *exchangeId) cards.push_back(offer.cardId);
+            }
+        }
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT COALESCE((SELECT rarity FROM card_rarity WHERE card_datas_id=?1), "
+                "(SELECT rarity FROM card_rarity WHERE card_datas_id/10=?1/10 LIMIT 1), 0), "
+                "COALESCE((SELECT card_name FROM card_detail WHERE card_datas_id/10=?1/10 LIMIT 1), ''), "
+                "EXISTS(SELECT 1 FROM museum_card_ownership INNER JOIN card_detail USING(d_card_datas_id) "
+                "WHERE card_detail.card_datas_id/10=?1/10);",
+                -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+            if (stmt) sqlite3_finalize(stmt);
+            return std::nullopt;
+        }
+        nlohmann::json list = nlohmann::json::array();
+        for (const int cardId : cards) {
+            sqlite3_reset(stmt);
+            sqlite3_bind_int(stmt, 1, cardId);
+            if (sqlite3_step(stmt) != SQLITE_ROW) continue;
+            const auto* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+            list.push_back({
+                {"card_datas_id", cardId},
+                {"card_rarity", sqlite3_column_int(stmt, 0)},
+                {"card_name", name ? name : ""},
+                {"is_having", sqlite3_column_int(stmt, 2) != 0},
+            });
+        }
+        sqlite3_finalize(stmt);
+        return MockStoredResponse{nlohmann::json{{"exchange_card_list", std::move(list)}}.dump(), {}, 200,
+                                  "OK (offline mock)"};
     }
 
     // 解放Pt.変換: limit-break materials (one item per card series, Items

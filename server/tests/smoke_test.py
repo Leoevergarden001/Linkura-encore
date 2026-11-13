@@ -696,6 +696,19 @@ def main() -> int:
             ticket_series = next(r for r in yaml_rows("SelectTicketSeries.yaml") if r["Id"] == 4030036)
             rate = next(r for r in yaml_rows("SelectTicketExchangeRate.yaml") if r["SelectTicketSeriesId"] == 4030036)
             tickets = item_num(ticket_series["ExchangeTicketId"])
+            # The 選択 button first lists the ticket's cards (GachaExchangeType 2 = SelectTicket).
+            status, _, body = post(conn, "/v1/gacha/get_exchange_card_having_list",
+                                   {"exchange_type": 2, "exchange_id": 4030036})
+            listed = json.loads(body)["exchange_card_list"] if status == 200 else []
+            master_cards = {r["ExchangeItemId"] for r in yaml_rows("SelectTicketExchangeRate.yaml")
+                            if r["SelectTicketSeriesId"] == 4030036}
+            check("select ticket card list", status == 200 and {c["card_datas_id"] for c in listed} == master_cards and
+                  all(c["card_name"] and c["card_rarity"] for c in listed) and all(c["is_having"] for c in listed),
+                  body[:200].decode())
+            status, _, body = post(conn, "/v1/gacha/get_exchange_card_having_list",
+                                   {"exchange_type": 1, "exchange_id": 1021022})
+            check("guarantee point card list", status == 200 and len(json.loads(body)["exchange_card_list"]) >= 1,
+                  body[:200].decode())
             drop_card(rate["ExchangeItemId"])
             status, _, body = post(conn, "/v1/gacha/set_select_ticket_exchange",
                                    {"select_ticket_exchange_rate_id": rate["Id"]})
