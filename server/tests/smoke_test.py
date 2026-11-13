@@ -644,8 +644,10 @@ def main() -> int:
             set_item(prize["MaterialItemId"], 500)
             drop_card(prize["ProductItemId"])
             status, _, body = post(conn, "/v1/gp_prize_exchange/set_purchase", {"gp_prize_exchanges_id": prize["Id"]})
+            # Held cards are listed as not held so the client plays the get-card animation.
             check("GP PRIZE exchange pays a card",
                   len(gp_list["gp_prize_exchange_list"]) == len(gp_rows) and status == 200 and
+                  not any(e["is_having"] for e in gp_list["gp_prize_exchange_list"]) and
                   json.loads(body) == {"gp_prize_ticket_id": prize["MaterialItemId"], "user_ticket_num": 300} and
                   card_owned(prize["ProductItemId"]) and item_num(prize["MaterialItemId"]) == 300, body[:200].decode())
             series = {c["Id"]: c["CardSeriesId"] for c in yaml_rows("CardDatas.yaml")}[prize["ProductItemId"]]
@@ -702,7 +704,7 @@ def main() -> int:
             master_cards = {r["ExchangeItemId"] for r in yaml_rows("SelectTicketExchangeRate.yaml")
                             if r["SelectTicketSeriesId"] == 4030036}
             check("select ticket card list", status == 200 and {c["card_datas_id"] for c in listed} == master_cards and
-                  all(c["card_name"] and c["card_rarity"] for c in listed) and all(c["is_having"] for c in listed),
+                  all(c["card_name"] and c["card_rarity"] for c in listed) and not any(c["is_having"] for c in listed),
                   body[:200].decode())
             status, _, body = post(conn, "/v1/gacha/get_exchange_card_having_list",
                                    {"exchange_type": 1, "exchange_id": 1021022})

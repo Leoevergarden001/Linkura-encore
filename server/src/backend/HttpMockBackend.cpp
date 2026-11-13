@@ -3404,6 +3404,13 @@ namespace LinkuraLocal::HttpMock {
             return payload[field].get<int64_t>();
         }
 
+        // TPopupGpExchangeConfirm (GP PRIZE and select ticket exchange) stores
+        // isHaving = !IsHaving and, after a successful exchange, plays the get-card
+        // animation only for a card not held yet. The Museum holds every card, so
+        // the two card lists report is_having false to keep the animation; the
+        // grant itself still turns a held card into limit-break material.
+        constexpr bool kReportHeldCardsAsNew = true;
+
         // ShopType (5.0.1 metadata): 3 ItemExchange, 7 GpPrizeExchange,
         // 8 SelectTicketExchange, 9 StickerExchange, 10 SiscaStore. Jewel (1,
         // App Store purchases) and GachaExchange (4, on the Gacha screen) are
@@ -3568,7 +3575,7 @@ namespace LinkuraLocal::HttpMock {
             }
             list.push_back({
                 {"gp_prize_exchanges_id", id},
-                {"is_having", having},
+                {"is_having", having && !kReportHeldCardsAsNew},
                 {"remaining_exchange_num",
                  limit > 0 ? std::max<int64_t>(0, limit - ShopPurchasedLocked("gp_prize", id)) : 0},
             });
@@ -3874,7 +3881,7 @@ namespace LinkuraLocal::HttpMock {
                 {"card_datas_id", cardId},
                 {"card_rarity", sqlite3_column_int(stmt, 0)},
                 {"card_name", name ? name : ""},
-                {"is_having", sqlite3_column_int(stmt, 2) != 0},
+                {"is_having", sqlite3_column_int(stmt, 2) != 0 && !kReportHeldCardsAsNew},
             });
         }
         sqlite3_finalize(stmt);
