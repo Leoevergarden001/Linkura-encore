@@ -688,10 +688,7 @@ def main() -> int:
 
             # セレクトチケット: held tickets are listed; one ticket picks one card.
             _, _, body = post(conn, "/v1/gacha/get_series_list", {})
-            gacha_entries = json.loads(body)["select_ticket_series_list"]
-            gacha_tickets = {e["select_ticket_series_id"]: e["user_exchange_ticket_num"] for e in gacha_entries}
-            check("select tickets are not on sale offline", gacha_entries and
-                  not any(e["is_sale_select_ticket"] for e in gacha_entries))
+            check("select tickets stay off the gacha screen", json.loads(body)["select_ticket_series_list"] == [])
             _, _, body = post(conn, "/v1/select_ticket_exchange/get_list", {})
             shop_tickets = {e["select_ticket_series_id"]: e["user_select_ticket_num"]
                             for e in json.loads(body)["select_ticket_exchange_list"]}
@@ -714,9 +711,8 @@ def main() -> int:
             drop_card(rate["ExchangeItemId"])
             status, _, body = post(conn, "/v1/gacha/set_select_ticket_exchange",
                                    {"select_ticket_exchange_rate_id": rate["Id"]})
-            check("select tickets listed on the gacha and shop screens",
-                  len(gacha_tickets) >= 50 and gacha_tickets == shop_tickets and gacha_tickets.get(4030036) == tickets,
-                  f"{len(gacha_tickets)} {len(shop_tickets)}")
+            check("select tickets listed in the shop", len(shop_tickets) >= 50 and shop_tickets.get(4030036) == tickets,
+                  f"{len(shop_tickets)}")
             check("select ticket exchange pays the chosen card",
                   status == 200 and [(r["get_item_type"], r["get_id"] // 10, r["get_num"], r["is_new"])
                                      for r in json.loads(body)["receipt_items"]] ==

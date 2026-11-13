@@ -2501,19 +2501,11 @@ namespace LinkuraLocal::HttpMock {
             series["card_list"] = config.cards;
             seriesList.push_back(std::move(series));
         }
-        // セレクトチケット: the Gacha screen's ticket exchange lists the held tickets.
-        // is_sale_select_ticket marks a ticket that is on sale (the client then
-        // offers 「セレクトチケットを購入」 with the sale's 福袋 banner); nothing
-        // can be bought offline.
-        nlohmann::json selectTickets = nlohmann::json::array();
-        for (const auto& ticket : SelectTicketSeriesListLocked()) {
-            selectTickets.push_back({
-                {"select_ticket_series_id", ticket["id"]},
-                {"user_exchange_ticket_num", ticket["held"]},
-                {"is_sale_select_ticket", false},
-            });
-        }
-        response["select_ticket_series_list"] = std::move(selectTickets);
+        // セレクトチケット are exchanged in the shop (セレクトチケット交換所), not
+        // here. The Gacha screen would add one banner per held ticket (the
+        // Museum holds all 53, each with no exchange button once
+        // is_sale_select_ticket is false), so the list stays empty.
+        response["select_ticket_series_list"] = nlohmann::json::array();
         return MockStoredResponse{
             response.dump(), GachaHeaders(state->freeJewels, state->paidJewels),
             200, "OK (offline mock)"};
