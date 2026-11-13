@@ -1,4 +1,4 @@
-<!-- Translation source: 7766c1442ccbf613b65b15391b22980a1bcf5372 (docs/zh/known-limitations.md) -->
+<!-- Translation source: 450abfee5c5773dcd821afc212108a1234e305ef (docs/zh/known-limitations.md) -->
 
 # 既知の制限
 

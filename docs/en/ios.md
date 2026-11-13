@@ -1,4 +1,4 @@
-<!-- Translation source: 545976d58fb0ec645a704fc46a40e83fe83566d6 (docs/zh/ios.md) -->
+<!-- Translation source: 450abfee5c5773dcd821afc212108a1234e305ef (docs/zh/ios.md) -->
 
 # iOS / iPadOS: build and install
 
