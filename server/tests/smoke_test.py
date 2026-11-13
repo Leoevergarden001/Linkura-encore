@@ -605,6 +605,10 @@ def main() -> int:
             check("profile dream_style_num counts DR cards",
                   dr_owned > 0 and json.loads(body)["profile_info"]["dream_style_num"] == dr_owned,
                   f"{dr_owned} {json.loads(body)['profile_info'].get('dream_style_num')}")
+            # 006 raised GP PRIZE tickets to their 9999 cap once (the save was bootstrapped before this test set 123).
+            with sqlite3.connect(db_path) as db:
+                topped = db.execute("SELECT 1 FROM museum_bootstrap_state WHERE domain='GP_PRIZE_TICKET_TOPUP'").fetchone()
+            check("GP PRIZE tickets topped up once", topped is not None)
             # 005: holdings above 999 (the membership tickets' 99999) are lowered once; point currencies keep theirs.
             check("five-digit holdings lowered to 999", item_num(3011003) == 999 and item_num(3004000) > 999,
                   f"{item_num(3011003)} {item_num(3004000)}")
