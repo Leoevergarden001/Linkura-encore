@@ -106,6 +106,7 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GradeGetResult(std::string_view payloadJson);
         std::optional<MockStoredResponse> GradeSetQuestRetire(std::string_view payloadJson);
         std::optional<MockStoredResponse> GradeSetReward();
+        std::optional<MockStoredResponse> GetLoginBonus();
         std::optional<MockStoredResponse> OutQuestLiveGetQuestTop();
 
         std::optional<MockStoredResponse> GrandPrixGetTopInfo(std::string_view payloadJson);

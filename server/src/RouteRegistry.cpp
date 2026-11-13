@@ -502,6 +502,13 @@ namespace LinkuraLocal::HttpMock {
             return MockResponse{std::move(record->body), std::move(record->headersText), record->statusCode, std::move(record->statusDescription)};
         }
 
+        static std::optional<MockResponse> HandleHomeGetLoginBonus(const MockRequestContext&, HttpMockBackend& backend) {
+            auto record = backend.GetLoginBonus();
+            if (!record.has_value()) return std::nullopt;
+            if (record->headersText.empty()) record->headersText = std::string(OfflineApiMockBuiltIn::DefaultHeadersView);
+            return MockResponse{std::move(record->body), std::move(record->headersText), record->statusCode, std::move(record->statusDescription)};
+        }
+
         static std::optional<MockResponse> HandleGradeSetReward(const MockRequestContext&, HttpMockBackend& backend) {
             auto record = backend.GradeSetReward();
             if (!record.has_value()) return std::nullopt;
@@ -754,7 +761,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterStaticJson(routes, "/v1/account/connect", OfflineApiMockBuiltIn::AccountConnectJsonView);
             RegisterStaticJson(routes, "/v1/user/push/devices", "null");
             RegisterBackend(routes, "/v1/user/login", HandleUserLogin);
-            RegisterStaticJson(routes, "/v1/home/get_login_bonus", OfflineApiMockBuiltIn::HomeGetLoginBonusJsonView);
+            RegisterBackend(routes, "/v1/home/get_login_bonus", HandleHomeGetLoginBonus);
             RegisterBackend(routes, "/v1/home/get_home", HandleHomeGetHome);
             // These launcher screens must have a valid first response before
             // HomeMenu exposes them in offline mode. Empty player collections

@@ -476,6 +476,8 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> ModifyRhythmGameDeckListLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> RhythmGameReceiveTotalMissionLocked();
         bool AddFreeJewelsLocked(int64_t amount);
+        bool LoginBonusDueLocked();
+        std::optional<MockStoredResponse> GetLoginBonusLocked();
         bool BackfillRhythmTotalMissionJewelsLocked();
         bool LoadGachaStateOnlyIfPresentLocked();
         int GetRhythmTotalMissionReceivedOrderLocked();
@@ -2034,6 +2036,9 @@ namespace LinkuraLocal::HttpMock {
         // query result for the currently imported 5.1 Master subset rather than
         // a contradictory hard-coded profile assertion.
         result["plan_list"] = nlohmann::json::array();
+        // The first home of a 04:00 JST day opens the login bonus scene, which
+        // then calls home/get_login_bonus (where the stamp is taken).
+        result["is_login_bonus"] = LoginBonusDueLocked();
         result["has_daily_ticket"] = false;
         result["has_grand_prix_playable_count"] = false;
         if (auto badge = result.find("highlighted_badge_info");
@@ -5718,6 +5723,92 @@ namespace LinkuraLocal::HttpMock {
         }
     }
 
+    // ─── Login bonus ───
+    //
+    // The regular login bonus LoginBonuses 101001 「定常ログインボーナス」 (IsLoop):
+    // LoginBonusRewardDatas series 101001 gives free SIsCa (RewardType 3, item
+    // 1002001): 50 on days 1-6 and 100 on day 7, then starts over. One stamp per 04:00
+    // JST day. The original response was not captured; the field names follow
+    // the client's LoginBonusPeriod / LoginBonus / LoginBonusReward models.
+    namespace {
+        constexpr int kLoginBonusId = 101001;
+        constexpr int kLoginBonusDays = 7;
+        constexpr std::array<int64_t, kLoginBonusDays> kLoginBonusSisca{{50, 50, 50, 50, 50, 50, 100}};
+    }
+
+    bool HttpMockBackend::Impl::LoginBonusDueLocked() {
+        if (!db) return false;
+        int64_t lastDay = -1;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT last_day FROM offline_login_bonus WHERE singleton_id = 1;", -1, &stmt,
+                               nullptr) == SQLITE_OK && stmt && sqlite3_step(stmt) == SQLITE_ROW) {
+            lastDay = sqlite3_column_int64(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return lastDay != DailyBusinessDay(std::time(nullptr));
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GetLoginBonusLocked() {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        const int64_t today = DailyBusinessDay(std::time(nullptr));
+        int64_t lastDay = -1;
+        int dayCount = 0;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT last_day, day_count FROM offline_login_bonus WHERE singleton_id = 1;", -1,
+                               &stmt, nullptr) == SQLITE_OK && stmt && sqlite3_step(stmt) == SQLITE_ROW) {
+            lastDay = sqlite3_column_int64(stmt, 0);
+            dayCount = sqlite3_column_int(stmt, 1);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+
+        const bool stampNow = lastDay != today;
+        if (stampNow) {
+            dayCount = dayCount % kLoginBonusDays + 1;
+            if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+            sqlite3_stmt* save = nullptr;
+            bool ok = sqlite3_prepare_v2(db,
+                "INSERT INTO offline_login_bonus(singleton_id, last_day, day_count) VALUES(1, ?, ?) "
+                "ON CONFLICT(singleton_id) DO UPDATE SET last_day = excluded.last_day, day_count = excluded.day_count;",
+                -1, &save, nullptr) == SQLITE_OK && save && sqlite3_bind_int64(save, 1, today) == SQLITE_OK &&
+                sqlite3_bind_int(save, 2, dayCount) == SQLITE_OK && sqlite3_step(save) == SQLITE_DONE;
+            if (save) sqlite3_finalize(save);
+            ok = ok && GradeGrantRewardsLocked(
+                nlohmann::json::array({{{"reward_type", 3}, {"item_id", 1002001}, {"num", kLoginBonusSisca[dayCount - 1]}}}),
+                "login_bonus:" + std::to_string(today));
+            if (!ok || !ExecSql(db, "COMMIT;")) {
+                ExecSql(db, "ROLLBACK;");
+                return std::nullopt;
+            }
+            Log::InfoFmt("[HttpMockBackend] login bonus day %d: %lld SIsCa", dayCount,
+                         static_cast<long long>(kLoginBonusSisca[dayCount - 1]));
+        }
+
+        nlohmann::json days = nlohmann::json::array();
+        for (int day = 1; day <= kLoginBonusDays; ++day) {
+            days.push_back({
+                {"count", day},
+                {"file_name", ""},
+                {"is_get", day <= dayCount},
+                {"is_now_get", stampNow && day == dayCount},
+                {"rewards", nlohmann::json::array({{{"reward_type", 3}, {"reward_id", 1002001},
+                                                    {"amount", kLoginBonusSisca[day - 1]}, {"name", "SIsCa"}}})},
+            });
+        }
+        nlohmann::json result;
+        result["login_bonus_list"] = nlohmann::json::array({{
+            {"login_bonus_id", kLoginBonusId},
+            {"name", "定常ログインボーナス"},
+            {"file_name", ""},
+            {"show_order", 1},
+            {"start_time", "2022-12-31T15:00:00Z"},
+            {"end_time", "2035-12-31T14:59:59Z"},
+            {"datas", std::move(days)},
+        }});
+        result["event_login_bonus_list"] = nlohmann::json::array();
+        return MockStoredResponse{result.dump(), WalletHeadersLocked(), 200, "OK"};
+    }
+
     nlohmann::json HttpMockBackend::Impl::DailyTicketInfoLocked() {
         const std::time_t now = std::time(nullptr);
         const int64_t day = DailyBusinessDay(now);
@@ -8322,6 +8413,11 @@ namespace LinkuraLocal::HttpMock {
     std::optional<MockStoredResponse> HttpMockBackend::GradeGetStageData(std::string_view payloadJson) {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         return impl_->GradeGetStageDataLocked(payloadJson);
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::GetLoginBonus() {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->GetLoginBonusLocked();
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GradeSetReward() {

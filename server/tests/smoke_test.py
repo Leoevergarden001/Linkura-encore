@@ -208,6 +208,37 @@ def main() -> int:
                   f"jewel_free: {jewels_before + 500}" in "\n".join(f"{k}: {v}" for k, v in headers.items()),
                   f"{body[:120].decode()} {jewels_before} -> {free_jewels()}")
 
+            # Daily login bonus: LoginBonuses 101001, 7 stamps of free SIsCa (the Master's amounts), then it loops.
+            master_days = sorted((r["DayCount"], r["RewardId"], r["RewardNum"]) for r in yaml_rows("LoginBonusRewardDatas.yaml")
+                                 if r["LoginBonusRewardSeriesId"] == 101001)
+
+            def home_login_due() -> bool:
+                _, _, body = post(conn, "/v1/home/get_home", {})
+                return json.loads(body)["is_login_bonus"]
+
+            def login_bonus() -> list:
+                _, _, body = post(conn, "/v1/home/get_login_bonus", {})
+                return json.loads(body)["login_bonus_list"][0]["datas"]
+            jewels_before = free_jewels()
+            due = home_login_due()
+            days = login_bonus()
+            check("login bonus shows the Master's 7 days",
+                  [(d["count"], d["rewards"][0]["reward_id"], d["rewards"][0]["amount"]) for d in days] == master_days,
+                  str(master_days))
+            check("first home of the day opens the login bonus, stamp 1 pays 50 SIsCa",
+                  due and [d["is_get"] for d in days] == [True] + [False] * 6 and days[0]["is_now_get"] and
+                  free_jewels() == jewels_before + 50, json.dumps(days[:2]))
+            days = login_bonus()
+            check("login bonus stamps once a day", not home_login_due() and not any(d["is_now_get"] for d in days)
+                  and free_jewels() == jewels_before + 50)
+            for expected in (2, 3, 4, 5, 6, 7, 1):
+                with sqlite3.connect(db_path) as db:
+                    db.execute("UPDATE offline_login_bonus SET last_day = last_day - 1")
+                days = login_bonus()
+            check("login bonus loops after day 7", [d["is_now_get"] for d in days] == [True] + [False] * 6 and
+                  free_jewels() == jewels_before + sum(n for _, _, n in master_days) + 50,
+                  f"{free_jewels() - jewels_before}")
+
             # Archive / circle screens that used to 404.
             status, _, body = post(conn, "/v1/archive/get_ranking_list", {"member_id": 1021, "target_period": 1})
             ranking = json.loads(body)
