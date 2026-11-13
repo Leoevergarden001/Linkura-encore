@@ -1,4 +1,4 @@
-"""Generate the offline shop launcher from preserved 5.1 Shops MasterData."""
+"""Generate the offline shop launcher from preserved Shops MasterData."""
 from __future__ import annotations
 
 import json
@@ -16,10 +16,12 @@ BUILTIN_DIR = BUILTIN_DIR
 
 def generate_json() -> None:
     rows = yaml.safe_load((MASTER_DIR / "Shops.yaml").read_text(encoding="utf-8"))
-    # Only Item Exchange has a local product catalog and purchase transaction.
-    # Omitting other shops avoids advertising grey, non-functional tiles.
+    # Shops with a local catalog and purchase transaction: Item Exchange (3),
+    # GP PRIZE (7), select tickets (8), stickers (9) and the SIsCa store (10).
+    # GachaExchange (4) lives on the Gacha screen. The server sets
+    # is_convertible_limit_break_material per player.
     catalog = sorted(
-        (row for row in rows if row["ShopType"] == 3),
+        (row for row in rows if row["ShopType"] in (3, 7, 8, 9, 10)),
         key=lambda row: row["OrderId"],
     )
     response = {

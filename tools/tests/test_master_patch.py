@@ -40,7 +40,9 @@ class OpenGachaTest(unittest.TestCase):
              "CREATE TABLE GachaSeries(Id INTEGER PRIMARY KEY, OrderId INTEGER, StartTime INTEGER, EndTime INTEGER);"
              "CREATE TABLE ExchangePointRate(Id INTEGER PRIMARY KEY, GachaSeriesId INTEGER, EndTime INTEGER);"
              "INSERT INTO GachaSeries VALUES (1, 1, 0, 9), (2, 50, 0, 5), (3, 60, 0, 5);"
-             "INSERT INTO ExchangePointRate VALUES (10, 2, 5), (11, 3, 5), (12, 1, 9);")
+             "INSERT INTO ExchangePointRate VALUES (10, 2, 5), (11, 3, 5), (12, 1, 9);"
+             "CREATE TABLE SelectTicketSeries(Id INTEGER PRIMARY KEY, EndTime INTEGER);"
+             "INSERT INTO SelectTicketSeries VALUES (20, 4), (21, 9), (22, 12);")
         self.key = self.tmp / "storage-key.json"
         self.key.write_text(json.dumps({"prefs": "ios", "entries": {MASTER_PREFS_KEY: encode_seed(self.seed)}}))
         self.series = self.tmp / "series.json"
@@ -49,12 +51,14 @@ class OpenGachaTest(unittest.TestCase):
 
     def test_opens_listed_series_and_offers_in_a_copy(self):
         result = open_gacha_series(self.m_dir, self.key, self.tmp / "out", series_file=self.series)
-        self.assertEqual((result.series, result.exchange_offers), (2, 2))
+        self.assertEqual((result.series, result.exchange_offers, result.select_tickets), (2, 2, 1))
         self.assertEqual(result.database.name, self.db.name)
         rows = _sql(result.database, self.seed, "SELECT Id, OrderId, EndTime FROM GachaSeries ORDER BY Id;")
         self.assertEqual(rows.split()[1:], ["1|1|9", "2|101|9", "3|102|9"])
         self.assertEqual(_sql(result.database, self.seed, "SELECT group_concat(EndTime) FROM ExchangePointRate;").split()[-1],
                          "9,9,9")
+        self.assertEqual(_sql(result.database, self.seed, "SELECT group_concat(EndTime) FROM SelectTicketSeries;").split()[-1],
+                         "9,9,12")
         self.assertEqual(_sql(self.db, self.seed, "SELECT EndTime FROM GachaSeries WHERE Id = 2;").split()[-1], "5")
 
     def test_refuses_a_master_without_the_series(self):

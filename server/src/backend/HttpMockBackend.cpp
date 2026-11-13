@@ -318,6 +318,39 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetItemListResponseLocked();
         std::optional<MockStoredResponse> GetItemExchangeListResponseLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> ItemExchangeSetPurchaseLocked(std::string_view payloadJson);
+        // Shops served from shop_catalog.json (see ShopLocked).
+        std::optional<MockStoredResponse> ShopLocked(std::string_view action, std::string_view payloadJson);
+        std::optional<MockStoredResponse> ShopGetListLocked();
+        std::optional<MockStoredResponse> GpPrizeExchangeGetListLocked();
+        std::optional<MockStoredResponse> GpPrizeExchangeSetPurchaseLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> StickerExchangeGetListLocked();
+        std::optional<MockStoredResponse> StickerExchangeSetPurchaseLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> SiscaStoreGetListLocked();
+        std::optional<MockStoredResponse> SiscaStoreSetPurchaseLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> SelectTicketExchangeGetListLocked();
+        nlohmann::json SelectTicketSeriesListLocked();
+        std::optional<MockStoredResponse> GachaSetSelectTicketExchangeLocked(std::string_view payloadJson);
+        std::optional<MockStoredResponse> LimitBreakMaterialConvertListLocked();
+        std::optional<MockStoredResponse> LimitBreakMaterialConvertLocked();
+        struct LimitBreakExcess {
+            int itemId = 0;
+            int rarity = 0;
+            int64_t excess = 0;
+        };
+        std::vector<LimitBreakExcess> LimitBreakExcessLocked();
+        struct LimitBreakConvertStep {
+            int rarity = 0;
+            int64_t materialNum = 0;  // materials of this rarity spent
+            int productId = 0;
+            int64_t productAmount = 0;
+        };
+        std::vector<LimitBreakConvertStep> LimitBreakConvertPlanLocked(const std::vector<LimitBreakExcess>& excess);
+        bool LimitBreakConvertibleLocked();
+        int64_t ShopPurchasedLocked(std::string_view kind, int id);
+        bool AddShopPurchasedLocked(std::string_view kind, int id, int64_t num);
+        bool GrantItemLocked(int itemId, int64_t amount);
+        std::optional<bool> GrantCardLocked(int cardId, std::string_view source, const std::string& eventKey,
+                                            int* grantedCardId = nullptr);
         std::optional<MockStoredResponse> GetCollectionListResponseLocked(
             std::string_view querySql,
             std::string_view responseListKey
@@ -2465,6 +2498,16 @@ namespace LinkuraLocal::HttpMock {
             series["card_list"] = config.cards;
             seriesList.push_back(std::move(series));
         }
+        // セレクトチケット: the Gacha screen's ticket exchange lists the held tickets.
+        nlohmann::json selectTickets = nlohmann::json::array();
+        for (const auto& ticket : SelectTicketSeriesListLocked()) {
+            selectTickets.push_back({
+                {"select_ticket_series_id", ticket["id"]},
+                {"user_exchange_ticket_num", ticket["held"]},
+                {"is_sale_select_ticket", true},
+            });
+        }
+        response["select_ticket_series_list"] = std::move(selectTickets);
         return MockStoredResponse{
             response.dump(), GachaHeaders(state->freeJewels, state->paidJewels),
             200, "OK (offline mock)"};
@@ -3184,7 +3227,7 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_finalize(count);
         nlohmann::json response = {
             {"item_exchange_list", std::move(entries)},
-            {"is_convertible_limit_break_material", false},
+            {"is_convertible_limit_break_material", LimitBreakConvertibleLocked()},
         };
         return MockStoredResponse{response.dump(), {}, 200, "OK (offline mock)"};
     }
@@ -3299,6 +3342,630 @@ namespace LinkuraLocal::HttpMock {
             {"user_product_item_num", *ownedProduct + productGain},
             {"user_material_item_num", *ownedMaterial - materialCost},
         }.dump(), {}, 200, "OK (offline item exchange)"};
+    }
+
+    // ---- Shops other than Item Exchange ----
+    // Rows come from shop_catalog.json (server/generators/generate_shop_catalog.py,
+    // Master GpPrizeExchanges / StickerExchanges / SIsCaStoreDatas /
+    // SelectTicketSeries / SelectTicketExchangeRate / LimitBreakMaterial*).
+    // Request/response fields are the 5.0.1 metadata properties in snake_case:
+    //   shop/get_list -> {shop_list[{shop_type,name,order_id,is_maintenance,
+    //       is_exist_products}], is_convertible_limit_break_material}
+    //   gp_prize_exchange/get_list -> {user_ticket_list[{item_id,user_num}],
+    //       gp_prize_exchange_list[{gp_prize_exchanges_id,is_having,remaining_exchange_num}]}
+    //   gp_prize_exchange/set_purchase {gp_prize_exchanges_id} -> {gp_prize_ticket_id,user_ticket_num}
+    //   sticker_exchange/get_list -> {sticker_point_num,
+    //       sticker_exchange_list[{sticker_exchanges_id,is_having}]}
+    //   sticker_exchange/set_purchase {sticker_exchanges_id} -> {sticker_point_num}
+    //   sisca_store/get_list -> {item_list[{sisca_store_datas_id,own_num,buyable_num,
+    //       is_new_item,is_sale}]}
+    //   sisca_store/set_purchase {sisca_store_datas_id,purchase_num} ->
+    //       {sisca_info{free,paid}, user_item_info{user_item_id,item_id,item_num}}
+    //   select_ticket_exchange/get_list -> {select_ticket_exchange_list[
+    //       {select_ticket_series_id,user_select_ticket_num}]}
+    //   gacha/set_select_ticket_exchange {select_ticket_exchange_rate_id} -> {receipt_items}
+    //   item_exchange/get_limit_break_material_convert_list ->
+    //       {convert_limit_break_material_list[{rarity,limit_break_material_num}]}
+    //   item_exchange/set_limit_break_material_convert (no body) -> {get_item_list[{item_id,get_num}]}
+    namespace {
+        const nlohmann::json& ShopCatalog() {
+            static const nlohmann::json catalog = OfflineApiMockBuiltIn::ShopCatalogJsonObj();
+            return catalog;
+        }
+
+        const nlohmann::json& ShopRows(const char* key) {
+            static const nlohmann::json empty = nlohmann::json::array();
+            const auto& catalog = ShopCatalog();
+            if (!catalog.is_object()) return empty;
+            const auto it = catalog.find(key);
+            return it != catalog.end() && it->is_array() ? *it : empty;
+        }
+
+        const nlohmann::json* ShopRow(const char* key, int64_t id) {
+            for (const auto& row : ShopRows(key)) {
+                if (row.value("id", int64_t{0}) == id) return &row;
+            }
+            return nullptr;
+        }
+
+        bool ShopRowOpen(const nlohmann::json& row, std::time_t now) {
+            return row.value("start", int64_t{0}) <= now &&
+                   now < row.value("end", std::numeric_limits<int64_t>::max());
+        }
+
+        MockStoredResponse ShopRequestError(const char* message, std::string headers = {}) {
+            return MockStoredResponse{nlohmann::json{{"error", message}}.dump(), std::move(headers), 400, message};
+        }
+
+        std::optional<int64_t> ShopPayloadInt(std::string_view payloadJson, const char* field) {
+            const auto payload = nlohmann::json::parse(payloadJson.begin(), payloadJson.end(), nullptr, false);
+            if (!payload.is_object() || !payload.contains(field) || !payload[field].is_number_integer())
+                return std::nullopt;
+            return payload[field].get<int64_t>();
+        }
+
+        // ShopType (5.0.1 metadata): 3 ItemExchange, 7 GpPrizeExchange,
+        // 8 SelectTicketExchange, 9 StickerExchange, 10 SiscaStore. Jewel (1,
+        // App Store purchases) and GachaExchange (4, on the Gacha screen) are
+        // not shop tiles here.
+        constexpr std::array<int, 5> kServedShopTypes{3, 7, 8, 9, 10};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::ShopLocked(std::string_view action,
+                                                                        std::string_view payloadJson) {
+        if (!initialized && !EnsureReadyLocked()) return std::nullopt;
+        if (!db) return std::nullopt;
+        if (action == "shop/get_list") return ShopGetListLocked();
+        if (action == "gp_prize_exchange/get_list") return GpPrizeExchangeGetListLocked();
+        if (action == "gp_prize_exchange/set_purchase") return GpPrizeExchangeSetPurchaseLocked(payloadJson);
+        if (action == "sticker_exchange/get_list") return StickerExchangeGetListLocked();
+        if (action == "sticker_exchange/set_purchase") return StickerExchangeSetPurchaseLocked(payloadJson);
+        if (action == "sisca_store/get_list") return SiscaStoreGetListLocked();
+        if (action == "sisca_store/set_purchase") return SiscaStoreSetPurchaseLocked(payloadJson);
+        if (action == "select_ticket_exchange/get_list") return SelectTicketExchangeGetListLocked();
+        if (action == "gacha/set_select_ticket_exchange") return GachaSetSelectTicketExchangeLocked(payloadJson);
+        if (action == "item_exchange/get_limit_break_material_convert_list") return LimitBreakMaterialConvertListLocked();
+        if (action == "item_exchange/set_limit_break_material_convert") return LimitBreakMaterialConvertLocked();
+        return std::nullopt;
+    }
+
+    int64_t HttpMockBackend::Impl::ShopPurchasedLocked(std::string_view kind, int id) {
+        sqlite3_stmt* stmt = nullptr;
+        int64_t value = 0;
+        if (sqlite3_prepare_v2(db, "SELECT purchased_num FROM offline_shop_purchase WHERE kind=? AND id=?;",
+                               -1, &stmt, nullptr) == SQLITE_OK && stmt && BindText(stmt, 1, kind) &&
+            sqlite3_bind_int(stmt, 2, id) == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+            value = sqlite3_column_int64(stmt, 0);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return value;
+    }
+
+    bool HttpMockBackend::Impl::AddShopPurchasedLocked(std::string_view kind, int id, int64_t num) {
+        sqlite3_stmt* stmt = nullptr;
+        const bool ok = sqlite3_prepare_v2(db,
+                "INSERT INTO offline_shop_purchase(kind,id,purchased_num) VALUES(?,?,?) "
+                "ON CONFLICT(kind,id) DO UPDATE SET purchased_num=purchased_num+excluded.purchased_num;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt && BindText(stmt, 1, kind) &&
+            sqlite3_bind_int(stmt, 2, id) == SQLITE_OK && sqlite3_bind_int64(stmt, 3, num) == SQLITE_OK &&
+            sqlite3_step(stmt) == SQLITE_DONE;
+        if (stmt) sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool HttpMockBackend::Impl::GrantItemLocked(int itemId, int64_t amount) {
+        if (amount <= 0) return true;
+        sqlite3_stmt* stmt = nullptr;
+        const bool ok = sqlite3_prepare_v2(db,
+                "INSERT INTO museum_item_inventory(d_item_datas_id,item_num) "
+                "SELECT d_item_datas_id,?1 FROM item WHERE item_id=?2 LIMIT 1 "
+                "ON CONFLICT(d_item_datas_id) DO UPDATE SET item_num=item_num+excluded.item_num;",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt &&
+            sqlite3_bind_int64(stmt, 1, amount) == SQLITE_OK && sqlite3_bind_int(stmt, 2, itemId) == SQLITE_OK &&
+            sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) == 1;
+        if (stmt) sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    // Adds a card to the collection as a draw would and returns whether it was
+    // new. A card already held becomes its series' limit-break material
+    // (LimitBreakMaterialRate), as duplicates did on the live service.
+    // Master rewards name a card series' first card (…0); the Museum catalog
+    // keeps one record per series (CardSeriesId = card id / 10), so the
+    // series decides which card_detail row is granted.
+    std::optional<bool> HttpMockBackend::Impl::GrantCardLocked(int cardId, std::string_view source,
+                                                              const std::string& eventKey, int* grantedCardId) {
+        sqlite3_stmt* lookup = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT c.d_card_datas_id, c.card_datas_id, "
+                "EXISTS(SELECT 1 FROM museum_card_ownership o WHERE o.d_card_datas_id=c.d_card_datas_id) "
+                "FROM card_detail c WHERE c.card_datas_id / 10 = ?1 / 10 "
+                "ORDER BY c.card_datas_id = ?1 DESC, c.card_datas_id DESC LIMIT 1;",
+                -1, &lookup, nullptr) != SQLITE_OK || !lookup) {
+            if (lookup) sqlite3_finalize(lookup);
+            return std::nullopt;
+        }
+        sqlite3_bind_int(lookup, 1, cardId);
+        if (sqlite3_step(lookup) != SQLITE_ROW) {
+            sqlite3_finalize(lookup);
+            return std::nullopt;
+        }
+        const auto* rawId = reinterpret_cast<const char*>(sqlite3_column_text(lookup, 0));
+        const std::string dCardId(rawId ? rawId : "");
+        const int catalogCardId = sqlite3_column_int(lookup, 1);
+        const bool owned = sqlite3_column_int(lookup, 2) != 0;
+        sqlite3_finalize(lookup);
+        if (dCardId.empty()) return std::nullopt;
+        if (grantedCardId) *grantedCardId = catalogCardId;
+        if (owned) {
+            const int seriesId = catalogCardId / 10;
+            for (const auto& row : ShopRows("limit_break_material")) {
+                if (row.value("series_id", 0) != seriesId) continue;
+                if (!GrantItemLocked(row.value("material_item_id", 0), row.value("quantity", int64_t{0})))
+                    return std::nullopt;
+                break;
+            }
+            return false;
+        }
+        bool ok = true;
+        for (const char* sql : {
+                 "INSERT OR IGNORE INTO museum_gacha_acquisition (card_datas_id, first_acquired_at, acquisition_source) "
+                 "SELECT card_datas_id, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?2 FROM card_detail WHERE d_card_datas_id=?1;",
+                 "INSERT OR IGNORE INTO museum_card_ownership (d_card_datas_id, acquired_at, acquisition_source) "
+                 "VALUES (?1, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?2);",
+                 "INSERT OR IGNORE INTO museum_card_state (d_card_datas_id, style_level, limit_break_times, is_evolve_max) "
+                 "SELECT ?1, 1, 0, 0 WHERE ?2 IS NOT NULL;"}) {
+            sqlite3_stmt* stmt = nullptr;
+            ok = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK && stmt &&
+                 BindText(stmt, 1, dCardId) && BindText(stmt, 2, source) && sqlite3_step(stmt) == SQLITE_DONE;
+            if (stmt) sqlite3_finalize(stmt);
+            if (!ok) return std::nullopt;
+        }
+        if (!RecordMissionEventLocked(eventKey, "CARD_OBTAIN", 1)) return std::nullopt;
+        return true;
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::ShopGetListLocked() {
+        nlohmann::json shops = nlohmann::json::array();
+        const auto& template_ = OfflineApiMockBuiltIn::ShopGetListJsonObj();
+        if (template_.is_object() && template_.contains("shop_list")) shops = template_["shop_list"];
+        nlohmann::json served = nlohmann::json::array();
+        for (const auto& shop : shops) {
+            const int type = shop.value("shop_type", 0);
+            if (std::find(kServedShopTypes.begin(), kServedShopTypes.end(), type) != kServedShopTypes.end())
+                served.push_back(shop);
+        }
+        nlohmann::json response = {
+            {"shop_list", std::move(served)},
+            {"is_convertible_limit_break_material", LimitBreakConvertibleLocked()},
+        };
+        return MockStoredResponse{response.dump(), {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GpPrizeExchangeGetListLocked() {
+        const std::time_t now = std::time(nullptr);
+        nlohmann::json list = nlohmann::json::array();
+        std::vector<int> tickets;
+        for (const auto& row : ShopRows("gp_prize")) {
+            if (!ShopRowOpen(row, now)) continue;
+            const int id = row.value("id", 0);
+            const int productId = row.value("product_item_id", 0);
+            const int limit = row.value("limit_num", 0);
+            bool having = false;
+            if (row.value("product_item_type", 0) == 2) {
+                sqlite3_stmt* stmt = nullptr;
+                if (sqlite3_prepare_v2(db,
+                        "SELECT 1 FROM museum_card_ownership INNER JOIN card_detail USING(d_card_datas_id) "
+                        "WHERE card_detail.card_datas_id / 10 = ?1 / 10 LIMIT 1;", -1, &stmt, nullptr) == SQLITE_OK &&
+                    stmt) {
+                    sqlite3_bind_int(stmt, 1, productId);
+                    having = sqlite3_step(stmt) == SQLITE_ROW;
+                }
+                if (stmt) sqlite3_finalize(stmt);
+            } else {
+                having = ItemHoldingLocked(productId) > 0;
+            }
+            list.push_back({
+                {"gp_prize_exchanges_id", id},
+                {"is_having", having},
+                {"remaining_exchange_num",
+                 limit > 0 ? std::max<int64_t>(0, limit - ShopPurchasedLocked("gp_prize", id)) : 0},
+            });
+            const int ticket = row.value("material_item_id", 0);
+            if (std::find(tickets.begin(), tickets.end(), ticket) == tickets.end()) tickets.push_back(ticket);
+        }
+        nlohmann::json userTickets = nlohmann::json::array();
+        for (const int ticket : tickets) userTickets.push_back({{"item_id", ticket}, {"user_num", ItemHoldingLocked(ticket)}});
+        nlohmann::json response = {{"user_ticket_list", std::move(userTickets)}, {"gp_prize_exchange_list", std::move(list)}};
+        return MockStoredResponse{response.dump(), {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GpPrizeExchangeSetPurchaseLocked(std::string_view payloadJson) {
+        const auto id = ShopPayloadInt(payloadJson, "gp_prize_exchanges_id");
+        const auto* row = id ? ShopRow("gp_prize", *id) : nullptr;
+        if (!row || !ShopRowOpen(*row, std::time(nullptr))) return ShopRequestError("unknown GP PRIZE exchange");
+        const int exchangeId = static_cast<int>(*id);
+        const int ticket = row->value("material_item_id", 0);
+        const int64_t cost = row->value("material_item_num", int64_t{0});
+        const int limit = row->value("limit_num", 0);
+        const int productType = row->value("product_item_type", 0);
+        const int productId = row->value("product_item_id", 0);
+        const int64_t productNum = row->value("product_item_num", int64_t{1});
+        if (limit > 0 && ShopPurchasedLocked("gp_prize", exchangeId) >= limit)
+            return ShopRequestError("exchange limit reached");
+        if (ItemHoldingLocked(ticket) < cost) return ShopRequestError("not enough GP PRIZE tickets");
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        bool ok = ConsumeItemLocked(ticket, cost) && AddShopPurchasedLocked("gp_prize", exchangeId, 1);
+        if (ok && productType == 2) {
+            const auto count = ShopPurchasedLocked("gp_prize", exchangeId);
+            ok = GrantCardLocked(productId, "GP_PRIZE_EXCHANGE",
+                                 "gp-prize:" + std::to_string(exchangeId) + ":" + std::to_string(count)).has_value();
+        } else if (ok) {
+            ok = GrantItemLocked(productId, productNum);
+        }
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        nlohmann::json response = {{"gp_prize_ticket_id", ticket}, {"user_ticket_num", ItemHoldingLocked(ticket)}};
+        return MockStoredResponse{response.dump(), {}, 200, "OK (offline GP PRIZE exchange)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::StickerExchangeGetListLocked() {
+        const std::time_t now = std::time(nullptr);
+        nlohmann::json list = nlohmann::json::array();
+        int pointItem = 0;
+        sqlite3_stmt* owned = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT 1 FROM museum_sticker_ownership WHERE stickers_id=?;",
+                               -1, &owned, nullptr) != SQLITE_OK || !owned) {
+            if (owned) sqlite3_finalize(owned);
+            return std::nullopt;
+        }
+        for (const auto& row : ShopRows("sticker")) {
+            if (!ShopRowOpen(row, now)) continue;
+            sqlite3_reset(owned);
+            sqlite3_bind_int(owned, 1, row.value("product_sticker_id", 0));
+            list.push_back({{"sticker_exchanges_id", row.value("id", 0)}, {"is_having", sqlite3_step(owned) == SQLITE_ROW}});
+            pointItem = row.value("material_item_id", 0);
+        }
+        sqlite3_finalize(owned);
+        nlohmann::json response = {
+            {"sticker_point_num", pointItem ? ItemHoldingLocked(pointItem) : 0},
+            {"sticker_exchange_list", std::move(list)},
+        };
+        return MockStoredResponse{response.dump(), {}, 200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::StickerExchangeSetPurchaseLocked(std::string_view payloadJson) {
+        const auto id = ShopPayloadInt(payloadJson, "sticker_exchanges_id");
+        const auto* row = id ? ShopRow("sticker", *id) : nullptr;
+        if (!row || !ShopRowOpen(*row, std::time(nullptr))) return ShopRequestError("unknown sticker exchange");
+        const int exchangeId = static_cast<int>(*id);
+        const int stickerId = row->value("product_sticker_id", 0);
+        const int pointItem = row->value("material_item_id", 0);
+        const int64_t cost = row->value("material_item_num", int64_t{0});
+        sqlite3_stmt* stmt = nullptr;
+        bool having = false;
+        bool known = false;
+        if (sqlite3_prepare_v2(db,
+                "SELECT EXISTS(SELECT 1 FROM museum_sticker_ownership WHERE stickers_id=?1), "
+                "EXISTS(SELECT 1 FROM collection_sticker WHERE stickers_id=?1);",
+                -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, stickerId);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                having = sqlite3_column_int(stmt, 0) != 0;
+                known = sqlite3_column_int(stmt, 1) != 0;
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        if (!known) return ShopRequestError("sticker not in collection");
+        // LimitNum is 1 for every sticker exchange: a held sticker cannot be bought again.
+        if (having) return ShopRequestError("sticker already held");
+        if (ItemHoldingLocked(pointItem) < cost) return ShopRequestError("not enough sticker points");
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        bool ok = ConsumeItemLocked(pointItem, cost) && AddShopPurchasedLocked("sticker", exchangeId, 1);
+        stmt = nullptr;
+        ok = ok && sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO museum_sticker_ownership(stickers_id) VALUES(?);",
+                                      -1, &stmt, nullptr) == SQLITE_OK && stmt &&
+             sqlite3_bind_int(stmt, 1, stickerId) == SQLITE_OK && sqlite3_step(stmt) == SQLITE_DONE &&
+             sqlite3_changes(db) == 1;
+        if (stmt) sqlite3_finalize(stmt);
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        return MockStoredResponse{nlohmann::json{{"sticker_point_num", ItemHoldingLocked(pointItem)}}.dump(), {}, 200,
+                                  "OK (offline sticker exchange)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::SiscaStoreGetListLocked() {
+        const std::time_t now = std::time(nullptr);
+        nlohmann::json list = nlohmann::json::array();
+        for (const auto& row : ShopRows("sisca_store")) {
+            if (!ShopRowOpen(row, now)) continue;
+            const int id = row.value("id", 0);
+            const int limit = row.value("limit_num", 0);
+            // The client's TPopupSiscaStoreConfirm.GetMaxPurchaseCount uses
+            // buyable_num only when LimitNum is set (remaining purchases).
+            list.push_back({
+                {"sisca_store_datas_id", id},
+                {"own_num", ItemHoldingLocked(row.value("item_id", 0))},
+                {"buyable_num", limit > 0 ? std::max<int64_t>(0, limit - ShopPurchasedLocked("sisca_store", id)) : 0},
+                {"is_new_item", false},
+                {"is_sale", true},
+            });
+        }
+        return MockStoredResponse{nlohmann::json{{"item_list", std::move(list)}}.dump(), WalletHeadersLocked(), 200,
+                                  "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::SiscaStoreSetPurchaseLocked(std::string_view payloadJson) {
+        const auto id = ShopPayloadInt(payloadJson, "sisca_store_datas_id");
+        const auto count = ShopPayloadInt(payloadJson, "purchase_num");
+        const auto* row = id ? ShopRow("sisca_store", *id) : nullptr;
+        if (!row || !ShopRowOpen(*row, std::time(nullptr))) return ShopRequestError("unknown SIsCa store item");
+        if (!count || *count < 1 || *count > 9999) return ShopRequestError("invalid purchase count");
+        const int storeId = static_cast<int>(*id);
+        const int itemId = row->value("item_id", 0);
+        const int limit = row->value("limit_num", 0);
+        const bool paidOnly = row->value("paid_only", false);
+        const int64_t price = row->value("price", int64_t{0}) * *count;
+        const auto wallet = LoadGachaStateLocked();
+        if (!wallet) return std::nullopt;
+        const auto headers = GachaHeaders(wallet->freeJewels, wallet->paidJewels);
+        if (limit > 0 && ShopPurchasedLocked("sisca_store", storeId) + *count > limit)
+            return ShopRequestError("purchase limit reached", headers);
+        if (paidOnly ? wallet->paidJewels < price : wallet->freeJewels + wallet->paidJewels < price)
+            return ShopRequestError("insufficient local SIsCa", headers);
+        // Free SIsCa first, as the gacha spends it; paid-only items take paid SIsCa.
+        const int64_t spentFree = paidOnly ? 0 : std::min<int64_t>(wallet->freeJewels, price);
+        const int64_t freeAfter = wallet->freeJewels - spentFree;
+        const int64_t paidAfter = wallet->paidJewels - (price - spentFree);
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        bool ok = true;
+        sqlite3_stmt* stmt = nullptr;
+        ok = sqlite3_prepare_v2(db, "UPDATE museum_gacha_state SET free_jewels=?, paid_jewels=? WHERE series_id=1055003;",
+                                -1, &stmt, nullptr) == SQLITE_OK && stmt &&
+             sqlite3_bind_int64(stmt, 1, freeAfter) == SQLITE_OK && sqlite3_bind_int64(stmt, 2, paidAfter) == SQLITE_OK &&
+             sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) == 1;
+        if (stmt) sqlite3_finalize(stmt);
+        // The SIsCa inventory rows mirror the wallet (as after a draw).
+        for (const auto [mirrorId, quantity] : {std::pair<int, int64_t>{1001001, paidAfter}, {1002001, freeAfter}}) {
+            stmt = nullptr;
+            ok = ok && sqlite3_prepare_v2(db,
+                    "UPDATE museum_item_inventory SET item_num=? WHERE d_item_datas_id="
+                    "(SELECT d_item_datas_id FROM item WHERE item_id=? LIMIT 1);", -1, &stmt, nullptr) == SQLITE_OK &&
+                 stmt && sqlite3_bind_int64(stmt, 1, quantity) == SQLITE_OK &&
+                 sqlite3_bind_int(stmt, 2, mirrorId) == SQLITE_OK && sqlite3_step(stmt) == SQLITE_DONE;
+            if (stmt) sqlite3_finalize(stmt);
+        }
+        ok = ok && GrantItemLocked(itemId, row->value("item_num", int64_t{1}) * *count) &&
+             AddShopPurchasedLocked("sisca_store", storeId, *count);
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        std::string userItemId;
+        stmt = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT d_item_datas_id FROM item WHERE item_id=? LIMIT 1;", -1, &stmt, nullptr) ==
+                SQLITE_OK && stmt) {
+            sqlite3_bind_int(stmt, 1, itemId);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const auto* raw = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                userItemId = raw ? raw : "";
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        nlohmann::json response = {
+            {"sisca_info", {{"free", freeAfter}, {"paid", paidAfter}}},
+            {"user_item_info", {{"user_item_id", userItemId}, {"item_id", itemId}, {"item_num", ItemHoldingLocked(itemId)}}},
+        };
+        Log::InfoFmt("[HttpMockBackend] SIsCa store item=%d x%lld (free %lld, paid %lld)", itemId,
+                     static_cast<long long>(*count), static_cast<long long>(freeAfter),
+                     static_cast<long long>(paidAfter));
+        return MockStoredResponse{response.dump(), GachaHeaders(freeAfter, paidAfter), 200, "OK (offline SIsCa store)"};
+    }
+
+    // Select tickets the player holds whose series has started. The end of a
+    // series is left to the client, which lists only what its Master still
+    // shows (tools master-open-gacha extends the ended ones).
+    nlohmann::json HttpMockBackend::Impl::SelectTicketSeriesListLocked() {
+        const std::time_t now = std::time(nullptr);
+        nlohmann::json list = nlohmann::json::array();
+        for (const auto& row : ShopRows("select_ticket_series")) {
+            if (row.value("start", int64_t{0}) > now) continue;
+            const auto held = ItemHoldingLocked(row.value("ticket_item_id", 0));
+            if (held <= 0) continue;
+            list.push_back({{"id", row.value("id", 0)}, {"held", held}});
+        }
+        return list;
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::SelectTicketExchangeGetListLocked() {
+        nlohmann::json list = nlohmann::json::array();
+        for (const auto& series : SelectTicketSeriesListLocked()) {
+            list.push_back({{"select_ticket_series_id", series["id"]}, {"user_select_ticket_num", series["held"]}});
+        }
+        return MockStoredResponse{nlohmann::json{{"select_ticket_exchange_list", std::move(list)}}.dump(), {}, 200,
+                                  "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::GachaSetSelectTicketExchangeLocked(std::string_view payloadJson) {
+        const auto rateId = ShopPayloadInt(payloadJson, "select_ticket_exchange_rate_id");
+        const nlohmann::json* rate = nullptr;
+        if (rateId) {
+            for (const auto& row : ShopRows("select_ticket_rates")) {
+                if (row.value("id", int64_t{0}) == *rateId) { rate = &row; break; }
+            }
+        }
+        const auto* series = rate ? ShopRow("select_ticket_series", rate->value("series_id", 0)) : nullptr;
+        if (!rate || !series || series->value("start", int64_t{0}) > std::time(nullptr))
+            return ShopRequestError("unknown select ticket exchange", WalletHeadersLocked());
+        const int ticket = series->value("ticket_item_id", 0);
+        const int itemType = rate->value("item_type", 0);
+        const int itemId = rate->value("item_id", 0);
+        const int64_t quantity = rate->value("quantity", int64_t{1});
+        if (ItemHoldingLocked(ticket) < 1) return ShopRequestError("no select ticket", WalletHeadersLocked());
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        std::optional<bool> isNew = false;
+        int receiptId = itemId;
+        bool ok = ConsumeItemLocked(ticket, 1);
+        if (ok && itemType == 2) {
+            const auto remaining = ItemHoldingLocked(ticket);
+            isNew = GrantCardLocked(itemId, "SELECT_TICKET",
+                                    "select-ticket:" + std::to_string(*rateId) + ":" + std::to_string(remaining) +
+                                        ":" + std::to_string(std::time(nullptr)), &receiptId);
+            ok = isNew.has_value();
+        } else if (ok) {
+            ok = GrantItemLocked(itemId, quantity);
+        }
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        Log::InfoFmt("[HttpMockBackend] select ticket %d -> %d (new=%d)", ticket, itemId, isNew.value_or(false) ? 1 : 0);
+        // Same receipt shape as gacha/set_guarantee_point_exchange.
+        nlohmann::json response = {{"receipt_items", nlohmann::json::array({{
+            {"get_item_type", itemType}, {"get_id", receiptId}, {"get_num", quantity}, {"is_new", isNew.value_or(false)},
+        }})}};
+        return MockStoredResponse{response.dump(), WalletHeadersLocked(), 200, "OK (offline select ticket)"};
+    }
+
+    // 解放Pt.変換: limit-break materials (one item per card series, Items
+    // 4xxxxxx) beyond what their card still needs to reach its last limit
+    // break are convertible, LimitBreakMaterialConvertRate.LimitBreakMaterialNum
+    // of one rarity into one ティア. A series not held yet keeps enough for a
+    // full limit break.
+    std::vector<HttpMockBackend::Impl::LimitBreakExcess> HttpMockBackend::Impl::LimitBreakExcessLocked() {
+        std::unordered_map<int, int> seriesByMaterial;
+        for (const auto& row : ShopRows("limit_break_material"))
+            seriesByMaterial[row.value("material_item_id", 0)] = row.value("series_id", 0);
+        struct SeriesNeed {
+            int rarity = 0;
+            int64_t fullCost = -1;
+            int64_t remaining = 0;
+            bool owned = false;
+        };
+        std::unordered_map<int, SeriesNeed> needs;
+        // Held cards by series (card id / 10): the growth catalog is keyed by
+        // a series' first card, the Museum catalog by its own record.
+        std::unordered_map<int, int> limitBreakBySeries;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT card_detail.card_datas_id / 10, MAX(museum_card_state.limit_break_times) FROM museum_card_state "
+                "INNER JOIN card_detail USING(d_card_datas_id) GROUP BY 1;", -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            while (sqlite3_step(stmt) == SQLITE_ROW)
+                limitBreakBySeries[sqlite3_column_int(stmt, 0)] = sqlite3_column_int(stmt, 1);
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        const auto& catalog = CardGrowthCatalog();
+        if (catalog.is_object() && catalog.contains("cards")) {
+            for (const auto& [key, growth] : catalog["cards"].items()) {
+                const int seriesId = growth.value("series_id", 0);
+                if (seriesId == 0) continue;
+                auto& need = needs[seriesId];
+                need.rarity = growth.value("rarity", 0);
+                int64_t full = 0;
+                int64_t remaining = 0;
+                const auto owned = limitBreakBySeries.find(std::atoi(key.c_str()) / 10);
+                for (const auto& step : growth.value("limit_break", nlohmann::json::array())) {
+                    const int64_t num = step.value("num", int64_t{0});
+                    full += num;
+                    if (owned != limitBreakBySeries.end() && step.value("times", 0) > owned->second) remaining += num;
+                }
+                need.fullCost = std::max(need.fullCost, full);
+                if (owned != limitBreakBySeries.end()) {
+                    need.remaining = std::max(need.remaining, remaining);
+                    need.owned = true;
+                }
+            }
+        }
+        std::vector<LimitBreakExcess> result;
+        stmt = nullptr;
+        if (sqlite3_prepare_v2(db,
+                "SELECT item.item_id, inventory.item_num FROM item INNER JOIN museum_item_inventory AS inventory "
+                "USING(d_item_datas_id) WHERE item.item_id BETWEEN 4000000 AND 4999999 AND inventory.item_num > 0 "
+                "ORDER BY item.item_id;", -1, &stmt, nullptr) == SQLITE_OK && stmt) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const int itemId = sqlite3_column_int(stmt, 0);
+                const int64_t held = sqlite3_column_int64(stmt, 1);
+                const auto series = seriesByMaterial.find(itemId);
+                if (series == seriesByMaterial.end()) continue;
+                const auto need = needs.find(series->second);
+                if (need == needs.end() || need->second.rarity == 0) continue;
+                const int64_t keep = need->second.owned ? need->second.remaining : std::max<int64_t>(0, need->second.fullCost);
+                if (held > keep) result.push_back({itemId, need->second.rarity, held - keep});
+            }
+        }
+        if (stmt) sqlite3_finalize(stmt);
+        return result;
+    }
+
+    // Rarity by rarity (LimitBreakMaterialConvertRate order): whole units of
+    // LimitBreakMaterialNum, as many as the product's holding cap
+    // (Items.LimitNum) still takes; rarities that share a product share its room.
+    std::vector<HttpMockBackend::Impl::LimitBreakConvertStep> HttpMockBackend::Impl::LimitBreakConvertPlanLocked(
+            const std::vector<LimitBreakExcess>& excess) {
+        std::map<int, int64_t> available;
+        for (const auto& entry : excess) available[entry.rarity] += entry.excess;
+        std::map<int, int64_t> room;
+        std::vector<LimitBreakConvertStep> plan;
+        for (const auto& rate : ShopRows("limit_break_convert")) {
+            const int rarity = rate.value("rarity", 0);
+            const int64_t num = rate.value("num", int64_t{0});
+            const int product = rate.value("product_item_id", 0);
+            const int64_t each = rate.value("product_item_num", int64_t{1});
+            const auto have = available.find(rarity);
+            if (num <= 0 || each <= 0 || product <= 0 || have == available.end()) continue;
+            if (!room.count(product))
+                room[product] = std::max<int64_t>(0, rate.value("product_limit", int64_t{0}) - ItemHoldingLocked(product));
+            const int64_t units = std::min(have->second / num, room[product] / each);
+            if (units <= 0) continue;
+            room[product] -= units * each;
+            plan.push_back({rarity, units * num, product, units * each});
+        }
+        return plan;
+    }
+
+    bool HttpMockBackend::Impl::LimitBreakConvertibleLocked() {
+        return !LimitBreakConvertPlanLocked(LimitBreakExcessLocked()).empty();
+    }
+
+    // limit_break_material_num is what a conversion now would spend.
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::LimitBreakMaterialConvertListLocked() {
+        nlohmann::json list = nlohmann::json::array();
+        for (const auto& step : LimitBreakConvertPlanLocked(LimitBreakExcessLocked()))
+            list.push_back({{"rarity", step.rarity}, {"limit_break_material_num", step.materialNum}});
+        return MockStoredResponse{nlohmann::json{{"convert_limit_break_material_list", std::move(list)}}.dump(), {},
+                                  200, "OK (offline mock)"};
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Impl::LimitBreakMaterialConvertLocked() {
+        const auto excess = LimitBreakExcessLocked();
+        const auto plan = LimitBreakConvertPlanLocked(excess);
+        if (!ExecSql(db, "BEGIN IMMEDIATE;")) return std::nullopt;
+        bool ok = true;
+        std::map<int, int64_t> gained;
+        for (const auto& step : plan) {
+            int64_t toSpend = step.materialNum;
+            for (const auto& entry : excess) {
+                if (entry.rarity != step.rarity || toSpend <= 0) continue;
+                const int64_t spend = std::min(entry.excess, toSpend);
+                ok = ok && ConsumeItemLocked(entry.itemId, spend);
+                toSpend -= spend;
+            }
+            ok = ok && toSpend == 0 && GrantItemLocked(step.productId, step.productAmount);
+            gained[step.productId] += step.productAmount;
+        }
+        if (!ok || !ExecSql(db, "COMMIT;")) {
+            ExecSql(db, "ROLLBACK;");
+            return std::nullopt;
+        }
+        nlohmann::json list = nlohmann::json::array();
+        for (const auto& [itemId, amount] : gained) list.push_back({{"item_id", itemId}, {"get_num", amount}});
+        Log::InfoFmt("[HttpMockBackend] limit-break material convert: %zu product kinds", gained.size());
+        return MockStoredResponse{nlohmann::json{{"get_item_list", std::move(list)}}.dump(), {}, 200,
+                                  "OK (offline limit-break convert)"};
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::Impl::GetCharacterInfoByIdLocked(std::string_view characterId) {
@@ -8194,6 +8861,11 @@ namespace LinkuraLocal::HttpMock {
         if (action == "evolution") return impl_->EvolutionLocked(payloadJson);
         if (action == "check_skill_level_up") return impl_->CheckSkillLevelUpLocked(payloadJson);
         return std::nullopt;
+    }
+
+    std::optional<MockStoredResponse> HttpMockBackend::Shop(std::string_view action, std::string_view payloadJson) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->ShopLocked(action, payloadJson);
     }
 
     std::optional<MockStoredResponse> HttpMockBackend::GetItemDetailByDItemId(std::string_view dItemDatasId) {

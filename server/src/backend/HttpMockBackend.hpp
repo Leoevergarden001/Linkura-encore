@@ -57,6 +57,9 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GetItemListResponse();
         std::optional<MockStoredResponse> GetItemExchangeListResponse(std::string_view payloadJson);
         std::optional<MockStoredResponse> ItemExchangeSetPurchase(std::string_view payloadJson);
+        // GP PRIZE / sticker exchange, SIsCa store, select tickets, shop list and
+        // limit-break material convert; action is the path after /v1/.
+        std::optional<MockStoredResponse> Shop(std::string_view action, std::string_view payloadJson);
         std::optional<MockStoredResponse> LookupItemDetailFromPayload(std::string_view payloadJson);
 
         std::optional<MockStoredResponse> GetCollectionMusicListResponse();

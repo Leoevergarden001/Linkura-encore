@@ -775,8 +775,20 @@ namespace LinkuraLocal::HttpMock {
                                R"({"total_count":0,"page":1,"items":[]})");
             RegisterStaticJson(routes, "/v1/present_box/get_history",
                                R"({"total_count":0,"page":1,"items":[]})");
-            RegisterStaticJson(routes, "/v1/shop/get_list",
-                               OfflineApiMockBuiltIn::ShopGetListJsonView);
+            // Shop tiles, GP PRIZE / sticker exchanges, SIsCa store, select
+            // tickets and 解放Pt.変換, from the Master (shop_catalog.json).
+            for (const char* action : {"shop/get_list", "gp_prize_exchange/get_list", "gp_prize_exchange/set_purchase",
+                                       "sticker_exchange/get_list", "sticker_exchange/set_purchase",
+                                       "sisca_store/get_list", "sisca_store/set_purchase",
+                                       "select_ticket_exchange/get_list", "gacha/set_select_ticket_exchange",
+                                       "item_exchange/get_limit_break_material_convert_list",
+                                       "item_exchange/set_limit_break_material_convert"}) {
+                const std::string name(action);
+                RegisterBackend(routes, std::string("/v1/") + action,
+                                [name](const MockRequestContext& request, HttpMockBackend& backend) {
+                                    return ToBackendResponse(backend.Shop(name, request.payloadJson));
+                                });
+            }
             RegisterBackend(routes, "/v1/item_exchange/get_list", HandleItemExchangeGetList);
             RegisterBackend(routes, "/v1/item_exchange/get_list_new", HandleItemExchangeGetList);
             RegisterBackend(routes, "/v1/item_exchange/set_purchase", HandleItemExchangeSetPurchase);

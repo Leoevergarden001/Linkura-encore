@@ -1,9 +1,37 @@
 {
   "shop_list": [
     {
+      "shop_type": 10,
+      "name": "SIsCaストア",
+      "order_id": 1,
+      "is_maintenance": false,
+      "is_exist_products": true
+    },
+    {
+      "shop_type": 7,
+      "name": "GP PRIZE交換所",
+      "order_id": 3,
+      "is_maintenance": false,
+      "is_exist_products": true
+    },
+    {
       "shop_type": 3,
       "name": "アイテム交換所",
       "order_id": 4,
+      "is_maintenance": false,
+      "is_exist_products": true
+    },
+    {
+      "shop_type": 8,
+      "name": "セレクトチケット交換所",
+      "order_id": 5,
+      "is_maintenance": false,
+      "is_exist_products": true
+    },
+    {
+      "shop_type": 9,
+      "name": "ステッカー交換所",
+      "order_id": 6,
       "is_maintenance": false,
       "is_exist_products": true
     }

@@ -22,6 +22,7 @@ import generate_music_list as music_list
 import generate_mission_get_list as mission_list
 import generate_item_exchange_catalog as item_exchange_catalog
 import generate_shop_get_list as shop_list
+import generate_shop_catalog as shop_catalog
 import generate_music_sql as music_db
 import generate_quest_stage_sql as quest_stage
 import generate_rhythm_game_sql as rhythm_game
@@ -47,6 +48,7 @@ def main() -> None:
     cheer_rankings.generate_json()
     item_exchange_catalog.generate_json()
     shop_list.generate_json()
+    shop_catalog.generate_json()
     music_list.generate_json()
     sticker_list.generate_json()
     item.generate_json()

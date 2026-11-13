@@ -594,6 +594,137 @@ def main() -> int:
             check("grand prix rank rewards are paid",
                   due and all(item_num(r["item_id"]) >= before[r["item_id"]] + r["num"] for r in due),
                   f"{due} {before}")
+
+            # Profile ドリームスタイル所持数 = owned DR (rarity 8) cards.
+            with sqlite3.connect(db_path) as db:
+                dr_owned = db.execute("SELECT COUNT(*) FROM museum_card_ownership JOIN card_detail USING(d_card_datas_id) "
+                                      "JOIN card_rarity r ON r.card_datas_id=card_detail.card_datas_id "
+                                      "WHERE r.rarity=8").fetchone()[0]
+            _, _, body = post(conn, "/v1/profile/get_info", {})
+            check("profile dream_style_num counts DR cards",
+                  dr_owned > 0 and json.loads(body)["profile_info"]["dream_style_num"] == dr_owned,
+                  f"{dr_owned} {json.loads(body)['profile_info'].get('dream_style_num')}")
+            # 005: holdings above 999 (the membership tickets' 99999) are lowered once; point currencies keep theirs.
+            check("five-digit holdings lowered to 999", item_num(3011003) == 999 and item_num(3004000) > 999,
+                  f"{item_num(3011003)} {item_num(3004000)}")
+
+            # Shop tiles and the per-player 解放Pt.変換 flag.
+            _, _, body = post(conn, "/v1/shop/get_list", {})
+            shops = json.loads(body)
+            check("shop list serves the five shops",
+                  sorted(s["shop_type"] for s in shops["shop_list"]) == [3, 7, 8, 9, 10] and
+                  shops["is_convertible_limit_break_material"] is True, body[:300].decode())
+
+            def card_owned(card_id: int) -> bool:
+                with sqlite3.connect(db_path) as db:
+                    return db.execute("SELECT 1 FROM museum_card_ownership JOIN card_detail USING(d_card_datas_id) "
+                                      "WHERE card_datas_id/10=?/10", (card_id,)).fetchone() is not None
+
+            def drop_card(card_id: int) -> None:
+                with sqlite3.connect(db_path) as db:
+                    db.execute("PRAGMA foreign_keys=ON")
+                    db.execute("DELETE FROM museum_card_ownership WHERE d_card_datas_id IN "
+                               "(SELECT d_card_datas_id FROM card_detail WHERE card_datas_id/10=?/10)", (card_id,))
+
+            def set_item(item_id: int, num: int) -> None:
+                with sqlite3.connect(db_path) as db:
+                    db.execute("UPDATE museum_item_inventory SET item_num=? WHERE d_item_datas_id="
+                               "(SELECT d_item_datas_id FROM item WHERE item_id=?)", (num, item_id))
+
+            # GP PRIZE交換所: 200 tickets for a card; a held card turns into its limit-break material.
+            gp_rows = yaml_rows("GpPrizeExchanges.yaml")
+            _, _, body = post(conn, "/v1/gp_prize_exchange/get_list", {})
+            gp_list = json.loads(body)
+            prize = gp_rows[0]
+            set_item(prize["MaterialItemId"], 500)
+            drop_card(prize["ProductItemId"])
+            status, _, body = post(conn, "/v1/gp_prize_exchange/set_purchase", {"gp_prize_exchanges_id": prize["Id"]})
+            check("GP PRIZE exchange pays a card",
+                  len(gp_list["gp_prize_exchange_list"]) == len(gp_rows) and status == 200 and
+                  json.loads(body) == {"gp_prize_ticket_id": prize["MaterialItemId"], "user_ticket_num": 300} and
+                  card_owned(prize["ProductItemId"]) and item_num(prize["MaterialItemId"]) == 300, body[:200].decode())
+            series = {c["Id"]: c["CardSeriesId"] for c in yaml_rows("CardDatas.yaml")}[prize["ProductItemId"]]
+            material = next(r for r in yaml_rows("LimitBreakMaterialRate.yaml") if r["CardSeriesId"] == series)
+            held = item_num(material["LimitBreakMaterialId"])
+            status, _, body = post(conn, "/v1/gp_prize_exchange/set_purchase", {"gp_prize_exchanges_id": prize["Id"]})
+            check("GP PRIZE duplicate becomes limit-break material",
+                  status == 200 and item_num(material["LimitBreakMaterialId"]) ==
+                  held + material["LimitBreakMaterialQuantity"], f"{held} {item_num(material['LimitBreakMaterialId'])}")
+
+            # ステッカー交換所: sticker points for a sticker not held, once.
+            sticker = yaml_rows("StickerExchanges.yaml")[0]
+            set_item(sticker["MaterialItemId"], 100)
+            with sqlite3.connect(db_path) as db:
+                db.execute("DELETE FROM museum_sticker_ownership WHERE stickers_id=?", (sticker["ProductStickerId"],))
+            _, _, body = post(conn, "/v1/sticker_exchange/get_list", {})
+            listed = {e["sticker_exchanges_id"]: e["is_having"] for e in json.loads(body)["sticker_exchange_list"]}
+            status, _, body = post(conn, "/v1/sticker_exchange/set_purchase", {"sticker_exchanges_id": sticker["Id"]})
+            again, _, _ = post(conn, "/v1/sticker_exchange/set_purchase", {"sticker_exchanges_id": sticker["Id"]})
+            check("sticker exchange buys a missing sticker once",
+                  listed.get(sticker["Id"]) is False and status == 200 and
+                  json.loads(body) == {"sticker_point_num": 100 - sticker["MaterialItemNum"]} and again == 400,
+                  f"{listed.get(sticker['Id'])} {status} {body[:100]} {again}")
+
+            # SIsCaストア: free SIsCa first; paid-only items take paid SIsCa.
+            with sqlite3.connect(db_path) as db:
+                db.execute("UPDATE museum_gacha_state SET free_jewels=100, paid_jewels=5000 WHERE series_id=1055003")
+            _, _, body = post(conn, "/v1/sisca_store/get_list", {})
+            store = {e["sisca_store_datas_id"] for e in json.loads(body)["item_list"]}
+            mini = item_num(2004002)
+            status, headers, body = post(conn, "/v1/sisca_store/set_purchase", {"sisca_store_datas_id": 5, "purchase_num": 2})
+            bought = json.loads(body)
+            check("SIsCa store spends free then paid SIsCa",
+                  store == {1, 2, 3, 4, 5} and status == 200 and bought["sisca_info"] == {"free": 0, "paid": 4940} and
+                  bought["user_item_info"]["item_num"] == mini + 2 == item_num(2004002) and
+                  "jewel_free: 0" in "\n".join(f"{k}: {v}" for k, v in headers.items()), body[:300].decode())
+            status, _, body = post(conn, "/v1/sisca_store/set_purchase", {"sisca_store_datas_id": 1, "purchase_num": 1})
+            check("SIsCa store paid-only item", status == 200 and json.loads(body)["sisca_info"] == {"free": 0, "paid": 3940},
+                  body[:200].decode())
+
+            # セレクトチケット: held tickets are listed; one ticket picks one card.
+            _, _, body = post(conn, "/v1/gacha/get_series_list", {})
+            gacha_tickets = {e["select_ticket_series_id"]: e["user_exchange_ticket_num"]
+                             for e in json.loads(body)["select_ticket_series_list"]}
+            _, _, body = post(conn, "/v1/select_ticket_exchange/get_list", {})
+            shop_tickets = {e["select_ticket_series_id"]: e["user_select_ticket_num"]
+                            for e in json.loads(body)["select_ticket_exchange_list"]}
+            ticket_series = next(r for r in yaml_rows("SelectTicketSeries.yaml") if r["Id"] == 4030036)
+            rate = next(r for r in yaml_rows("SelectTicketExchangeRate.yaml") if r["SelectTicketSeriesId"] == 4030036)
+            tickets = item_num(ticket_series["ExchangeTicketId"])
+            drop_card(rate["ExchangeItemId"])
+            status, _, body = post(conn, "/v1/gacha/set_select_ticket_exchange",
+                                   {"select_ticket_exchange_rate_id": rate["Id"]})
+            check("select tickets listed on the gacha and shop screens",
+                  len(gacha_tickets) >= 50 and gacha_tickets == shop_tickets and gacha_tickets.get(4030036) == tickets,
+                  f"{len(gacha_tickets)} {len(shop_tickets)}")
+            check("select ticket exchange pays the chosen card",
+                  status == 200 and [(r["get_item_type"], r["get_id"] // 10, r["get_num"], r["is_new"])
+                                     for r in json.loads(body)["receipt_items"]] ==
+                  [(2, rate["ExchangeItemId"] // 10, 1, True)] and
+                  card_owned(rate["ExchangeItemId"]) and item_num(ticket_series["ExchangeTicketId"]) == tickets - 1,
+                  body[:200].decode())
+
+            # 解放Pt.変換: materials beyond the remaining limit breaks, 25 of a rarity -> one ティア.
+            _, _, body = post(conn, "/v1/item_exchange/get_limit_break_material_convert_list", {})
+            convert = {e["rarity"]: e["limit_break_material_num"]
+                       for e in json.loads(body)["convert_limit_break_material_list"]}
+            rates = {r["LimitBreakMaterialRarity"]: r for r in yaml_rows("LimitBreakMaterialConvertRate.yaml")}
+            item_limits = {r["Id"]: r["LimitNum"] for r in yaml_rows("Items.yaml")}
+            expected = {}
+            for rarity, num in convert.items():
+                product = rates[rarity]["ProductItemId"]
+                expected[product] = expected.get(product, 0) + num // rates[rarity]["LimitBreakMaterialNum"]
+            tiers_before = {item: item_num(item) for item in expected}
+            status, _, body = post(conn, "/v1/item_exchange/set_limit_break_material_convert", {})
+            got = {e["item_id"]: e["get_num"] for e in json.loads(body)["get_item_list"]}
+            _, _, after = post(conn, "/v1/shop/get_list", {})
+            # The Museum's 999 of every material converts until a ティア reaches its 9999 holding cap.
+            check("limit-break materials convert into tiers up to the holding cap",
+                  convert and all(n % rates[r]["LimitBreakMaterialNum"] == 0 for r, n in convert.items()) and
+                  status == 200 and got == expected and
+                  all(item_num(k) == tiers_before[k] + v <= item_limits[k] for k, v in got.items()) and
+                  json.loads(after)["is_convertible_limit_break_material"] is False,
+                  f"{convert} {got} {expected}")
             conn.close()
         finally:
             log += stop(proc)

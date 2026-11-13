@@ -91,7 +91,8 @@ def _android_storage_key(args: argparse.Namespace) -> int:
 def _master_open_gacha(args: argparse.Namespace) -> int:
     from .master_patch import open_gacha_series
     result = open_gacha_series(args.m_dir, args.storage_key, args.output, sqlcipher=args.sqlcipher)
-    print(f"OK  {result.series} Gacha series opened ({result.exchange_offers} exchange offers): {result.database}")
+    print(f"OK  {result.series} Gacha series opened ({result.exchange_offers} exchange offers, "
+          f"{result.select_tickets} select-ticket series): {result.database}")
     print("    replace the device's M/ master database with it (same name, same storage key)")
     return 0
 

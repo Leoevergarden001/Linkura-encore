@@ -8,7 +8,8 @@ listed series' EndTime (and their point-exchange offers') to the date of the
 series still open at the end of service, and their OrderId so they follow the
 seven closing series. The list comes from server/data/museum_gacha_opened_series.json
 (written by server/generators/generate_gacha_catalog.py), so the server and the
-Master agree. The output keeps the database's name and storage key; replace the
+Master agree. Select-ticket series that ended (the pre-registration UR ticket)
+get the same EndTime, so their tickets can be exchanged again. The output keeps the database's name and storage key; replace the
 device's M/<name> with it.
 """
 from __future__ import annotations
@@ -30,6 +31,7 @@ class OpenedGacha:
     database: Path
     series: int
     exchange_offers: int
+    select_tickets: int = 0
 
 
 def load_series(path: Path = DEFAULT_SERIES) -> tuple[int, list[tuple[int, int]]]:
@@ -69,6 +71,8 @@ def open_gacha_series(m_dir: Path, storage_key: Path, output: Path, *, sqlcipher
                          f"UPDATE ExchangePointRate SET EndTime = {end_ticks} "
                          f"WHERE GachaSeriesId IN ({ids}) AND EndTime < {end_ticks};\n"
                          "SELECT 'offers=' || changes();\n"
+                         f"UPDATE SelectTicketSeries SET EndTime = {end_ticks} WHERE EndTime < {end_ticks};\n"
+                         "SELECT 'select_tickets=' || changes();\n"
                          "COMMIT;\n"
                          f"SELECT 'opened=' || count(*) FROM GachaSeries WHERE Id IN ({ids}) AND EndTime = {end_ticks};\n")
         values = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
@@ -82,4 +86,5 @@ def open_gacha_series(m_dir: Path, storage_key: Path, output: Path, *, sqlcipher
     except BaseException:
         work.unlink(missing_ok=True)
         raise
-    return OpenedGacha(database=target, series=len(series), exchange_offers=int(values["offers"]))
+    return OpenedGacha(database=target, series=len(series), exchange_offers=int(values["offers"]),
+                       select_tickets=int(values["select_tickets"]))

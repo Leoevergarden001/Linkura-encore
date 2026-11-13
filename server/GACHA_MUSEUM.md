@@ -117,7 +117,9 @@ python3 -m tools.linkura_offline master-open-gacha --m-dir <cache>/M \
 
 copies the master database with those series' EndTime (and their
 ExchangePointRate offers') set to the closing series' 2035-12-31 and their
-OrderId set to 101.. so they follow the seven. The copy keeps its name and
+OrderId set to 101.. so they follow the seven. Ended SelectTicketSeries (the
+pre-registration UR ticket) get the same EndTime, so the Gacha screen's
+select-ticket exchange lists them again. The copy keeps its name and
 storage key and has the same size, so replace the device's `M/<name>` with it
 explicitly (a size comparison treats it as already present).
 
