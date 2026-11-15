@@ -81,6 +81,12 @@ class LiteralRewriteTest(unittest.TestCase):
         out, _ = rewrite_literals(metadata, offline_rewriter(52680, False))
         self.assertEqual(literal_values(out), ["http://127.0.0.1:52680", ASSET_BASE + "/ios"])
 
+    def test_asset_base_url(self):
+        metadata = make_metadata([API_BASE, ASSET_BASE + "/ios", ASSET_BASE + "/raw/"])
+        out, _ = rewrite_literals(metadata, offline_rewriter(52680, True, "http://192.0.2.10:8780/a/"))
+        self.assertEqual(literal_values(out), [
+            "http://127.0.0.1:52680", "http://192.0.2.10:8780/a/ios", "http://192.0.2.10:8780/a/raw/"])
+
     def test_rejects_longer_replacement_and_bad_version(self):
         metadata = make_metadata(["https://x.y"])
         with self.assertRaises(IosError):

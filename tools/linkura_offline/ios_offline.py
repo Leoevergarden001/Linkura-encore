@@ -319,14 +319,18 @@ def rewrite_default_values(data: bytes, rewrite) -> tuple[bytes, list[LiteralPat
     return bytes(out), patches
 
 
-def offline_rewriter(port: int, redirect_assets: bool):
+def offline_rewriter(port: int, redirect_assets: bool, asset_base: str | None = None):
+    """API calls go to the in-app server; asset downloads to the in-app server's /a/,
+    or to asset_base (for example a LAN or hosted resource server serving the
+    same paths) when given."""
     local = f"http://127.0.0.1:{port}"
+    assets = asset_base.rstrip("/") if asset_base else local + "/a"
 
     def rewrite(value: str) -> str | None:
         if value == API_BASE:
             return local
         if redirect_assets and value.startswith(ASSET_BASE):
-            return local + "/a" + value[len(ASSET_BASE):]
+            return assets + value[len(ASSET_BASE):]
         return None
 
     return rewrite
@@ -443,6 +447,8 @@ def patch_info_plist(info: dict, bundle_id: str) -> dict:
     ats["NSAllowsArbitraryLoads"] = True
     ats["NSAllowsLocalNetworking"] = True
     info["NSAppTransportSecurity"] = ats
+    # Asked once if an asset base on the local network is used.
+    info["NSLocalNetworkUsageDescription"] = "Downloads game resources from a server on your local network."
     info["UIFileSharingEnabled"] = True
     info["LSSupportsOpeningDocumentsInPlace"] = True
     return info
@@ -456,6 +462,7 @@ def stage_offline_ios_client(
     bundle_id: str = DEFAULT_BUNDLE_ID,
     port: int = DEFAULT_PORT,
     redirect_assets: bool = True,
+    asset_base: str | None = None,
     show_preview_bgm_fallback: bool = False,
     disable_lyric_videos: bool = False,
     guard_destructive: bool = True,
@@ -497,7 +504,7 @@ def stage_offline_ios_client(
         metadata_member = app + METADATA_MEMBER
         if metadata_member not in members:
             raise IosError("global-metadata.dat not found")
-        rewriter = offline_rewriter(port, redirect_assets)
+        rewriter = offline_rewriter(port, redirect_assets, asset_base)
         metadata, patches = rewrite_literals(archive.read(metadata_member), rewriter)
         metadata, default_patches = rewrite_default_values(metadata, rewriter)
         patches += default_patches

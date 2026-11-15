@@ -33,6 +33,7 @@ def _ios_stage(args: argparse.Namespace) -> int:
     report = stage_offline_ios_client(
         args.source, args.dylib, args.output, bundle_id=args.bundle_id, port=args.port,
         redirect_assets=not args.keep_asset_urls,
+        asset_base=args.asset_base_url,
         show_preview_bgm_fallback=args.show_preview_bgm_fallback,
         disable_lyric_videos=args.disable_lyric_videos,
         guard_destructive=not args.allow_destructive_actions,
@@ -133,6 +134,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bundle-id", default=DEFAULT_BUNDLE_ID)
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--keep-asset-urls", action="store_true", help="do not point asset URLs at the local server")
+    p.add_argument("--asset-base-url", help="download assets from this base URL (serving <base>/ios/..., "
+                   "<base>/raw/...) instead of the in-app server's /a/; at most 37 characters")
     p.add_argument("--show-preview-bgm-fallback", action="store_true",
                    help="use archived Daily BGM in the SHOW settings preview")
     p.add_argument("--disable-lyric-videos", action="store_true",
