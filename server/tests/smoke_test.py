@@ -114,6 +114,15 @@ def main() -> int:
             log = stop(proc)
         check("database created", (data / "HasuKikaisann.sqlite3").exists())
 
+        # One card per series (card id / 10): the Museum owns the fully developed record, not also
+        # the base records EnsureMuseumGachaCardsLocked adds for draws (a Lv1 copy in the card list).
+        def series_counts(db):
+            return db.execute("SELECT COUNT(*), COUNT(DISTINCT c.card_datas_id / 10) FROM museum_card_ownership o "
+                              "JOIN card_detail c USING(d_card_datas_id)").fetchone()
+        with sqlite3.connect(data / "HasuKikaisann.sqlite3") as db:
+            owned, series_owned = series_counts(db)
+            check("bootstrap owns one record per card series", owned == series_owned, f"{owned}/{series_owned}")
+
         # An upgrade re-seeds the catalogs when a new catalog table is empty. With foreign keys on,
         # the item rows' INSERT OR REPLACE cascaded into museum_item_inventory and emptied it. Here:
         # a save that lost some inventory rows that way, a player-changed count, and a forced re-seed.
@@ -131,6 +140,18 @@ def main() -> int:
                        "WHERE item_id IN (?, 1002001))", (capped_lost,))
             db.execute("DELETE FROM museum_bootstrap_state WHERE domain='INVENTORY_CASCADE_REPAIR'")
             db.execute("DELETE FROM grade_quest_release")  # the next start re-seeds every catalog
+            # A save from before 007: a base record owned next to its developed record, used in a deck.
+            dup, keep = db.execute(
+                "SELECT c.d_card_datas_id, (SELECT h.d_card_datas_id FROM card_detail h WHERE h.card_datas_id / 10 = "
+                "c.card_datas_id / 10 ORDER BY h.card_datas_id DESC LIMIT 1) FROM card_detail c WHERE EXISTS("
+                "SELECT 1 FROM card_detail h WHERE h.card_datas_id / 10 = c.card_datas_id / 10 AND "
+                "h.card_datas_id > c.card_datas_id) LIMIT 1").fetchone()
+            db.execute("INSERT INTO museum_card_ownership VALUES (?, '2026-11-10T00:00:00Z', 'MUSEUM')", (dup,))
+            db.execute("INSERT INTO museum_card_state(d_card_datas_id, style_level, limit_break_times, is_evolve_max) "
+                       "VALUES (?, 1, 0, 0)", (dup,))
+            db.execute("INSERT OR REPLACE INTO rhythm_game_deck VALUES ('dedupe-test', 'dedupe', 99, ?)",
+                       (json.dumps([{"d_card_datas_id": dup, "rhythm_game_deck_cards_id": "x", "slot_no": 1}]),))
+            db.execute("DELETE FROM museum_bootstrap_state WHERE domain='CARD_SERIES_DEDUPE'")
             wallet_free = db.execute("SELECT free_jewels FROM museum_gacha_state WHERE series_id=1055003").fetchone()[0]
             items_total = db.execute("SELECT COUNT(*) FROM item").fetchone()[0]
 
@@ -140,6 +161,15 @@ def main() -> int:
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
             status, _, _ = post(conn, "/v1/home/get_home", {})
             check("home after restart", status == 200)
+            with sqlite3.connect(data / "HasuKikaisann.sqlite3") as db:
+                owned, series_owned = series_counts(db)
+                deck = json.loads(db.execute("SELECT deck_card_list_json FROM rhythm_game_deck "
+                                             "WHERE rhythm_game_deck_id='dedupe-test'").fetchone()[0])
+                check("duplicate card records are merged once", owned == series_owned and
+                      deck[0]["d_card_datas_id"] == keep and db.execute(
+                          "SELECT COUNT(*) FROM museum_card_ownership WHERE d_card_datas_id=?", (dup,)).fetchone()[0] == 0,
+                      f"{owned}/{series_owned} deck={deck[0]['d_card_datas_id']} keep={keep}")
+                db.execute("DELETE FROM rhythm_game_deck WHERE rhythm_game_deck_id='dedupe-test'")
             with sqlite3.connect(data / "HasuKikaisann.sqlite3") as db:
                 rows = db.execute("SELECT COUNT(*) FROM museum_item_inventory").fetchone()[0]
                 check("re-seed keeps the inventory and repairs lost rows",
@@ -311,10 +341,21 @@ def main() -> int:
                   len(first_birthday["card_list"]) < len(last_birthday["card_list"]) <= 161, 
                   f"{len(first_birthday['card_list'])} {len(last_birthday['card_list'])}")
             drawn = set()
+            draw_results = []
             for _ in range(10):  # 100 draws: the 100 exchange points the BR card costs
                 status, _, body = post(conn, "/v1/gacha/set_purchase",
                                        {"gacha_series_id": 1041031, "gacha_set_purchase_type": 2, "campaign_id": 0})
+                draw_results += json.loads(body).get("gacha_result_list", [])
                 drawn |= {r["card_datas_id"] for r in json.loads(body).get("gacha_result_list", [])}
+            # The Museum holds every card, so each draw is a duplicate: not NEW, no second copy, and
+            # its series' limit-break material (LimitBreakMaterialRate) instead.
+            with sqlite3.connect(db_path) as db:
+                owned, series_owned = series_counts(db)
+            check("drawing a held card adds no copy", owned == series_owned and
+                  not any(r["is_new"] for r in draw_results), f"{owned}/{series_owned}")
+            check("drawing a held card gives limit-break material",
+                  any(r["material_limitbreak_item_id"] and r["material_limitbreak_num"] > 0 for r in draw_results),
+                  json.dumps(draw_results[:2]))
             check("birthday draws stay in the pool", status == 200 and drawn and
                   drawn <= set(first_birthday["card_list"]), str(sorted(drawn - set(first_birthday["card_list"]))))
             status, _, body = post(conn, "/v1/gacha/set_guarantee_point_exchange",

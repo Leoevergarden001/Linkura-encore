@@ -1,9 +1,14 @@
 -- Executed inside the caller's transaction, after the immutable catalogs exist.
 -- Each domain is initialized once. Restarting must not restore removed ownership
 -- or overwrite an imported player's inventory/progression with Museum defaults.
+-- One record per card series (card id / 10), the fully developed one: the
+-- lower base records EnsureMuseumGachaCardsLocked adds are only for draws.
 INSERT OR IGNORE INTO museum_card_ownership(d_card_datas_id, acquired_at, acquisition_source)
-SELECT d_card_datas_id, '2023-04-15T00:00:00Z', 'MUSEUM' FROM card_detail
-WHERE NOT EXISTS(SELECT 1 FROM museum_bootstrap_state WHERE domain = 'CARD');
+SELECT d_card_datas_id, '2023-04-15T00:00:00Z', 'MUSEUM' FROM card_detail AS card
+WHERE NOT EXISTS(SELECT 1 FROM card_detail AS higher
+                 WHERE higher.card_datas_id / 10 = card.card_datas_id / 10
+                   AND higher.card_datas_id > card.card_datas_id)
+  AND NOT EXISTS(SELECT 1 FROM museum_bootstrap_state WHERE domain = 'CARD');
 INSERT OR IGNORE INTO museum_card_state(d_card_datas_id, style_level, limit_break_times, is_evolve_max)
 SELECT card.d_card_datas_id, card.style_level, card.limit_break_times, card.is_evolve_max
 FROM card_detail AS card INNER JOIN museum_card_ownership AS owned USING(d_card_datas_id)

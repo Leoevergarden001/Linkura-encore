@@ -34,8 +34,15 @@ One draw costs 200 local SIsCa; ten draws cost 2000. Wallet deduction, card
 ownership, exchange points, and history commit together. The local client
 request contains no operation ID, so repeated accepted requests count as
 separate draws. Ticket purchases and daily paid discounts are not implemented.
-The Museum bootstrap owns all catalogued cards, so these featured cards appear
-as duplicates until a narrower preserved player inventory is imported.
+A card counts as held when any record of its series (card id / 10) is owned,
+as the live service kept one card per series. The Museum bootstrap owns every
+series' fully developed record, so a draw or point exchange of a held card is
+not NEW, adds no second (base-record) copy and pays the series' limit-break
+material (`material_limitbreak_item_id/num` in the draw result). Saves from
+before this rule held a Lv1 base-record copy next to many developed cards;
+`player-state/007_card_series_dedupe.sql` merges them once, keeping the
+highest owned record and pointing decks, the friend card and a running quest
+at it.
 
 On the author emulator, the second and third series' ten draws traversed
 SetPhase 1, GetCardAnimation, ten card displays, SetPhase 2, and Result.InitUI.

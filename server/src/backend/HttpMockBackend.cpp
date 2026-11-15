@@ -257,7 +257,7 @@ namespace LinkuraLocal::HttpMock {
         bool EnsureMuseumCatalogLocked();
         bool BackfillMissionHistoryLocked();
         bool EnsureMuseumGachaCardsLocked();
-        std::vector<int> GetOwnedMuseumGachaCardsLocked(const MuseumGachaSeries& series);
+        std::optional<bool> CardSeriesHeldLocked(int cardId);
         bool EnsureQuestSessionSchemaLocked();
         bool ResetLocked();
         bool RebuildLocked();
@@ -350,6 +350,7 @@ namespace LinkuraLocal::HttpMock {
         int64_t ShopPurchasedLocked(std::string_view kind, int id);
         bool AddShopPurchasedLocked(std::string_view kind, int id, int64_t num);
         bool GrantItemLocked(int itemId, int64_t amount);
+        std::optional<std::pair<int, int64_t>> GrantLimitBreakMaterialLocked(int cardId);
         std::optional<bool> GrantCardLocked(int cardId, std::string_view source, const std::string& eventKey,
                                             int* grantedCardId = nullptr);
         std::optional<MockStoredResponse> GetCollectionListResponseLocked(
@@ -1038,26 +1039,25 @@ namespace LinkuraLocal::HttpMock {
         return true;
     }
 
-    std::vector<int> HttpMockBackend::Impl::GetOwnedMuseumGachaCardsLocked(
-            const MuseumGachaSeries& series) {
-        std::vector<int> cards;
-        if (!db) return cards;
+    // A card is held when any record of its series (card id / 10) is owned:
+    // the Museum owns the fully developed record, while draws and exchanges
+    // name the base record (…0, …1 for BR). The live service kept one card
+    // per series, so every "held"/NEW decision goes through the series.
+    std::optional<bool> HttpMockBackend::Impl::CardSeriesHeldLocked(int cardId) {
+        if (!db) return std::nullopt;
         sqlite3_stmt* stmt = nullptr;
-        constexpr const char* sql =
-            "SELECT 1 FROM card_detail INNER JOIN museum_card_ownership "
-            "USING(d_card_datas_id) WHERE card_datas_id=? LIMIT 1;";
-        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+        if (sqlite3_prepare_v2(db,
+                "SELECT 1 FROM museum_card_ownership INNER JOIN card_detail USING(d_card_datas_id) "
+                "WHERE card_detail.card_datas_id / 10 = ?1 / 10 LIMIT 1;", -1, &stmt, nullptr) != SQLITE_OK ||
+            !stmt) {
             if (stmt) sqlite3_finalize(stmt);
-            return cards;
+            return std::nullopt;
         }
-        for (const int cardId : series.cards) {
-            sqlite3_reset(stmt);
-            sqlite3_clear_bindings(stmt);
-            sqlite3_bind_int(stmt, 1, cardId);
-            if (sqlite3_step(stmt) == SQLITE_ROW) cards.push_back(cardId);
-        }
+        sqlite3_bind_int(stmt, 1, cardId);
+        const int rc = sqlite3_step(stmt);
         sqlite3_finalize(stmt);
-        return cards;
+        if (rc != SQLITE_ROW && rc != SQLITE_DONE) return std::nullopt;
+        return rc == SQLITE_ROW;
     }
 
     bool HttpMockBackend::Impl::EnsureQuestSessionSchemaLocked() {
@@ -2585,17 +2585,11 @@ namespace LinkuraLocal::HttpMock {
             return std::nullopt;
         };
         sqlite3_stmt* card = nullptr;
-        sqlite3_stmt* owned = nullptr;
         sqlite3_stmt* acquired = nullptr;
         sqlite3_stmt* obtain = nullptr;
         sqlite3_stmt* cardState = nullptr;
         if (sqlite3_prepare_v2(db, "SELECT d_card_datas_id FROM card_detail WHERE card_datas_id=? LIMIT 1;",
                                -1, &card, nullptr) != SQLITE_OK ||
-            // NEW means "not yet held", so check the ownership table that the
-            // card list reads. The acquisition log misses cards obtained
-            // through point exchange and would mark them NEW again.
-            sqlite3_prepare_v2(db, "SELECT 1 FROM museum_card_ownership WHERE d_card_datas_id=?;",
-                               -1, &owned, nullptr) != SQLITE_OK ||
             sqlite3_prepare_v2(db,
                 "INSERT OR IGNORE INTO museum_gacha_acquisition "
                 "(card_datas_id, first_acquired_at, acquisition_source) VALUES (?, ?, 'GACHA');",
@@ -2609,7 +2603,6 @@ namespace LinkuraLocal::HttpMock {
                 "(d_card_datas_id, style_level, limit_break_times, is_evolve_max) VALUES (?, 1, 0, 0);",
                 -1, &cardState, nullptr) != SQLITE_OK) {
             if (card) sqlite3_finalize(card);
-            if (owned) sqlite3_finalize(owned);
             if (acquired) sqlite3_finalize(acquired);
             if (obtain) sqlite3_finalize(obtain);
             if (cardState) sqlite3_finalize(cardState);
@@ -2626,32 +2619,40 @@ namespace LinkuraLocal::HttpMock {
             const auto* rawId = reinterpret_cast<const char*>(sqlite3_column_text(card, 0));
             if (!rawId) { valid = false; break; }
             const std::string dCardId(rawId);
-            sqlite3_reset(owned);
-            sqlite3_clear_bindings(owned);
-            BindText(owned, 1, dCardId);
-            const bool isNew = sqlite3_step(owned) != SQLITE_ROW;
+            // NEW means "no card of this series held yet" (CardSeriesHeldLocked);
+            // a held card becomes limit-break material instead of a second copy.
+            const auto held = CardSeriesHeldLocked(cardId);
+            if (!held) { valid = false; break; }
+            const bool isNew = !*held;
+            std::pair<int, int64_t> material{0, 0};
+            if (!isNew) {
+                const auto granted = GrantLimitBreakMaterialLocked(cardId);
+                if (!granted) { valid = false; break; }
+                material = *granted;
+            }
             sqlite3_reset(acquired);
             sqlite3_clear_bindings(acquired);
             valid = sqlite3_bind_int(acquired, 1, cardId) == SQLITE_OK &&
                     BindText(acquired, 2, timeBuffer) &&
                     sqlite3_step(acquired) == SQLITE_DONE;
             if (!valid) break;
-            sqlite3_reset(obtain);
-            sqlite3_clear_bindings(obtain);
-            valid = BindText(obtain, 1, dCardId) && BindText(obtain, 2, timeBuffer) &&
-                    sqlite3_step(obtain) == SQLITE_DONE;
-            sqlite3_reset(cardState);
-            sqlite3_clear_bindings(cardState);
-            valid = valid && BindText(cardState, 1, dCardId) &&
-                    sqlite3_step(cardState) == SQLITE_DONE;
+            if (isNew) {
+                sqlite3_reset(obtain);
+                sqlite3_clear_bindings(obtain);
+                valid = BindText(obtain, 1, dCardId) && BindText(obtain, 2, timeBuffer) &&
+                        sqlite3_step(obtain) == SQLITE_DONE;
+                sqlite3_reset(cardState);
+                sqlite3_clear_bindings(cardState);
+                valid = valid && BindText(cardState, 1, dCardId) &&
+                        sqlite3_step(cardState) == SQLITE_DONE;
+            }
             results.push_back({
                 {"order_id", index + 1}, {"card_datas_id", cardId},
                 {"is_new", isNew}, {"coin_num", 0},
-                {"material_limitbreak_item_id", 0}, {"material_limitbreak_num", 0},
+                {"material_limitbreak_item_id", material.first}, {"material_limitbreak_num", material.second},
             });
         }
         sqlite3_finalize(card);
-        sqlite3_finalize(owned);
         sqlite3_finalize(acquired);
         sqlite3_finalize(obtain);
         sqlite3_finalize(cardState);
@@ -2857,8 +2858,9 @@ namespace LinkuraLocal::HttpMock {
         const char* query =
             "SELECT "
             "(SELECT count(*) FROM museum_gacha_exchange_history WHERE exchange_point_rate_id=?), "
+            // Held = any record of the card's series (CardSeriesHeldLocked).
             "EXISTS(SELECT 1 FROM museum_card_ownership o JOIN card_detail c "
-            "ON c.d_card_datas_id=o.d_card_datas_id WHERE c.card_datas_id=?);";
+            "ON c.d_card_datas_id=o.d_card_datas_id WHERE c.card_datas_id / 10 = ?2 / 10);";
         if (sqlite3_prepare_v2(db, query, -1, &lookup, nullptr) != SQLITE_OK || !lookup) {
             if (lookup) sqlite3_finalize(lookup);
             return std::nullopt;
@@ -2919,10 +2921,11 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_stmt* lookup = nullptr;
         if (sqlite3_prepare_v2(db,
                 "SELECT c.d_card_datas_id, "
-                // NEW = not yet held (same rule as gacha draws).
-                "EXISTS(SELECT 1 FROM museum_card_ownership o WHERE o.d_card_datas_id=c.d_card_datas_id), "
-                "(SELECT count(*) FROM museum_gacha_exchange_history WHERE exchange_point_rate_id=?) "
-                "FROM card_detail c WHERE c.card_datas_id=? LIMIT 1;",
+                // NEW = no card of this series held yet (same rule as draws).
+                "EXISTS(SELECT 1 FROM museum_card_ownership o JOIN card_detail h "
+                "ON h.d_card_datas_id=o.d_card_datas_id WHERE h.card_datas_id / 10 = ?2 / 10), "
+                "(SELECT count(*) FROM museum_gacha_exchange_history WHERE exchange_point_rate_id=?1) "
+                "FROM card_detail c WHERE c.card_datas_id=?2 LIMIT 1;",
                 -1, &lookup, nullptr) != SQLITE_OK || !lookup) {
             if (lookup) sqlite3_finalize(lookup);
             return rollback();
@@ -2973,29 +2976,34 @@ namespace LinkuraLocal::HttpMock {
         sqlite3_finalize(acquired);
         if (!valid) return rollback();
 
-        sqlite3_stmt* obtain = nullptr;
-        if (sqlite3_prepare_v2(db,
-                "INSERT OR IGNORE INTO museum_card_ownership "
-                "(d_card_datas_id, acquired_at, acquisition_source) "
-                "VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'GACHA_EXCHANGE');",
-                -1, &obtain, nullptr) != SQLITE_OK || !obtain) {
-            if (obtain) sqlite3_finalize(obtain);
-            return rollback();
+        // A held card becomes limit-break material instead of a second copy.
+        if (!isNew) {
+            if (!GrantLimitBreakMaterialLocked(offer->cardId)) return rollback();
+        } else {
+            sqlite3_stmt* obtain = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "INSERT OR IGNORE INTO museum_card_ownership "
+                    "(d_card_datas_id, acquired_at, acquisition_source) "
+                    "VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'GACHA_EXCHANGE');",
+                    -1, &obtain, nullptr) != SQLITE_OK || !obtain) {
+                if (obtain) sqlite3_finalize(obtain);
+                return rollback();
+            }
+            valid = BindText(obtain, 1, dCardId) && sqlite3_step(obtain) == SQLITE_DONE;
+            sqlite3_finalize(obtain);
+            if (!valid) return rollback();
+            sqlite3_stmt* cardState = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "INSERT OR IGNORE INTO museum_card_state "
+                    "(d_card_datas_id, style_level, limit_break_times, is_evolve_max) "
+                    "VALUES (?, 1, 0, 0);", -1, &cardState, nullptr) != SQLITE_OK || !cardState) {
+                if (cardState) sqlite3_finalize(cardState);
+                return rollback();
+            }
+            valid = BindText(cardState, 1, dCardId) && sqlite3_step(cardState) == SQLITE_DONE;
+            sqlite3_finalize(cardState);
+            if (!valid) return rollback();
         }
-        valid = BindText(obtain, 1, dCardId) && sqlite3_step(obtain) == SQLITE_DONE;
-        sqlite3_finalize(obtain);
-        if (!valid) return rollback();
-        sqlite3_stmt* cardState = nullptr;
-        if (sqlite3_prepare_v2(db,
-                "INSERT OR IGNORE INTO museum_card_state "
-                "(d_card_datas_id, style_level, limit_break_times, is_evolve_max) "
-                "VALUES (?, 1, 0, 0);", -1, &cardState, nullptr) != SQLITE_OK || !cardState) {
-            if (cardState) sqlite3_finalize(cardState);
-            return rollback();
-        }
-        valid = BindText(cardState, 1, dCardId) && sqlite3_step(cardState) == SQLITE_DONE;
-        sqlite3_finalize(cardState);
-        if (!valid) return rollback();
         sqlite3_stmt* history = nullptr;
         if (sqlite3_prepare_v2(db,
                 "INSERT INTO museum_gacha_exchange_history "
@@ -3468,6 +3476,20 @@ namespace LinkuraLocal::HttpMock {
         return ok;
     }
 
+    // A card drawn or exchanged again becomes its series' limit-break material
+    // (LimitBreakMaterialRate), as duplicates did on the live service. Returns
+    // the item and amount granted ({0, 0} when the series has no rate).
+    std::optional<std::pair<int, int64_t>> HttpMockBackend::Impl::GrantLimitBreakMaterialLocked(int cardId) {
+        for (const auto& row : ShopRows("limit_break_material")) {
+            if (row.value("series_id", 0) != cardId / 10) continue;
+            const int item = row.value("material_item_id", 0);
+            const int64_t amount = row.value("quantity", int64_t{0});
+            if (!GrantItemLocked(item, amount)) return std::nullopt;
+            return std::make_pair(item, amount);
+        }
+        return std::make_pair(0, int64_t{0});
+    }
+
     // Adds a card to the collection as a draw would and returns whether it was
     // new. A card already held becomes its series' limit-break material
     // (LimitBreakMaterialRate), as duplicates did on the live service.
@@ -3478,8 +3500,7 @@ namespace LinkuraLocal::HttpMock {
                                                               const std::string& eventKey, int* grantedCardId) {
         sqlite3_stmt* lookup = nullptr;
         if (sqlite3_prepare_v2(db,
-                "SELECT c.d_card_datas_id, c.card_datas_id, "
-                "EXISTS(SELECT 1 FROM museum_card_ownership o WHERE o.d_card_datas_id=c.d_card_datas_id) "
+                "SELECT c.d_card_datas_id, c.card_datas_id "
                 "FROM card_detail c WHERE c.card_datas_id / 10 = ?1 / 10 "
                 "ORDER BY c.card_datas_id = ?1 DESC, c.card_datas_id DESC LIMIT 1;",
                 -1, &lookup, nullptr) != SQLITE_OK || !lookup) {
@@ -3494,18 +3515,13 @@ namespace LinkuraLocal::HttpMock {
         const auto* rawId = reinterpret_cast<const char*>(sqlite3_column_text(lookup, 0));
         const std::string dCardId(rawId ? rawId : "");
         const int catalogCardId = sqlite3_column_int(lookup, 1);
-        const bool owned = sqlite3_column_int(lookup, 2) != 0;
         sqlite3_finalize(lookup);
         if (dCardId.empty()) return std::nullopt;
         if (grantedCardId) *grantedCardId = catalogCardId;
-        if (owned) {
-            const int seriesId = catalogCardId / 10;
-            for (const auto& row : ShopRows("limit_break_material")) {
-                if (row.value("series_id", 0) != seriesId) continue;
-                if (!GrantItemLocked(row.value("material_item_id", 0), row.value("quantity", int64_t{0})))
-                    return std::nullopt;
-                break;
-            }
+        const auto held = CardSeriesHeldLocked(catalogCardId);
+        if (!held) return std::nullopt;
+        if (*held) {
+            if (!GrantLimitBreakMaterialLocked(catalogCardId)) return std::nullopt;
             return false;
         }
         bool ok = true;
