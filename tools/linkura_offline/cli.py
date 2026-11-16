@@ -31,7 +31,8 @@ DEFAULT_DYLIB = REPO / "ios/build/LinkuraOffline.dylib"
 
 def _ios_stage(args: argparse.Namespace) -> int:
     report = stage_offline_ios_client(
-        args.source, args.dylib, args.output, bundle_id=args.bundle_id, port=args.port,
+        args.source, args.dylib, args.output, bundle_id=args.bundle_id, display_name=args.display_name,
+        port=args.port,
         redirect_assets=not args.keep_asset_urls,
         asset_base=args.asset_base_url,
         show_preview_bgm_fallback=args.show_preview_bgm_fallback,
@@ -132,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dylib", type=Path, default=DEFAULT_DYLIB, help="ios/build.sh output")
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--bundle-id", default=DEFAULT_BUNDLE_ID)
+    p.add_argument("--display-name", default="Linkura Offline", help="home screen name")
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--keep-asset-urls", action="store_true", help="do not point asset URLs at the local server")
     p.add_argument("--asset-base-url", help="download assets from this base URL (serving <base>/ios/..., "

@@ -70,21 +70,26 @@ namespace LinkuraLocal::Standalone {
             return root / (path.substr(1) + suffix);
         }
 
-        // Archive covers (thumbnail_image_url) point at the official CDN, which
-        // no longer serves most of them. When <assetRoot> holds a file at the
-        // same path, point the URL at this server's /a/ instead; other URLs are
-        // left as they are.
+        // Archive covers (thumbnail_image_url) and motion-capture replays
+        // (archive_url) point at the official CDN, which no longer serves them.
+        // Point a URL at this server's /a/ instead when <assetRoot> holds a
+        // file at the same path, or whenever a remote asset base is configured
+        // (the /a/ proxy forwards it to the resource server, which keeps the
+        // replay data and has a cover for every archive). A cover that fails to
+        // load is not just blank: the list reuses its cells and keeps the
+        // previous archive's cover and date. Other URLs are left as they are.
         void RedirectLocalAssets(std::string& body, const ServerConfig& config) {
             static const std::string kCdn = "https://assets.link-like-lovelive.app/";
-            if (config.assetRoot.empty()) return;
+            if (config.assetRoot.empty() && config.remoteAssetBase.empty()) return;
             const std::string local = "http://127.0.0.1:" + std::to_string(config.port) + "/a/";
             size_t pos = 0;
             while ((pos = body.find(kCdn, pos)) != std::string::npos) {
                 const size_t end = body.find('"', pos);
                 if (end == std::string::npos) break;
-                const auto file = MockFile(config.assetRoot, "/" + body.substr(pos + kCdn.size(), end - pos - kCdn.size()), "");
+                const std::string rest = body.substr(pos + kCdn.size(), end - pos - kCdn.size());
+                const auto file = MockFile(config.assetRoot, "/" + rest, "");
                 std::error_code ec;
-                if (!file.empty() && std::filesystem::is_regular_file(file, ec)) {
+                if (!config.remoteAssetBase.empty() || (!file.empty() && std::filesystem::is_regular_file(file, ec))) {
                     body.replace(pos, kCdn.size(), local);
                     pos += local.size();
                 } else {
@@ -206,11 +211,34 @@ namespace LinkuraLocal::Standalone {
                 response.body = std::move(content);
                 return response;
             }
+            if (!config.remoteAssetBase.empty() && config.fetchRemote) {
+                ServerConfig::RemoteResponse remote;
+                const auto range = request.headers.find("range");
+                std::string base = config.remoteAssetBase;
+                while (!base.empty() && base.back() == '/') base.pop_back();
+                const std::string url = base + path.substr(2);
+                if (config.fetchRemote(url, range == request.headers.end() ? std::string{} : range->second, remote) &&
+                    (remote.status == 200 || remote.status == 206)) {
+                    Log::InfoFmt("[OfflineServer] asset %s -> proxied %d (%zu bytes)", path.c_str(), remote.status,
+                                 remote.body.size());
+                    response.status = remote.status;
+                    response.reason = remote.status == 206 ? "Partial Content" : "OK";
+                    response.headersText = std::string("content-type: ") + AssetContentType(path) +
+                                           "\naccept-ranges: bytes\n";
+                    if (!remote.contentRange.empty()) response.headersText += "content-range: " + remote.contentRange + "\n";
+                    response.body = std::move(remote.body);
+                    return response;
+                }
+                Log::WarnFmt("[OfflineServer] asset proxy failed: %s -> %d", path.c_str(), remote.status);
+            }
             Log::WarnFmt("[OfflineServer] asset request not served: %s", request.target.c_str());
+            // No body: the game's downloader writes whatever body it gets into
+            // the asset's cache file regardless of status, then resumes from
+            // that length with a Range request, so an error text would end up
+            // as the start of the asset and fail its checksum for good.
             response.status = 404;
             response.reason = "Not Found";
-            response.headersText = "content-type: text/plain\n";
-            response.body = "asset not available offline\n";
+            response.body.clear();
             return response;
         }
 

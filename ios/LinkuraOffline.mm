@@ -105,6 +105,61 @@ extern "C" __attribute__((weak)) void LinkuraRemoteStart(NSURL* directory);
 void LinkuraPushStart();
 void LinkuraOfflineLog(const char* level, const char* message) { LogSink(level, message); }
 
+// Asset proxy for config.json "remoteAssetBase": the game may only use plain
+// HTTP towards loopback (Unity rejects other insecure URLs), so the local
+// server fetches missing assets from the resource server with NSURLSession.
+static NSURLSession* AssetProxySession() {
+    static NSURLSession* session;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSURLSessionConfiguration* configuration = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+        configuration.HTTPMaximumConnectionsPerHost = 8;
+        configuration.URLCache = nil;
+        configuration.timeoutIntervalForRequest = 120;
+        session = [NSURLSession sessionWithConfiguration:configuration];
+    });
+    return session;
+}
+
+static bool FetchRemoteAsset(const std::string& url, const std::string& range,
+                             LinkuraLocal::Standalone::ServerConfig::RemoteResponse& out) {
+    @autoreleasepool {
+        NSURL* target = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
+        if (!target) return false;
+        NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:target
+                                                               cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                           timeoutInterval:120];
+        if (!range.empty()) [request setValue:[NSString stringWithUTF8String:range.c_str()] forHTTPHeaderField:@"Range"];
+        __block NSData* body = nil;
+        __block NSHTTPURLResponse* http = nil;
+        dispatch_semaphore_t done = dispatch_semaphore_create(0);
+        [[AssetProxySession() dataTaskWithRequest:request
+                                completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
+            body = data;
+            if ([response isKindOfClass:NSHTTPURLResponse.class]) http = (NSHTTPURLResponse*)response;
+            if (error) {
+                char line[512];
+                std::snprintf(line, sizeof(line), "asset proxy: %s (%s %ld) %s", url.c_str(),
+                              error.domain.UTF8String ?: "?", static_cast<long>(error.code),
+                              error.localizedDescription.UTF8String ?: "");
+                LogSink("W", line);
+                id path = error.userInfo[@"_NSURLErrorNWPathKey"];
+                NSString* detail = [NSString stringWithFormat:@"asset proxy path: %@ | reason: %@",
+                                    path ?: @"-", error.userInfo[@"_kCFStreamErrorCodeKey"] ?: @"-"];
+                LogSink("W", detail.UTF8String ?: "");
+            }
+            dispatch_semaphore_signal(done);
+        }] resume];
+        dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+        if (!http) return false;
+        out.status = static_cast<int>(http.statusCode);
+        NSString* contentRange = http.allHeaderFields[@"Content-Range"];
+        if ([contentRange isKindOfClass:NSString.class]) out.contentRange = contentRange.UTF8String;
+        if (body) out.body.assign(static_cast<const char*>(body.bytes), body.length);
+        return true;
+    }
+}
+
 __attribute__((constructor))
 static void LinkuraOfflineStart() {
     @autoreleasepool {
@@ -136,6 +191,23 @@ static void LinkuraOfflineStart() {
                 NSDictionary* settings = parsed;
                 if ([settings[@"port"] isKindOfClass:NSNumber.class]) {
                     config.port = static_cast<std::uint16_t>([settings[@"port"] unsignedShortValue]);
+                }
+                if ([settings[@"remoteAssetBase"] isKindOfClass:NSString.class]) {
+                    config.remoteAssetBase = [settings[@"remoteAssetBase"] UTF8String];
+                    config.fetchRemote = FetchRemoteAsset;
+                    // Startup self-test: can this app reach the resource server and the internet?
+                    const std::string base = config.remoteAssetBase;
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC),
+                                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                        for (const std::string& probe : {base, std::string("http://captive.apple.com/hotspot-detect.html")}) {
+                            LinkuraLocal::Standalone::ServerConfig::RemoteResponse out;
+                            const bool ok = FetchRemoteAsset(probe, "bytes=0-0", out);
+                            char line[512];
+                            std::snprintf(line, sizeof(line), "network self-test %s -> %s %d", probe.c_str(),
+                                          ok ? "response" : "no response", out.status);
+                            LogSink("I", line);
+                        }
+                    });
                 }
                 if ([settings[@"resVersion"] isKindOfClass:NSString.class]) {
                     config.resVersion = [settings[@"resVersion"] UTF8String];

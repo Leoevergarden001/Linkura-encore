@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <string>
 #include <thread>
@@ -27,6 +28,17 @@ namespace LinkuraLocal::Standalone {
         // Asset files served for /a/<path> (the rewritten asset base URLs),
         // e.g. assets/raw/oj/oj4rf2oo3u37dl5nkqrn5zfcyy for a catalog.
         std::filesystem::path assetRoot;
+        // Asset proxy. Unity only lets the game make plain-HTTP requests to
+        // loopback, so assets that are not in <assetRoot> can be fetched by
+        // this server instead: GET <remoteAssetBase>/<path after /a/> through
+        // fetchRemote (the platform's HTTP client), forwarding Range.
+        std::string remoteAssetBase;
+        struct RemoteResponse {
+            int status = 0;
+            std::string contentRange;
+            std::string body;
+        };
+        std::function<bool(const std::string& url, const std::string& range, RemoteResponse& out)> fetchRemote;
     };
 
     struct HttpRequest {
