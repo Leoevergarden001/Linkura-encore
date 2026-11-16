@@ -69,9 +69,21 @@ LYRIC_VIDEO_PATCHES = (
 # tiles stay white and dead.  Redirect that one call to the client's own
 # Inspix.TransformExtension.findChildByName(Transform, string), a recursive
 # search with the same register layout, so the prefab keeps its scroll view.
+#
+# Characters in iOS caches converted from Android bundles draw with a stand-in
+# for the toon shader (unityfs_shader_swap: MELPOT/Toon/UberToonShader ->
+# Unlit/Texture), which has no _SecondaryColor. FlushingController
+# .FindFaceMaterial picks the face material by that shader property, finds
+# none, and StartFlushing then throws NullReferenceException; called from
+# StoryModelSpaceManager.Setup, that aborts every 活動記録 story before its
+# first line. Without a face material, return instead (the cbz on the
+# faceMaterial field jumps to the epilogue, not to the throw): no blush, which
+# the stand-in shader could not draw anyway.
 COMPAT_PATCHES = (
     (0x2F08398, "DreamLiveStageSelectPanel::Setup Transform.Find -> TransformExtension.findChildByName",
      "067f2895", "3c161094"),
+    (0x284E5C0, "FlushingController::StartFlushing no face material -> return, not NullReferenceException",
+     "c00100b4", "200100b4"),
 )
 
 # 活動記録 story parts need assets that were never archived; confirming
@@ -439,10 +451,10 @@ def guard_destructive_actions(framework: bytes) -> tuple[bytes, list[dict]]:
     return patch_code(framework, DESTRUCTIVE_ACTION_PATCHES)
 
 
-def patch_info_plist(info: dict, bundle_id: str) -> dict:
+def patch_info_plist(info: dict, bundle_id: str, display_name: str = "Linkura Offline") -> dict:
     info = dict(info)
     info["CFBundleIdentifier"] = bundle_id
-    info["CFBundleDisplayName"] = "Linkura Offline"
+    info["CFBundleDisplayName"] = display_name
     ats = dict(info.get("NSAppTransportSecurity") or {})
     ats["NSAllowsArbitraryLoads"] = True
     ats["NSAllowsLocalNetworking"] = True
@@ -460,6 +472,7 @@ def stage_offline_ios_client(
     output: Path,
     *,
     bundle_id: str = DEFAULT_BUNDLE_ID,
+    display_name: str = "Linkura Offline",
     port: int = DEFAULT_PORT,
     redirect_assets: bool = True,
     asset_base: str | None = None,
@@ -521,7 +534,7 @@ def stage_offline_ios_client(
             patches += player_patches
 
         replacements = {
-            app + "Info.plist": plistlib.dumps(patch_info_plist(info, bundle_id)),
+            app + "Info.plist": plistlib.dumps(patch_info_plist(info, bundle_id, display_name)),
             metadata_member: metadata,
             main: insert_dylib(main_data, DYLIB_INSTALL_NAME),
         }
