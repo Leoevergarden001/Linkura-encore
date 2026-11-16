@@ -813,6 +813,24 @@ def main() -> int:
             check("local archive cover is served as JPEG",
                   reply.status == 200 and reply.getheader("content-type") == "image/jpeg" and
                   reply.read() == b"\xff\xd8\xff\xe0test-cover")
+            # The list has every archive, newest first, and pages by offset/limit (a
+            # static body used to repeat the same page forever).
+            ids = [a["archives_id"] for a in json.loads(body)["archive_list"]]
+            _, _, first = post(conn, "/v1/archive/get_archive_list", {"offset": 0, "limit": 20})
+            _, _, second = post(conn, "/v1/archive/get_archive_list", {"offset": 20, "limit": 20})
+            _, _, past = post(conn, "/v1/archive/get_archive_list", {"offset": len(ids), "limit": 20})
+            page1 = [a["archives_id"] for a in json.loads(first)["archive_list"]]
+            page2 = [a["archives_id"] for a in json.loads(second)["archive_list"]]
+            check("archive list pages through all 398 archives",
+                  len(ids) == 398 and len(set(ids)) == 398 and page1 == ids[:20] and page2 == ids[20:40] and
+                  json.loads(past)["archive_list"] == [], f"{len(ids)} {len(page1)} {len(page2)}")
+            # A motion-capture replay the official detail had no archive_url for (an mrs
+            # recording kept by the community mirror) gets its entry from 008.
+            _, _, body = post(conn, "/v1/archive/get_with_archive_data",
+                              {"archives_id": "025816e3-0c7b-4fa3-b552-423a770730a7"})
+            replay = json.loads(body).get("archive_url", "")
+            check("mrs replay archive_url filled from the mirror list",
+                  replay.startswith(cdn + "archive/mrs/") and replay.endswith(".iarc"), replay)
             conn.close()
         finally:
             stop(proc)

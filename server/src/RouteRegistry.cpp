@@ -4,12 +4,14 @@
 #include "backend/HttpMockBackend.hpp"
 #include "offline_api_mock_builtin.hpp"
 
+#include <algorithm>
 #include <ctime>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace LinkuraLocal::HttpMock {
     namespace {
@@ -108,6 +110,72 @@ namespace LinkuraLocal::HttpMock {
                 body["cheer_rewards"] = ranking->value("cheer_rewards", nlohmann::json::array());
             }
             return JsonResponse(body);
+        }
+
+        // ARCHIVES list (all 398 archives, newest first). The client pages
+        // through it; a static body made every page the same, so the list
+        // repeated endlessly. Serve the requested slice: offset/limit when
+        // given (the request is logged so its exact shape can be checked),
+        // sorted by date or With Star count.
+        static std::optional<MockResponse> HandleArchiveGetArchiveList(const MockRequestContext& request,
+                                                                       HttpMockBackend&) {
+            const auto& archive = OfflineApiMockBuiltIn::ArchiveGetArchiveListJsonObj();
+            const auto payload = nlohmann::json::parse(request.payloadJson, nullptr, false);
+            Log::InfoFmt("[HttpMockRouteRegistry] archive list request %.*s",
+                         static_cast<int>(std::min<size_t>(request.payloadJson.size(), 400)), request.payloadJson.data());
+            auto number = [&payload](const char* key, long long fallback) -> long long {
+                if (!payload.is_object() || !payload.contains(key)) return fallback;
+                const auto& v = payload[key];
+                if (v.is_number_integer()) return v.get<long long>();
+                if (v.is_string()) {
+                    try { return std::stoll(v.get<std::string>()); } catch (...) { return fallback; }
+                }
+                return fallback;
+            };
+            std::vector<nlohmann::json> list;
+            for (const auto& entry : archive.value("archive_list", nlohmann::json::array())) list.push_back(entry);
+
+            bool byStars = false, ascending = false;
+            if (payload.is_object()) {
+                for (const auto& [key, value] : payload.items()) {
+                    if (value.is_string() && value.get<std::string>() == "star_count") byStars = true;
+                    if (key.find("asc") != std::string::npos && value.is_boolean()) ascending = value.get<bool>();
+                    if (key.find("order") != std::string::npos && value.is_string()) {
+                        const auto order = value.get<std::string>();
+                        if (order == "asc" || order == "ASC") ascending = true;
+                    }
+                }
+            }
+            std::stable_sort(list.begin(), list.end(), [&](const nlohmann::json& a, const nlohmann::json& b) {
+                if (byStars) {
+                    const int sa = a.value("earned_star_count", 0), sb = b.value("earned_star_count", 0);
+                    if (sa != sb) return ascending ? sa < sb : sa > sb;
+                }
+                const auto ta = a.value("live_start_time", std::string{}), tb = b.value("live_start_time", std::string{});
+                return ascending ? ta < tb : ta > tb;
+            });
+
+            const long long total = static_cast<long long>(list.size());
+            const long long offset = std::clamp<long long>(number("offset", 0), 0, total);
+            const long long limit = number("limit", total);
+            const long long end = limit > 0 ? std::min(total, offset + limit) : total;
+            nlohmann::json page = nlohmann::json::array();
+            for (long long i = offset; i < end; ++i) page.push_back(std::move(list[static_cast<size_t>(i)]));
+            return JsonResponse({
+                {"archive_list", std::move(page)},
+                {"filterable_characters", archive.value("filterable_characters", nlohmann::json::array())},
+                {"sortable_fields", archive.value("sortable_fields", nlohmann::json::array())},
+            });
+        }
+
+        // Fes×LIVE replay camera switch (the live service remembered the
+        // player's choice). Accept it; without a route the client shows a
+        // 通信エラー as soon as the replay starts.
+        static std::optional<MockResponse> HandleArchiveSetFesCamera(const MockRequestContext& request,
+                                                                     HttpMockBackend&) {
+            Log::InfoFmt("[HttpMockRouteRegistry] set_fes_camera %.*s",
+                         static_cast<int>(std::min<size_t>(request.payloadJson.size(), 200)), request.payloadJson.data());
+            return JsonResponse(nlohmann::json::object());
         }
 
         // With×STATION archive list: no With×STATION video was preserved, so
@@ -826,7 +894,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterStaticJson(routes, "/v1/webview/school_idol_connect_post/get_theme_list", OfflineApiMockBuiltIn::WebviewSchoolIdolConnectPostGetThemeListJsonView);
             RegisterStaticJson(routes, "/v1/follow/live_chat_group_list", OfflineApiMockBuiltIn::FollowLiveChatGroupListJsonView);
             RegisterStaticJson(routes, "/v1/archive/get_home", OfflineApiMockBuiltIn::ArchiveGetHomeJsonView);
-            RegisterStaticJson(routes, "/v1/archive/get_archive_list", OfflineApiMockBuiltIn::ArchiveGetArchiveListJsonView);
+            RegisterBackend(routes, "/v1/archive/get_archive_list", HandleArchiveGetArchiveList);
             RegisterBackend(routes, "/v1/out_quest_live/get_quest_top", HandleOutQuestLiveGetQuestTop);
             RegisterBackend(routes, "/v1/out_quest_live/daily/get_stage_select", HandleDailyQuestStageSelect);
             RegisterBackend(routes, "/v1/out_quest_live/daily/get_recovery_challenge_count",
@@ -889,6 +957,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/archive/get_ranking_list", HandleArchiveGetRankingList);
             RegisterBackend(routes, "/v1/archive/get_with_station_list", HandleArchiveGetWithStationList);
             RegisterBackend(routes, "/v1/archive/get_fes_timeline_data", HandleArchiveGetFesTimelineData);
+            RegisterBackend(routes, "/v1/archive/set_fes_camera", HandleArchiveSetFesCamera);
             RegisterBackend(routes, "/v1/profile/get_fan_level_info", HandleProfileGetFanLevelInfo);
 
             // Chapter RANK (season pass). ChapterHomeResponse per 5.1 metadata:
