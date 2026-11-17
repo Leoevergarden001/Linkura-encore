@@ -121,4 +121,15 @@ SET response_json = json_set(response_json, '$.archive_url', (SELECT url FROM ar
     archive_url = (SELECT url FROM archive_replay_url AS r WHERE r.archives_id = archive_detail.archives_id)
 WHERE archives_id IN (SELECT archives_id FROM archive_replay_url)
   AND COALESCE(json_extract(response_json, '$.archive_url'), '') <> (SELECT url FROM archive_replay_url AS r WHERE r.archives_id = archive_detail.archives_id);
+-- With×MEETS: the client plays the video replay whenever the detail has a
+-- video_url and the motion-capture replay only when it has none (the official
+-- 2025 archives that kept only archive_url). No video replay survived, so drop
+-- video_url from With×MEETS archives that have a motion-capture replay. Fes×LIVE
+-- details (they carry selectable_camera_types) open the 3D replay either way.
+UPDATE archive_detail
+SET response_json = json_remove(response_json, '$.video_url')
+WHERE archives_id IN (SELECT archives_id FROM archive_replay_url UNION
+                      SELECT archives_id FROM archive_detail WHERE COALESCE(json_extract(response_json, '$.archive_url'), '') <> '')
+  AND json_extract(response_json, '$.selectable_camera_types') IS NULL
+  AND json_extract(response_json, '$.video_url') IS NOT NULL;
 DROP TABLE archive_replay_url;

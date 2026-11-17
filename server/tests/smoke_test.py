@@ -831,6 +831,12 @@ def main() -> int:
             replay = json.loads(body).get("archive_url", "")
             check("mrs replay archive_url filled from the mirror list",
                   replay.startswith(cdn + "archive/mrs/") and replay.endswith(".iarc"), replay)
+            # With×MEETS plays video whenever video_url is present; motion replays drop it.
+            _, _, body = post(conn, "/v1/archive/get_with_archive_data",
+                              {"archives_id": "a6fe0908-6dcc-4774-a6ff-70f39a6d7911"})
+            detail = json.loads(body)
+            check("With×MEETS motion replay has no video_url",
+                  detail.get("archive_url", "").endswith(".md") and "video_url" not in detail, str(detail.get("video_url")))
             conn.close()
         finally:
             stop(proc)
