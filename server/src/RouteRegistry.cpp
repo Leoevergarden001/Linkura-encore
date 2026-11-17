@@ -168,6 +168,20 @@ namespace LinkuraLocal::HttpMock {
             });
         }
 
+        // With×MEETS replay polls GET /v1/archive/withlive_info
+        // (ArchiveWithliveInfoResponse: timelines, polling_interval,
+        // has_extra_admission, is_archive_published). Viewer comments were not
+        // preserved; without a route the client retried every second.
+        static std::optional<MockResponse> HandleArchiveWithliveInfo(const MockRequestContext&,
+                                                                     HttpMockBackend&) {
+            return JsonResponse({
+                {"timelines", nlohmann::json::array()},
+                {"polling_interval", 60},
+                {"has_extra_admission", true},
+                {"is_archive_published", true},
+            });
+        }
+
         // Fes×LIVE replay camera switch (the live service remembered the
         // player's choice). Accept it; without a route the client shows a
         // 通信エラー as soon as the replay starts.
@@ -958,6 +972,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/archive/get_with_station_list", HandleArchiveGetWithStationList);
             RegisterBackend(routes, "/v1/archive/get_fes_timeline_data", HandleArchiveGetFesTimelineData);
             RegisterBackend(routes, "/v1/archive/set_fes_camera", HandleArchiveSetFesCamera);
+            RegisterBackend(routes, "/v1/archive/withlive_info", HandleArchiveWithliveInfo);
             RegisterBackend(routes, "/v1/profile/get_fan_level_info", HandleProfileGetFanLevelInfo);
 
             // Chapter RANK (season pass). ChapterHomeResponse per 5.1 metadata:

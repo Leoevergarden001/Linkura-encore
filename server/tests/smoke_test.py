@@ -831,6 +831,13 @@ def main() -> int:
             replay = json.loads(body).get("archive_url", "")
             check("mrs replay archive_url filled from the mirror list",
                   replay.startswith(cdn + "archive/mrs/") and replay.endswith(".iarc"), replay)
+            # With×MEETS replays poll withlive_info (GET) for comments and the AFTER state.
+            conn.request("GET", "/v1/archive/withlive_info?live_id=a6fe0908-6dcc-4774-a6ff-70f39a6d7911")
+            reply = conn.getresponse()
+            info = json.loads(reply.read() or b"{}")
+            check("archive withlive_info answers the replay's polling",
+                  reply.status == 200 and info.get("polling_interval") == 60 and info.get("timelines") == [],
+                  f"{reply.status} {info}")
             # With×MEETS plays video whenever video_url is present; motion replays drop it.
             _, _, body = post(conn, "/v1/archive/get_with_archive_data",
                               {"archives_id": "a6fe0908-6dcc-4774-a6ff-70f39a6d7911"})
