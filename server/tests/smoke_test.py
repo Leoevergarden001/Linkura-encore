@@ -277,8 +277,22 @@ def main() -> int:
                   len(ranking["cheer_rewards"]) > 0 and ranking["ranking_start_time"].startswith("2026-04-02"), body[:200].decode())
             status, _, body = post(conn, "/v1/archive/get_with_station_list", {"limit": 20, "offset": 0})
             stations = json.loads(body)
-            check("with station list", status == 200 and stations["with_station_list"] == [] and
+            names = [w["name"] for w in stations.get("with_station_list", [])]
+            check("with station list has the five episodes, newest first",
+                  status == 200 and len(names) == 5 and names[0] == "クイズ！これどんな魔法！？" and
                   len(stations["filterable_characters"]) > 0, body[:200].decode())
+            _, _, body = post(conn, "/v1/archive/get_with_station_list", {"limit": 2, "offset": 4})
+            check("with station list pages", len(json.loads(body)["with_station_list"]) == 1)
+            status, _, body = post(conn, "/v1/archive/get_with_station_data",
+                                   {"withstation_id": "bc8d535f-968b-49e9-b4f1-18979c0666d9"})
+            station = json.loads(body) if status == 200 else {}
+            check("with station detail has its HLS video",
+                  station.get("video_url", "").endswith("/archive/hls/20260416/index.m3u8") and
+                  len(station.get("chapters", [])) == 2, body[:200].decode())
+            status, _, body = post(conn, "/v1/archive/get_home", {})
+            recent = json.loads(body).get("with_station_list", []) if status == 200 else []
+            check("archive home Recent is the latest With×STATION",
+                  [r.get("live_id") for r in recent] == ["bc8d535f-968b-49e9-b4f1-18979c0666d9"], body[:200].decode())
             status, _, body = post(conn, "/v1/archive/get_fes_timeline_data", {"archives_id": "x", "play_time_second": 0})
             check("fes timeline", status == 200 and json.loads(body)["timelines"] == [])
             status, _, body = post(conn, "/v1/profile/get_info", {})

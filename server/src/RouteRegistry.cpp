@@ -112,17 +112,11 @@ namespace LinkuraLocal::HttpMock {
             return JsonResponse(body);
         }
 
-        // ARCHIVES list (all 398 archives, newest first). The client pages
-        // through it; a static body made every page the same, so the list
-        // repeated endlessly. Serve the requested slice: offset/limit when
-        // given (the request is logged so its exact shape can be checked),
-        // sorted by date or With Star count.
-        static std::optional<MockResponse> HandleArchiveGetArchiveList(const MockRequestContext& request,
-                                                                       HttpMockBackend&) {
-            const auto& archive = OfflineApiMockBuiltIn::ArchiveGetArchiveListJsonObj();
-            const auto payload = nlohmann::json::parse(request.payloadJson, nullptr, false);
-            Log::InfoFmt("[HttpMockRouteRegistry] archive list request %.*s",
-                         static_cast<int>(std::min<size_t>(request.payloadJson.size(), 400)), request.payloadJson.data());
+        // Sorts a School Idol Connect list (newest first unless the payload asks
+        // for ascending order, or by With Star count) and returns the page the
+        // payload's offset/limit select. timeKey names the entry's date field.
+        static nlohmann::json SortAndPage(std::vector<nlohmann::json> list, const nlohmann::json& payload,
+                                          const char* timeKey) {
             auto number = [&payload](const char* key, long long fallback) -> long long {
                 if (!payload.is_object() || !payload.contains(key)) return fallback;
                 const auto& v = payload[key];
@@ -132,9 +126,6 @@ namespace LinkuraLocal::HttpMock {
                 }
                 return fallback;
             };
-            std::vector<nlohmann::json> list;
-            for (const auto& entry : archive.value("archive_list", nlohmann::json::array())) list.push_back(entry);
-
             bool byStars = false, ascending = false;
             if (payload.is_object()) {
                 for (const auto& [key, value] : payload.items()) {
@@ -151,18 +142,33 @@ namespace LinkuraLocal::HttpMock {
                     const int sa = a.value("earned_star_count", 0), sb = b.value("earned_star_count", 0);
                     if (sa != sb) return ascending ? sa < sb : sa > sb;
                 }
-                const auto ta = a.value("live_start_time", std::string{}), tb = b.value("live_start_time", std::string{});
+                const auto ta = a.value(timeKey, std::string{}), tb = b.value(timeKey, std::string{});
                 return ascending ? ta < tb : ta > tb;
             });
-
             const long long total = static_cast<long long>(list.size());
             const long long offset = std::clamp<long long>(number("offset", 0), 0, total);
             const long long limit = number("limit", total);
             const long long end = limit > 0 ? std::min(total, offset + limit) : total;
             nlohmann::json page = nlohmann::json::array();
             for (long long i = offset; i < end; ++i) page.push_back(std::move(list[static_cast<size_t>(i)]));
+            return page;
+        }
+
+        // ARCHIVES list (all 398 archives, newest first). The client pages
+        // through it; a static body made every page the same, so the list
+        // repeated endlessly. Serve the requested slice: offset/limit when
+        // given (the request is logged so its exact shape can be checked),
+        // sorted by date or With Star count.
+        static std::optional<MockResponse> HandleArchiveGetArchiveList(const MockRequestContext& request,
+                                                                       HttpMockBackend&) {
+            const auto& archive = OfflineApiMockBuiltIn::ArchiveGetArchiveListJsonObj();
+            const auto payload = nlohmann::json::parse(request.payloadJson, nullptr, false);
+            Log::InfoFmt("[HttpMockRouteRegistry] archive list request %.*s",
+                         static_cast<int>(std::min<size_t>(request.payloadJson.size(), 400)), request.payloadJson.data());
+            std::vector<nlohmann::json> list;
+            for (const auto& entry : archive.value("archive_list", nlohmann::json::array())) list.push_back(entry);
             return JsonResponse({
-                {"archive_list", std::move(page)},
+                {"archive_list", SortAndPage(std::move(list), payload, "live_start_time")},
                 {"filterable_characters", archive.value("filterable_characters", nlohmann::json::array())},
                 {"sortable_fields", archive.value("sortable_fields", nlohmann::json::array())},
             });
@@ -192,16 +198,52 @@ namespace LinkuraLocal::HttpMock {
             return JsonResponse(nlohmann::json::object());
         }
 
-        // With×STATION archive list: no With×STATION video was preserved, so
-        // the list is empty; filters reuse the archive list's.
-        static std::optional<MockResponse> HandleArchiveGetWithStationList(const MockRequestContext&,
+        // With×STATION archive list: the five episodes (2026-04) from the
+        // linkura-live-data snapshot (archive_get_with_station_list.json);
+        // filters reuse the archive list's.
+        static std::optional<MockResponse> HandleArchiveGetWithStationList(const MockRequestContext& request,
                                                                            HttpMockBackend&) {
             const auto& archive = OfflineApiMockBuiltIn::ArchiveGetArchiveListJsonObj();
+            const auto& station = OfflineApiMockBuiltIn::ArchiveGetWithStationListJsonObj();
+            const auto payload = nlohmann::json::parse(request.payloadJson, nullptr, false);
+            std::vector<nlohmann::json> list;
+            for (const auto& entry : station.value("with_station_list", nlohmann::json::array())) list.push_back(entry);
             return JsonResponse({
-                {"with_station_list", nlohmann::json::array()},
+                {"with_station_list", SortAndPage(std::move(list), payload, "start_time")},
                 {"filterable_characters", archive.value("filterable_characters", nlohmann::json::array())},
                 {"sortable_fields", archive.value("sortable_fields", nlohmann::json::array())},
             });
+        }
+
+        // With×STATION replay detail (GetWithStationDataRequest.withstation_id
+        // = the list entry's live_id), from the same snapshot. video_url names
+        // the official HLS; the asset redirect sends it to the resource server.
+        static std::optional<MockResponse> HandleArchiveGetWithStationData(const MockRequestContext& request,
+                                                                           HttpMockBackend&) {
+            const auto& details = OfflineApiMockBuiltIn::ArchiveWithStationDetailsJsonObj();
+            const auto id = HttpMockBackend::ExtractPayloadStringField(request.payloadJson, "withstation_id");
+            const auto it = details.find(id);
+            if (it == details.end()) {
+                Log::WarnFmt("[HttpMockRouteRegistry] with_station_data not found withstation_id=%s", id.c_str());
+                return std::nullopt;
+            }
+            return JsonResponse(*it);
+        }
+
+        // School Idol Connect home: the "Recent" row of UPCOMING lists
+        // with_station_list. The captured home only had a 2023 entry; show the
+        // latest With×STATION episode, as the service did at its end.
+        static std::optional<MockResponse> HandleArchiveGetHome(const MockRequestContext&, HttpMockBackend&) {
+            auto home = OfflineApiMockBuiltIn::ArchiveGetHomeJsonObj();
+            const auto& station = OfflineApiMockBuiltIn::ArchiveGetWithStationListJsonObj();
+            const auto list = station.value("with_station_list", nlohmann::json::array());
+            const nlohmann::json* latest = nullptr;
+            for (const auto& entry : list) {
+                if (!latest || entry.value("start_time", std::string{}) > latest->value("start_time", std::string{}))
+                    latest = &entry;
+            }
+            home["with_station_list"] = latest ? nlohmann::json::array({*latest}) : nlohmann::json::array();
+            return JsonResponse(home);
         }
 
         // Fes×LIVE archive playback polls viewer comments; none were preserved.
@@ -907,7 +949,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterStaticJson(routes, "/v1/home/notify_wallpaper_setting", "null");
             RegisterStaticJson(routes, "/v1/webview/school_idol_connect_post/get_theme_list", OfflineApiMockBuiltIn::WebviewSchoolIdolConnectPostGetThemeListJsonView);
             RegisterStaticJson(routes, "/v1/follow/live_chat_group_list", OfflineApiMockBuiltIn::FollowLiveChatGroupListJsonView);
-            RegisterStaticJson(routes, "/v1/archive/get_home", OfflineApiMockBuiltIn::ArchiveGetHomeJsonView);
+            RegisterBackend(routes, "/v1/archive/get_home", HandleArchiveGetHome);
             RegisterBackend(routes, "/v1/archive/get_archive_list", HandleArchiveGetArchiveList);
             RegisterBackend(routes, "/v1/out_quest_live/get_quest_top", HandleOutQuestLiveGetQuestTop);
             RegisterBackend(routes, "/v1/out_quest_live/daily/get_stage_select", HandleDailyQuestStageSelect);
@@ -970,6 +1012,7 @@ namespace LinkuraLocal::HttpMock {
             RegisterBackend(routes, "/v1/archive/get_fes_archive_data", HandleArchiveDetail);
             RegisterBackend(routes, "/v1/archive/get_ranking_list", HandleArchiveGetRankingList);
             RegisterBackend(routes, "/v1/archive/get_with_station_list", HandleArchiveGetWithStationList);
+            RegisterBackend(routes, "/v1/archive/get_with_station_data", HandleArchiveGetWithStationData);
             RegisterBackend(routes, "/v1/archive/get_fes_timeline_data", HandleArchiveGetFesTimelineData);
             RegisterBackend(routes, "/v1/archive/set_fes_camera", HandleArchiveSetFesCamera);
             RegisterBackend(routes, "/v1/archive/withlive_info", HandleArchiveWithliveInfo);
