@@ -10,7 +10,10 @@
 //   Documents/LinkuraOffline/server.log   request and error log
 //   Documents/LinkuraOffline/config.json  optional {"port":52680,"resVersion":"...",
 //                                          "remoteAssetBase":"https://<asset host>/a",
-//                                          "remoteAssetKey":"<this device's key>"}
+//                                          "remoteAssetKey":"<this device's key>",
+//                                          "motionReplays":false}  (false: With×MEETS
+//                                          archives play video, for asset hosts
+//                                          without motion-capture data)
 //                                          (with remoteAssetBase, <base>/version.json
 //                                          overrides resVersion when reachable)
 //   Documents/LinkuraOffline/mock_api/... optional per-path JSON overrides
@@ -29,6 +32,7 @@
 #include <mutex>
 #include <string>
 
+#include "RouteRegistry.hpp"
 #include "standalone/MockPlatformStandalone.hpp"
 #include "standalone/OfflineHttpServer.hpp"
 
@@ -204,6 +208,9 @@ static void LinkuraOfflineStart() {
                 NSDictionary* settings = parsed;
                 if ([settings[@"port"] isKindOfClass:NSNumber.class]) {
                     config.port = static_cast<std::uint16_t>([settings[@"port"] unsignedShortValue]);
+                }
+                if ([settings[@"motionReplays"] isKindOfClass:NSNumber.class]) {
+                    LinkuraLocal::HttpMock::SetMotionReplaysEnabled([settings[@"motionReplays"] boolValue]);
                 }
                 if ([settings[@"remoteAssetKey"] isKindOfClass:NSString.class]) {
                     g_remoteAssetKey = [settings[@"remoteAssetKey"] UTF8String];

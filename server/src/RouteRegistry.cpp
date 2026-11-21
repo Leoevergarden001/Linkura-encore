@@ -5,6 +5,7 @@
 #include "offline_api_mock_builtin.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <ctime>
 #include <optional>
 #include <string>
@@ -345,6 +346,24 @@ namespace LinkuraLocal::HttpMock {
             return ToBackendResponse(backend.GetCollectionGallaryListResponse());
         }
 
+        std::atomic<bool> g_motionReplays{true};
+
+        // With motion replays off: a With×MEETS detail (no selectable_camera_types)
+        // with an archive_url gets the archive's video replay instead.
+        void PreferVideoReplay(MockResponse& response, const std::string& archivesId) {
+            if (g_motionReplays.load()) return;
+            auto detail = nlohmann::json::parse(response.body, nullptr, false);
+            if (!detail.is_object() || detail.contains("selectable_camera_types")) return;
+            const auto archiveUrl = detail.value("archive_url", std::string{});
+            if (archiveUrl.empty()) return;
+            const auto& videos = OfflineApiMockBuiltIn::ArchiveVideoUrlsJsonObj();
+            const auto video = videos.find(archivesId);
+            if (video == videos.end() || !video->is_string()) return;
+            detail.erase("archive_url");
+            detail["video_url"] = *video;
+            response.body = detail.dump();
+        }
+
         static std::optional<MockResponse> HandleArchiveDetail(const MockRequestContext& request,
                                                                HttpMockBackend& backend) {
             const auto fallbackArchiveId = HookShare::Shareable::currentArchiveId;
@@ -364,12 +383,18 @@ namespace LinkuraLocal::HttpMock {
                 record->headersText = std::string(OfflineApiMockBuiltIn::DefaultHeadersView);
             }
 
-            return MockResponse{
+            MockResponse response{
                 std::move(record->body),
                 std::move(record->headersText),
                 record->statusCode,
                 std::move(record->statusDescription),
             };
+            if (request.path == "/v1/archive/get_with_archive_data") {
+                auto id = HttpMockBackend::ExtractPayloadStringField(request.payloadJson, "archives_id");
+                if (id.empty()) id = fallbackArchiveId;
+                PreferVideoReplay(response, id);
+            }
+            return response;
         }
 
         static std::optional<MockResponse> HandleCharacterInfo(const MockRequestContext& request,
@@ -1096,6 +1121,8 @@ namespace LinkuraLocal::HttpMock {
             return routes;
         }
     }
+
+    void SetMotionReplaysEnabled(bool enabled) { g_motionReplays = enabled; }
 
     std::optional<MockResponse> ResolveRegisteredRoute(const MockRequestContext& request) {
         const auto& routes = GetRoutes();

@@ -1,7 +1,7 @@
 // Host (macOS) build of the iOS offline server, for local testing:
 //   linkura-offline-server --data DIR [--port N] [--res-version V] [--mock-root DIR]
 //     [--asset-root DIR] [--remote-asset-base URL [--remote-asset-key K] [--remote-chunk-bytes N]]
-//     [--res-version-file PATH]
+//     [--res-version-file PATH] [--motion-replays on|off]
 // The asset proxy fetches with curl (the iOS build uses NSURLSession); the
 // key goes in an x-linkura-key header. --res-version-file is read for every
 // response (a stand-in for the version the remote asset base publishes).
@@ -16,6 +16,7 @@
 #include <sstream>
 #include <string>
 
+#include "RouteRegistry.hpp"
 #include "standalone/MockPlatformStandalone.hpp"
 #include "standalone/OfflineHttpServer.hpp"
 
@@ -82,6 +83,7 @@ int main(int argc, char** argv) {
         else if (key == "--remote-asset-key") remoteKey = value;
         else if (key == "--remote-chunk-bytes") config.remoteChunkBytes = std::strtoull(value.c_str(), nullptr, 10);
         else if (key == "--res-version-file") versionFile = value;
+        else if (key == "--motion-replays") LinkuraLocal::HttpMock::SetMotionReplaysEnabled(value != "off");
         else {
             std::fprintf(stderr, "unknown option %s\n", key.c_str());
             return 2;

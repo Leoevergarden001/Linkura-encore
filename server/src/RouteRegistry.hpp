@@ -23,4 +23,10 @@ namespace LinkuraLocal::HttpMock {
     using RegisteredRouteHandler = std::function<std::optional<MockResponse>(const MockRequestContext&, HttpMockBackend&)>;
 
     std::optional<MockResponse> ResolveRegisteredRoute(const MockRequestContext& request);
+
+    // スクールアイドルコネクト motion-capture replays (default on). Off when the
+    // asset host carries no motion data: With×MEETS archive details then drop
+    // archive_url and carry the official video_url (archive_video_urls.json),
+    // so the client plays the video replay instead of waiting for motion data.
+    void SetMotionReplaysEnabled(bool enabled);
 }

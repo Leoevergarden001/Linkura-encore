@@ -913,7 +913,7 @@ def main() -> int:
         version_file = Path(tmp) / "version.txt"
         version_file.write_text("R9999999@remote-one\n")
         port = free_port()
-        proc = start(data, port, "--res-version", "R0000000@configured",
+        proc = start(data, port, "--res-version", "R0000000@configured", "--motion-replays", "off",
                      "--remote-asset-base", f"http://127.0.0.1:{upstream.server_port}/a",
                      "--remote-asset-key", "device-key", "--remote-chunk-bytes", "65536",
                      "--res-version-file", str(version_file))
@@ -953,6 +953,15 @@ def main() -> int:
                   lower(second_headers).get("x-res-version") == "R9999999@remote-two",
                   f"{lower(first_headers).get('x-res-version')} {lower(second_headers).get('x-res-version')}")
             # With×MEETS mrs replays play the video replay (009).
+            _, _, body = post(conn, "/v1/archive/get_with_archive_data",
+                              {"archives_id": "e77f7985-6a67-4a59-a689-d4870c96cf03"})
+            detail = json.loads(body)
+            _, _, body = post(conn, "/v1/archive/get_with_archive_data",
+                              {"archives_id": "a6fe0908-6dcc-4774-a6ff-70f39a6d7911"})
+            detail = json.loads(body)
+            check("with motion replays off an als With×MEETS archive plays video",
+                  "archive_url" not in detail and "/a/archive/hls/" in detail.get("video_url", ""),
+                  str({k: detail.get(k) for k in ("archive_url", "video_url")}))
             _, _, body = post(conn, "/v1/archive/get_with_archive_data",
                               {"archives_id": "e77f7985-6a67-4a59-a689-d4870c96cf03"})
             detail = json.loads(body)
