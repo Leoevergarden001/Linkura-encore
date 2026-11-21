@@ -8,12 +8,19 @@
 // Files (visible in the Files app / Finder because the staged Info.plist
 // enables file sharing):
 //   Documents/LinkuraOffline/server.log   request and error log
-//   Documents/LinkuraOffline/config.json  optional {"port":52680,"resVersion":"..."}
+//   Documents/LinkuraOffline/config.json  optional {"port":52680,"resVersion":"...",
+//                                          "remoteAssetBase":"https://<asset host>/a",
+//                                          "remoteAssetKey":"<this device's key>"}
+//                                          (with remoteAssetBase, <base>/version.json
+//                                          overrides resVersion when reachable)
 //   Documents/LinkuraOffline/mock_api/... optional per-path JSON overrides
 //                                          (development build only)
 // The player database lives in Library/Application Support/LinkuraOffline.
 
 #import <Foundation/Foundation.h>
+#include <chrono>
+#include <future>
+#include <memory>
 #include <os/log.h>
 
 #include <cstdio>
@@ -108,6 +115,9 @@ void LinkuraOfflineLog(const char* level, const char* message) { LogSink(level, 
 // Asset proxy for config.json "remoteAssetBase": the game may only use plain
 // HTTP towards loopback (Unity rejects other insecure URLs), so the local
 // server fetches missing assets from the resource server with NSURLSession.
+// config.json "remoteAssetKey" (one per device) is sent as x-linkura-key; the
+// asset host (R2 behind Cloudflare) refuses requests without a valid key.
+static std::string g_remoteAssetKey;
 static NSURLSession* AssetProxySession() {
     static NSURLSession* session;
     static dispatch_once_t once;
@@ -130,6 +140,9 @@ static bool FetchRemoteAsset(const std::string& url, const std::string& range,
                                                                cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                            timeoutInterval:120];
         if (!range.empty()) [request setValue:[NSString stringWithUTF8String:range.c_str()] forHTTPHeaderField:@"Range"];
+        if (!g_remoteAssetKey.empty()) {
+            [request setValue:[NSString stringWithUTF8String:g_remoteAssetKey.c_str()] forHTTPHeaderField:@"x-linkura-key"];
+        }
         __block NSData* body = nil;
         __block NSHTTPURLResponse* http = nil;
         dispatch_semaphore_t done = dispatch_semaphore_create(0);
@@ -192,9 +205,46 @@ static void LinkuraOfflineStart() {
                 if ([settings[@"port"] isKindOfClass:NSNumber.class]) {
                     config.port = static_cast<std::uint16_t>([settings[@"port"] unsignedShortValue]);
                 }
+                if ([settings[@"remoteAssetKey"] isKindOfClass:NSString.class]) {
+                    g_remoteAssetKey = [settings[@"remoteAssetKey"] UTF8String];
+                }
                 if ([settings[@"remoteAssetBase"] isKindOfClass:NSString.class]) {
                     config.remoteAssetBase = [settings[@"remoteAssetBase"] UTF8String];
                     config.fetchRemote = FetchRemoteAsset;
+                    // The asset base publishes its resource version (<base>/version.json,
+                    // {"resVersion": "..."}), so a new build on the asset host needs no
+                    // config change on the device. Fetched once at startup; responses
+                    // wait for it until 6 s after launch at most, then fall back to the
+                    // configured resVersion.
+                    auto remoteVersion = std::make_shared<std::promise<std::string>>();
+                    std::shared_future<std::string> versionReady = remoteVersion->get_future().share();
+                    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(6);
+                    const std::string versionUrl = [&] {
+                        std::string b = config.remoteAssetBase;
+                        while (!b.empty() && b.back() == '/') b.pop_back();
+                        return b + "/version.json";
+                    }();
+                    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                        LinkuraLocal::Standalone::ServerConfig::RemoteResponse out;
+                        std::string version;
+                        if (FetchRemoteAsset(versionUrl, std::string{}, out) && out.status == 200) {
+                            NSData* json = [NSData dataWithBytes:out.body.data() length:out.body.size()];
+                            id doc = [NSJSONSerialization JSONObjectWithData:json options:0 error:nil];
+                            if ([doc isKindOfClass:NSDictionary.class] &&
+                                [doc[@"resVersion"] isKindOfClass:NSString.class]) {
+                                version = [doc[@"resVersion"] UTF8String];
+                            }
+                        }
+                        char line[512];
+                        std::snprintf(line, sizeof(line), "remote resVersion %s -> %s (http %d)", versionUrl.c_str(),
+                                      version.empty() ? "(none, using config.json)" : version.c_str(), out.status);
+                        LogSink("I", line);
+                        remoteVersion->set_value(version);
+                    });
+                    config.resVersionSource = [versionReady, deadline]() -> std::string {
+                        if (versionReady.wait_until(deadline) != std::future_status::ready) return {};
+                        return versionReady.get();
+                    };
                     // Startup self-test: can this app reach the resource server and the internet?
                     const std::string base = config.remoteAssetBase;
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC),

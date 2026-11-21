@@ -862,6 +862,108 @@ def main() -> int:
         finally:
             stop(proc)
 
+
+    # Remote asset base (R2): the proxy sends the device key, fetches large assets in
+    # Range pieces and streams them on, honours the client's Range, answers misses with
+    # a bodiless 404, and takes x-res-version from the published version when given.
+    import os
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    big = os.urandom(1_000_003)
+    small = b"small-asset"
+    upstream_log: list = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):  # noqa: N802
+            upstream_log.append((self.path, self.headers.get("Range"), self.headers.get("x-linkura-key")))
+            if self.headers.get("x-linkura-key") != "device-key":
+                self.send_response(403)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            data = {"/a/raw/bi/big": big, "/a/raw/sm/small": small}.get(self.path)
+            if data is None:
+                body = b"<html>Not Found</html>"
+                self.send_response(404)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            first, last, status = 0, len(data) - 1, 200
+            rng = self.headers.get("Range")
+            if rng and rng.startswith("bytes="):
+                a, _, b = rng[6:].partition("-")
+                first = int(a)
+                last = min(int(b), len(data) - 1) if b else len(data) - 1
+                status = 206
+            self.send_response(status)
+            self.send_header("Content-Length", str(last - first + 1))
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {first}-{last}/{len(data)}")
+            self.end_headers()
+            self.wfile.write(data[first:last + 1])
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=upstream.serve_forever, daemon=True).start()
+    with tempfile.TemporaryDirectory() as tmp:
+        data = Path(tmp) / "data"
+        version_file = Path(tmp) / "version.txt"
+        version_file.write_text("R9999999@remote-one\n")
+        port = free_port()
+        proc = start(data, port, "--res-version", "R0000000@configured",
+                     "--remote-asset-base", f"http://127.0.0.1:{upstream.server_port}/a",
+                     "--remote-asset-key", "device-key", "--remote-chunk-bytes", "65536",
+                     "--res-version-file", str(version_file))
+        try:
+            def get(path: str, headers: dict | None = None):
+                c = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+                c.request("GET", path, headers=headers or {})
+                r = c.getresponse()
+                out = (r.status, dict((k.lower(), v) for k, v in r.getheaders()), r.read())
+                c.close()
+                return out
+
+            upstream_log.clear()
+            status, headers, body = get("/a/raw/bi/big")
+            pieces = [r for p_, r, _ in upstream_log if p_ == "/a/raw/bi/big"]
+            sizes = [int(r[6:].split("-")[1]) - int(r[6:].split("-")[0]) + 1 for r in pieces if r]
+            check("proxied asset streams in Range pieces with the device key",
+                  status == 200 and body == big and len(pieces) == 16 and max(sizes) <= 65536 and
+                  all(k == "device-key" for _, _, k in upstream_log), f"{status} {len(body)} {len(pieces)}")
+            status, headers, body = get("/a/raw/bi/big", {"Range": "bytes=100000-300000"})
+            check("proxied asset honours the client's Range",
+                  status == 206 and body == big[100000:300001] and
+                  headers.get("content-range") == f"bytes 100000-300000/{len(big)}", f"{status} {headers}")
+            status, headers, body = get("/a/raw/bi/big", {"Range": "bytes=900000-"})
+            check("proxied asset honours an open-ended Range", status == 206 and body == big[900000:])
+            status, _, body = get("/a/raw/sm/small")
+            check("small proxied asset comes back whole", status == 200 and body == small)
+            status, _, body = get("/a/raw/no/missing")
+            check("remote miss is a bodiless 404", status == 404 and body == b"")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+            _, first_headers, _ = post(conn, "/v1/user/login", {"player_id": "", "device_specific_id": "", "version": 1})
+            version_file.write_text("R9999999@remote-two\n")
+            _, second_headers, _ = post(conn, "/v1/user/login", {"player_id": "", "device_specific_id": "", "version": 1})
+            lower = lambda h: {k.lower(): v for k, v in h.items()}
+            check("x-res-version follows the published version",
+                  lower(first_headers).get("x-res-version") == "R9999999@remote-one" and
+                  lower(second_headers).get("x-res-version") == "R9999999@remote-two",
+                  f"{lower(first_headers).get('x-res-version')} {lower(second_headers).get('x-res-version')}")
+            # With×MEETS mrs replays play the video replay (009).
+            _, _, body = post(conn, "/v1/archive/get_with_archive_data",
+                              {"archives_id": "e77f7985-6a67-4a59-a689-d4870c96cf03"})
+            detail = json.loads(body)
+            check("With×MEETS mrs archive plays its video replay",
+                  "archive_url" not in detail and detail.get("video_url", "").endswith("/archive/hls/20241107/index.m3u8"),
+                  str({k: detail.get(k) for k in ("archive_url", "video_url")}))
+            conn.close()
+        finally:
+            stop(proc)
+            upstream.shutdown()
+
     print("PASS" if not failures else f"FAILED: {', '.join(failures)}")
     return 0 if not failures else 1
 

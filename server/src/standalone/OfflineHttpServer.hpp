@@ -22,6 +22,10 @@ namespace LinkuraLocal::Standalone {
         // Value for ${RES_VERSION} in response headers. Empty: the
         // x-res-version header is left out entirely.
         std::string resVersion;
+        // Optional: called for every response that needs ${RES_VERSION}; a
+        // non-empty result replaces resVersion (e.g. the version the remote
+        // asset base publishes, fetched at startup). May block briefly.
+        std::function<std::string()> resVersionSource;
         // Optional overrides: <mockRoot>/<api path>.json (and .headers),
         // e.g. mock_api/v1/user/login.json, take precedence over routes.
         std::filesystem::path mockRoot;
@@ -39,6 +43,10 @@ namespace LinkuraLocal::Standalone {
             std::string body;
         };
         std::function<bool(const std::string& url, const std::string& range, RemoteResponse& out)> fetchRemote;
+        // Proxied assets are fetched and sent on in pieces of at most this
+        // many bytes (Range requests), so a large asset (story movies are up to
+        // 418 MB) never sits in memory whole.
+        std::size_t remoteChunkBytes = 8u << 20;
     };
 
     struct HttpRequest {
@@ -54,6 +62,12 @@ namespace LinkuraLocal::Standalone {
         std::string reason = "OK";
         std::string headersText;  // "name: value" lines
         std::string body;
+        // Streamed body (proxied assets): when set, body is empty and the
+        // response carries streamLength bytes, produced by stream(). stream
+        // calls write for each piece and returns false if the body could not
+        // be completed (the connection is then closed so the client retries).
+        std::uint64_t streamLength = 0;
+        std::function<bool(const std::function<bool(const std::string&)>& write)> stream;
     };
 
     // Pure request handler (no sockets); used by the server and by tests.

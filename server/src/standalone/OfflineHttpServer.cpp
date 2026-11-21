@@ -1,5 +1,8 @@
 #include "OfflineHttpServer.hpp"
 
+#include <memory>
+#include <optional>
+
 #include "../RouteRegistry.hpp"
 #include "MockPlatformStandalone.hpp"
 #include "offline_api_mock_builtin.hpp"
@@ -124,8 +127,13 @@ namespace LinkuraLocal::Standalone {
         std::string ExpandHeaders(std::string headers, const ServerConfig& config) {
             MirrorAppleWallet(headers);
             ReplaceAll(headers, "${DATE_GMT}", HttpDateNow());
-            if (!config.resVersion.empty()) {
-                ReplaceAll(headers, "${RES_VERSION}", config.resVersion);
+            std::string version;
+            if (config.resVersionSource && headers.find("${RES_VERSION}") != std::string::npos) {
+                version = config.resVersionSource();
+            }
+            if (version.empty()) version = config.resVersion;
+            if (!version.empty()) {
+                ReplaceAll(headers, "${RES_VERSION}", version);
                 return headers;
             }
             std::istringstream lines(headers);
@@ -136,6 +144,137 @@ namespace LinkuraLocal::Standalone {
                 kept += '\n';
             }
             return kept;
+        }
+
+        // Parses "bytes=<start>-[<end>]". False for anything else (suffix
+        // ranges, several ranges), which is then forwarded as it is.
+        bool ParseByteRange(const std::string& value, std::uint64_t& start, std::optional<std::uint64_t>& end) {
+            const std::string prefix = "bytes=";
+            if (value.rfind(prefix, 0) != 0 || value.find(',') != std::string::npos) return false;
+            const auto dash = value.find('-', prefix.size());
+            if (dash == std::string::npos || dash == prefix.size()) return false;
+            try {
+                start = std::stoull(value.substr(prefix.size(), dash - prefix.size()));
+                const std::string last = Trim(value.substr(dash + 1));
+                if (!last.empty()) end = std::stoull(last);
+            } catch (...) {
+                return false;
+            }
+            return !end || *end >= start;
+        }
+
+        // Total size from a Content-Range value "bytes <a>-<b>/<total>".
+        std::optional<std::uint64_t> RangeTotal(const std::string& contentRange) {
+            const auto slash = contentRange.rfind('/');
+            if (slash == std::string::npos) return std::nullopt;
+            try {
+                return std::stoull(contentRange.substr(slash + 1));
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+
+        // Asset proxy: GET <url> from the remote asset base in pieces of
+        // config.remoteChunkBytes and send them on as they arrive, honouring
+        // the client's Range. Only 200/206 are passed on; anything else falls
+        // through to the bodiless 404 below.
+        bool ProxyRemoteAsset(const HttpRequest& request, const ServerConfig& config, const std::string& url,
+                              HttpResponse& response) {
+            const auto rangeHeader = request.headers.find("range");
+            const std::string clientRange = rangeHeader == request.headers.end() ? std::string{} : rangeHeader->second;
+            const auto contentType = std::string("content-type: ") + AssetContentType(request.path) + "\naccept-ranges: bytes\n";
+            std::uint64_t start = 0;
+            std::optional<std::uint64_t> end;
+            const bool parsed = clientRange.empty() || ParseByteRange(clientRange, start, end);
+            if (!parsed) {  // unusual range: forward it and the reply as they are
+                ServerConfig::RemoteResponse remote;
+                if (!config.fetchRemote(url, clientRange, remote) || (remote.status != 200 && remote.status != 206)) {
+                    Log::WarnFmt("[OfflineServer] asset proxy failed: %s -> %d", request.path.c_str(), remote.status);
+                    return false;
+                }
+                response.status = remote.status;
+                response.reason = remote.status == 206 ? "Partial Content" : "OK";
+                response.headersText = contentType;
+                if (!remote.contentRange.empty()) response.headersText += "content-range: " + remote.contentRange + "\n";
+                response.body = std::move(remote.body);
+                return true;
+            }
+            const std::uint64_t chunk = std::max<std::uint64_t>(64u << 10, config.remoteChunkBytes);
+            const std::uint64_t firstEnd = end ? std::min(*end, start + chunk - 1) : start + chunk - 1;
+            ServerConfig::RemoteResponse first;
+            const bool ok = config.fetchRemote(url, "bytes=" + std::to_string(start) + "-" + std::to_string(firstEnd), first);
+            if (!ok || (first.status != 200 && first.status != 206)) {
+                Log::WarnFmt("[OfflineServer] asset proxy failed: %s -> %d", request.path.c_str(), first.status);
+                return false;
+            }
+            std::optional<std::uint64_t> total;
+            std::uint64_t firstStart = start;
+            if (first.status == 200) {  // the remote ignored the range: whole file in hand
+                total = first.body.size();
+                firstStart = 0;
+            } else {
+                total = RangeTotal(first.contentRange);
+            }
+            if (!total) {  // unknown size: pass the piece on as it came
+                response.status = 206;
+                response.reason = "Partial Content";
+                response.headersText = contentType + "content-range: " + first.contentRange + "\n";
+                response.body = std::move(first.body);
+                return true;
+            }
+            if (start >= *total) {
+                response.status = 416;
+                response.reason = "Range Not Satisfiable";
+                response.headersText = contentType + "content-range: bytes */" + std::to_string(*total) + "\n";
+                return true;
+            }
+            const std::uint64_t last = end ? std::min(*end, *total - 1) : *total - 1;
+            const std::uint64_t length = last - start + 1;
+            response.status = clientRange.empty() ? 200 : 206;
+            response.reason = clientRange.empty() ? "OK" : "Partial Content";
+            response.headersText = contentType;
+            if (!clientRange.empty()) {
+                response.headersText += "content-range: bytes " + std::to_string(start) + "-" + std::to_string(last) +
+                                        "/" + std::to_string(*total) + "\n";
+            }
+            // The part of the first piece that falls inside [start, last].
+            std::string head = std::move(first.body);
+            if (firstStart < start) head.erase(0, std::min<std::uint64_t>(head.size(), start - firstStart));
+            if (head.size() > length) head.resize(length);
+            if (head.size() == length) {
+                Log::InfoFmt("[OfflineServer] asset %s -> proxied %d (%zu bytes)", request.path.c_str(), response.status,
+                             head.size());
+                response.body = std::move(head);
+                return true;
+            }
+            Log::InfoFmt("[OfflineServer] asset %s -> proxied %d, streaming %llu bytes", request.path.c_str(),
+                         response.status, static_cast<unsigned long long>(length));
+            response.streamLength = length;
+            auto fetch = config.fetchRemote;
+            const std::string assetPath = request.path;
+            auto firstPiece = std::make_shared<std::string>(std::move(head));
+            response.stream = [fetch, url, assetPath, chunk, start, last, firstPiece](
+                                  const std::function<bool(const std::string&)>& write) {
+                std::uint64_t position = start + firstPiece->size();
+                if (!write(*firstPiece)) return false;
+                firstPiece->clear();
+                firstPiece->shrink_to_fit();
+                while (position <= last) {
+                    const std::uint64_t pieceEnd = std::min(last, position + chunk - 1);
+                    ServerConfig::RemoteResponse piece;
+                    if (!fetch(url, "bytes=" + std::to_string(position) + "-" + std::to_string(pieceEnd), piece) ||
+                        piece.status != 206 || piece.body.empty()) {
+                        Log::WarnFmt("[OfflineServer] asset proxy stream broke: %s at %llu -> %d", assetPath.c_str(),
+                                     static_cast<unsigned long long>(position), piece.status);
+                        return false;
+                    }
+                    if (piece.body.size() > pieceEnd - position + 1) piece.body.resize(pieceEnd - position + 1);
+                    if (!write(piece.body)) return false;
+                    position += piece.body.size();
+                }
+                return true;
+            };
+            return true;
         }
 
         bool SendAll(int fd, const std::string& data) {
@@ -212,24 +351,10 @@ namespace LinkuraLocal::Standalone {
                 return response;
             }
             if (!config.remoteAssetBase.empty() && config.fetchRemote) {
-                ServerConfig::RemoteResponse remote;
-                const auto range = request.headers.find("range");
                 std::string base = config.remoteAssetBase;
                 while (!base.empty() && base.back() == '/') base.pop_back();
                 const std::string url = base + path.substr(2);
-                if (config.fetchRemote(url, range == request.headers.end() ? std::string{} : range->second, remote) &&
-                    (remote.status == 200 || remote.status == 206)) {
-                    Log::InfoFmt("[OfflineServer] asset %s -> proxied %d (%zu bytes)", path.c_str(), remote.status,
-                                 remote.body.size());
-                    response.status = remote.status;
-                    response.reason = remote.status == 206 ? "Partial Content" : "OK";
-                    response.headersText = std::string("content-type: ") + AssetContentType(path) +
-                                           "\naccept-ranges: bytes\n";
-                    if (!remote.contentRange.empty()) response.headersText += "content-range: " + remote.contentRange + "\n";
-                    response.body = std::move(remote.body);
-                    return response;
-                }
-                Log::WarnFmt("[OfflineServer] asset proxy failed: %s -> %d", path.c_str(), remote.status);
+                if (ProxyRemoteAsset(request, config, url, response)) return response;
             }
             Log::WarnFmt("[OfflineServer] asset request not served: %s", request.target.c_str());
             // No body: the game's downloader writes whatever body it gets into
@@ -289,7 +414,8 @@ namespace LinkuraLocal::Standalone {
             out += name + ": " + value + "\r\n";
         }
         if (!hasContentType) out += "content-type: application/json; charset=UTF-8\r\n";
-        out += "content-length: " + std::to_string(response.body.size()) + "\r\n";
+        const std::uint64_t length = response.stream ? response.streamLength : response.body.size();
+        out += "content-length: " + std::to_string(length) + "\r\n";
         out += keepAlive ? "connection: keep-alive\r\n" : "connection: close\r\n";
         out += "\r\n";
         out += response.body;
@@ -467,7 +593,18 @@ namespace LinkuraLocal::Standalone {
                 response.reason = "Internal Server Error";
                 response.body = "{}";
             }
-            if (!SendAll(fd, SerializeResponse(response, keepAlive)) || !keepAlive) break;
+            if (!SendAll(fd, SerializeResponse(response, keepAlive))) break;
+            if (response.stream) {
+                std::uint64_t sent = 0;
+                const bool complete = response.stream([fd, &sent](const std::string& piece) {
+                    sent += piece.size();
+                    return SendAll(fd, piece);
+                });
+                // A short body cannot be framed: close so the client retries
+                // (the game's downloader resumes with a Range request).
+                if (!complete || sent != response.streamLength) break;
+            }
+            if (!keepAlive) break;
         }
         ::close(fd);
     }
