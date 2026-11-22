@@ -227,6 +227,21 @@ TITLE_ID_PATCHES = (
     (0x24DE3C8, "TitleSceneController::SetPlayerId always empty label", "a0000034", "1f2003d5"),
 )
 
+# Asset download concurrency.  Hailstorm's StardustDownloadWorker asks
+# AdaptiveConcurrencyController.RecommendedDownloaderNum how many files to
+# download at once: a static table of 1/2/3/4 downloaders, stepped up only when
+# measured throughput passes 80/130/180/260 Mbit/s.  Through a distant CDN edge
+# (0.2-0.6 s per request) throughput never reaches level 1, so the client
+# fetches one file at a time and a fresh install of ~55k files takes many
+# hours.  Return a fixed 12, and raise the native downloader's cap
+# (StardustAssetDownloader passes MaxDownloaders = 4) to 12 as well.
+DOWNLOAD_CONCURRENCY = 12
+DOWNLOAD_CONCURRENCY_PATCHES = (
+    (0x3231F80, "AdaptiveConcurrencyController::get_RecommendedDownloaderNum -> 12",
+     "f657bda9f44f01a9", "80018052c0035fd6"),  # mov w0, #12 ; ret
+    (0x3230744, "StardustAssetDownloader::.ctor MaxDownloaders 4 -> 12", "83008052", "83018052"),  # mov w3, #12
+)
+
 # Destructive account/cache actions.  Offline, キャッシュ削除 would wipe the
 # imported ~20 GB asset cache (no longer downloadable) and logout / user
 # deletion would reset the local identity.  Android blocks them with a
@@ -446,6 +461,11 @@ def hide_title_player_id(framework: bytes) -> tuple[bytes, list[dict]]:
     return patch_code(framework, TITLE_ID_PATCHES)
 
 
+def raise_download_concurrency(framework: bytes) -> tuple[bytes, list[dict]]:
+    """Download 12 assets at once instead of the throughput-gated 1-4."""
+    return patch_code(framework, DOWNLOAD_CONCURRENCY_PATCHES)
+
+
 def guard_destructive_actions(framework: bytes) -> tuple[bytes, list[dict]]:
     """Make cache delete / logout / user delete handlers no-ops."""
     return patch_code(framework, DESTRUCTIVE_ACTION_PATCHES)
@@ -485,6 +505,7 @@ def stage_offline_ios_client(
     hide_title_id: bool = True,
     block_chapter: bool = True,
     skip_catalog: bool = True,
+    download_concurrency: bool = True,
     res_version: str | None = DEFAULT_RES_VERSION,
     player_id: str | None = OFFLINE_PLAYER_ID,
 ) -> dict:
@@ -540,7 +561,7 @@ def stage_offline_ios_client(
         }
         code_patches: list[dict] = []
         if (disable_lyric_videos or guard_destructive or compat_patches or block_story or block_archive or hide_title_id
-                or block_chapter or skip_catalog or res_version or player_id):
+                or block_chapter or skip_catalog or download_concurrency or res_version or player_id):
             if framework not in members:
                 raise IosError("UnityFramework not found")
             framework_data = archive.read(framework)
@@ -552,6 +573,7 @@ def stage_offline_ios_client(
                                      (hide_title_id, hide_title_player_id),
                                      (block_chapter, block_chapter_portal),
                                      (skip_catalog, skip_catalog_sync),
+                                     (download_concurrency, raise_download_concurrency),
                                      (bool(res_version), fixed_res_version),
                                      (bool(player_id), fixed_player_id)):
                 if enabled:

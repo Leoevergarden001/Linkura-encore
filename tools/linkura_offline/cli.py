@@ -41,6 +41,7 @@ def _ios_stage(args: argparse.Namespace) -> int:
         block_story=not args.allow_story_playback,
         block_archive=not args.allow_archive_playback,
         block_chapter=not args.allow_chapter_portal,
+        download_concurrency=not args.keep_download_concurrency,
         skip_catalog=not args.allow_catalog_sync,
         res_version=None if args.per_player_res_version else args.res_version,
         player_id=None if args.keep_player_id else OFFLINE_PLAYER_ID,
@@ -148,6 +149,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="let 活動記録 再生 start its download (default: the dialog just closes)")
     p.add_argument("--allow-archive-playback", action="store_true",
                    help="let a スクールアイドルコネクト archive start its replay download (default: a tap does nothing)")
+    p.add_argument("--keep-download-concurrency", action="store_true",
+                   help="keep the client's throughput-gated 1-4 parallel asset downloads (default: 12)")
     p.add_argument("--allow-chapter-portal", action="store_true",
                    help="let Chapter RANK open the Chapter portal (its assets were not saved)")
     p.add_argument("--res-version", default=DEFAULT_RES_VERSION,

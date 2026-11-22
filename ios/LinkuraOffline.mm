@@ -127,7 +127,7 @@ static NSURLSession* AssetProxySession() {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         NSURLSessionConfiguration* configuration = NSURLSessionConfiguration.ephemeralSessionConfiguration;
-        configuration.HTTPMaximumConnectionsPerHost = 8;
+        configuration.HTTPMaximumConnectionsPerHost = 12;  // the client downloads 12 assets at once
         configuration.URLCache = nil;
         configuration.timeoutIntervalForRequest = 120;
         session = [NSURLSession sessionWithConfiguration:configuration];
