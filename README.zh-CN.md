@@ -1,6 +1,8 @@
 [English](README.md) | **简体中文** | [日本語](README.ja.md)
 
-# linkura-offline
+# Linkura-encore
+
+<sub>原名 linkura-offline。代码、工具和设备上的目录仍沿用这个名字。</sub>
 
 **非官方**的「Link！Like！ラブライブ！蓮ノ空スクールアイドルクラブ」（リンクラ）离线运行项目：在官方服务器停止服务之后，让你自己手上的客户端和资源缓存继续离线游玩，并方便在此基础上继续开发和修复。
 
@@ -46,8 +48,8 @@
 以下两条路径都需要本仓库的安装工具。如果还没有获取代码，先运行：
 
 ```sh
-git clone --recurse-submodules https://github.com/LeoEvergarden/Linkura-offline.git
-cd Linkura-offline
+git clone --recurse-submodules https://github.com/Leoevergarden001/Linkura-encore.git
+cd Linkura-encore
 ```
 
 ### 已有离线安装包与资源包

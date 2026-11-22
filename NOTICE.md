@@ -1,6 +1,6 @@
 # NOTICE
 
-linkura-offline is licensed under the GNU General Public License v3.0 (see `LICENSE`).
+Linkura-encore (formerly linkura-offline) is licensed under the GNU General Public License v3.0 (see `LICENSE`).
 
 ## Origin
 
