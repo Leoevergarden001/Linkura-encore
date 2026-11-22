@@ -1,4 +1,4 @@
-<!-- Translation source: 85ba8e531f12739a3a402a5389f6af013d337e19 (docs/zh/server.md) -->
+<!-- Translation source: 77dbd449d49a1c8a20703f7b2da796dad2fa0411 (docs/zh/server.md) -->
 
 # Developing the offline server
 

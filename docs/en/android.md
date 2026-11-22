@@ -1,4 +1,4 @@
-<!-- Translation source: 60f383ea76a885c71ddad0e2d24e2955fc4c6c78 (docs/zh/android.md) -->
+<!-- Translation source: 1a59167456efd164e163fbb74cc42e36365b3580 (docs/zh/android.md) -->
 
 # Android: build and install
 

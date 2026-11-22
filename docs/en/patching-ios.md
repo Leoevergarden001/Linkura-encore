@@ -1,4 +1,4 @@
-<!-- Translation source: b64c0230e7572205cac40298f29a55318a5a73ff (docs/zh/patching-ios.md) -->
+<!-- Translation source: 47d2ad95d3c9167511e9fdb6c50b762cdeca490f (docs/zh/patching-ios.md) -->
 
 # iOS patching: find and add patches
 

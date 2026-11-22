@@ -1,6 +1,6 @@
 **English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-<!-- Translation source: 85ba8e531f12739a3a402a5389f6af013d337e19 (README.zh-CN.md) -->
+<!-- Translation source: 77dbd449d49a1c8a20703f7b2da796dad2fa0411 (README.zh-CN.md) -->
 
 # linkura-offline
 
