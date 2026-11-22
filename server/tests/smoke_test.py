@@ -315,7 +315,11 @@ def main() -> int:
             check("custom setting shows new name, no circle", status == 200 and custom["player_name"] == "テスト"
                   and custom["guild_name"] == "", body[:200].decode())
             status, _, body = post(conn, "/v1/user/card/get_list", {})
-            first_card = json.loads(body)["user_card_data_list"][0]["d_card_datas_id"]
+            owned_cards = json.loads(body)["user_card_data_list"]
+            first_card = owned_cards[0]["d_card_datas_id"]
+            placeholders = [c["card_datas_id"] for c in owned_cards if c["card_datas_id"] // 10 in (1010400, 1010500)]
+            check("no card-less ？？？ cards owned", not placeholders and len(owned_cards) == 549,
+                  f"{len(owned_cards)} {placeholders}")
             status, _, body = post(conn, "/v1/follow/set_friend_card",
                                    {"school_idol_stage_card_id": "", "rhythm_game_card_id": ""})
             check("set empty friend cards", status == 200 and json.loads(body) == {"result": True}, body[:200].decode())
