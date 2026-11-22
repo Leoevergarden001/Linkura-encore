@@ -1,19 +1,14 @@
 # 架构
 
-```
-            ┌───────────── 游戏客户端（Unity / IL2CPP） ─────────────┐
-            │  OpenAPI 客户端 ── HTTP ──▶  API 基地址                 │
-            └──────────────┬─────────────────────────────────────────┘
-       Android             │                         iOS
-  LSPatch 模块（Hook）      │             IPA 静态改写 + dylib
-  ApiClient.CallApiAsync    │             metadata 中 API 地址
-  被接管，直接交给 ─────────┤             改成 http://127.0.0.1:52680
-                            ▼                         ▼
-               ┌──────────── server/ 离线服务器 ────────────┐
-               │ RouteRegistry：路径 → 处理函数 / 内置 JSON   │
-               │ HttpMockBackend：玩家状态（SQLite）          │
-               │ data/builtin：响应模板   db/：表结构与种子    │
-               └──────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    C["游戏客户端（Unity / IL2CPP）"] --> A["Android：LSPatch 接管 ApiClient.CallApiAsync"]
+    C --> I["iOS：静态改写 metadata 中的 API 地址 + dylib"]
+    A --> S["server/ 离线服务器"]
+    I -->|"HTTP 127.0.0.1:52680"| S
+    S --> R["RouteRegistry：路径 → 处理函数 / 内置 JSON"]
+    S --> B["HttpMockBackend：玩家状态（SQLite）"]
+    S --> D["data/builtin：响应模板；db/：表结构与种子"]
 ```
 
 ## 目录
