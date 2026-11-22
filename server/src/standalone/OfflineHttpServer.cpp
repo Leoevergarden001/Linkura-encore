@@ -1,5 +1,6 @@
 #include "OfflineHttpServer.hpp"
 
+#include <future>
 #include <memory>
 #include <optional>
 
@@ -253,24 +254,38 @@ namespace LinkuraLocal::Standalone {
             auto fetch = config.fetchRemote;
             const std::string assetPath = request.path;
             auto firstPiece = std::make_shared<std::string>(std::move(head));
+            // The next piece is requested while the current one is being sent, so
+            // the connection to the asset host never sits idle for a round trip
+            // between pieces (one round trip via a distant edge is 0.2-0.6 s).
             response.stream = [fetch, url, assetPath, chunk, start, last, firstPiece](
                                   const std::function<bool(const std::string&)>& write) {
+                auto fetchPiece = [fetch, url](std::uint64_t from, std::uint64_t to) {
+                    ServerConfig::RemoteResponse piece;
+                    if (!fetch(url, "bytes=" + std::to_string(from) + "-" + std::to_string(to), piece)) piece.status = 0;
+                    return piece;
+                };
+                std::future<ServerConfig::RemoteResponse> next;
+                auto prefetch = [&](std::uint64_t from) {
+                    if (from <= last) next = std::async(std::launch::async, fetchPiece, from, std::min(last, from + chunk - 1));
+                };
                 std::uint64_t position = start + firstPiece->size();
-                if (!write(*firstPiece)) return false;
+                prefetch(position);
+                if (!write(*firstPiece)) return false;  // the future's destructor waits for the fetch
                 firstPiece->clear();
                 firstPiece->shrink_to_fit();
                 while (position <= last) {
                     const std::uint64_t pieceEnd = std::min(last, position + chunk - 1);
-                    ServerConfig::RemoteResponse piece;
-                    if (!fetch(url, "bytes=" + std::to_string(position) + "-" + std::to_string(pieceEnd), piece) ||
-                        piece.status != 206 || piece.body.empty()) {
+                    ServerConfig::RemoteResponse piece = next.get();
+                    if (piece.status != 206 || piece.body.empty()) {
                         Log::WarnFmt("[OfflineServer] asset proxy stream broke: %s at %llu -> %d", assetPath.c_str(),
                                      static_cast<unsigned long long>(position), piece.status);
                         return false;
                     }
                     if (piece.body.size() > pieceEnd - position + 1) piece.body.resize(pieceEnd - position + 1);
+                    const std::uint64_t after = position + piece.body.size();
+                    prefetch(after);
                     if (!write(piece.body)) return false;
-                    position += piece.body.size();
+                    position = after;
                 }
                 return true;
             };

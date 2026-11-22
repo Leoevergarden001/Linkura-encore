@@ -44,9 +44,10 @@ namespace LinkuraLocal::Standalone {
         };
         std::function<bool(const std::string& url, const std::string& range, RemoteResponse& out)> fetchRemote;
         // Proxied assets are fetched and sent on in pieces of at most this
-        // many bytes (Range requests), so a large asset (story movies are up to
-        // 418 MB) never sits in memory whole.
-        std::size_t remoteChunkBytes = 8u << 20;
+        // many bytes (Range requests; the next piece is fetched while the
+        // current one is sent), so a large asset (story movies are up to
+        // 418 MB) never sits in memory whole: at most two pieces per transfer.
+        std::size_t remoteChunkBytes = 4u << 20;
     };
 
     struct HttpRequest {
