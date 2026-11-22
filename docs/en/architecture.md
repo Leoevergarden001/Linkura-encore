@@ -1,4 +1,4 @@
-<!-- Translation source: 60f383ea76a885c71ddad0e2d24e2955fc4c6c78 (docs/zh/architecture.md) -->
+<!-- Translation source: 85ba8e531f12739a3a402a5389f6af013d337e19 (docs/zh/architecture.md) -->
 
 # Architecture
 
@@ -37,6 +37,8 @@ flowchart TD
 3. `RouteRegistry` finds a handler: static routes return an embedded template; stateful routes go to `HttpMockBackend`.
 4. Headers come from `default.headers`; the backend fills shared fields such as wallet, stamina, and Chapter rank.
 5. Unregistered paths log `no mock file or registered route` on Android or `no route for` on iOS. The client usually displays a communication error. These logs identify new routes to implement.
+
+Asset requests (iOS) take another path: the game requests `http://127.0.0.1:52680/a/<path>`, and the dylib's server looks in `Documents/LinkuraOffline/assets/` first, then forwards to the remote host given by `remoteAssetBase` in `config.json`; see [remote asset host](remote-assets.md). On Android all assets come from the resource pack imported into the device.
 
 ## Client-side fixes
 

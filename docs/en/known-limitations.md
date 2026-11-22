@@ -1,4 +1,4 @@
-<!-- Translation source: b64c0230e7572205cac40298f29a55318a5a73ff (docs/zh/known-limitations.md) -->
+<!-- Translation source: 85ba8e531f12739a3a402a5389f6af013d337e19 (docs/zh/known-limitations.md) -->
 
 # Known limitations
 
@@ -9,7 +9,11 @@ The offline edition depends on assets saved before shutdown. Missing assets cann
 | 活動記録 story playback | The confirmation closes without playback | Story voices and most 3D scenes and motions were not saved. Script text (`story_main_*.txt`) is usually complete and can be inspected with `hailstorm.py decrypt`. |
 | SHOW lyric MV | Option forced off (iOS packaging option `--disable-lyric-videos`) | Most MV videos were not saved. |
 | Chapter RANK | Top bar shows SS; tapping displays 「Chapter対象期間外です」 | Chapter page assets were never saved; the last Chapter ended June 30, 2026 according to master data. |
-| スクールアイドルコネクト archives | ARCHIVES lists 16 archives with their own covers (the covers go under `assets/`); tapping an archive does nothing (packaging option `--allow-archive-playback` restores it); the With×STATION list is empty | The replays' 3D stage, costume and timeline assets and the videos were not saved, and the official CDN answers 404; the CDN also removed most covers. |
+| スクールアイドルコネクト archives | ARCHIVES lists all 398 archives; covers go under `assets/` or on a remote asset host; tapping an archive does nothing (packaging option `--allow-archive-playback` restores it). Once restored, video replays need reachable HLS playlists, and motion replays need the motion data and the replays' 3D assets; the 5.0.1 client cannot play mrs motion data, so With×MEETS mrs archives play video | The official CDN deleted the videos, the motion data and most covers; most of the replays' 3D stage, costume and timeline assets are not in ordinary caches. |
+| With×STATION | Lists 5 episodes (2026-04); the home "Recent" row shows the latest; playback needs reachable HLS playlists | The videos are gone from the official CDN as well. |
+| MUSIC VIDEO (スクールアイドルコネクト) | The tab is greyed out | The feature never shipped (it was to come with 「間章」 and was dropped with the shutdown). |
+| Gacha birthday series | The server lists the 7 series open at the end of service and 17 birthday series; the birthday series show only once their Master EndTime is extended | The client shows only series whose Master EndTime lies ahead. Resource packs edit the device's master database with `master-open-gacha`; a fresh install rebuilds that database from the masterdata assets, so the masterdata published on a remote asset host (`gachaseries.tsv` and others) must be edited too. |
+| RANKING (スクールアイドルコネクト) | Only each period's dates and rewards, no ranking | The rankings were other players' cheer data and were not saved. |
 | お知らせ | Blank | Notices came from the server and were not saved. |
 | キャッシュ削除, ログアウト, ユーザー削除 | No effect | Offline, these would erase assets or local identity that cannot be downloaded again. |
 | SIsCa dialog number | Last digit is clipped | Width limit in the original UI. |

@@ -1,4 +1,4 @@
-<!-- Translation source: 60f383ea76a885c71ddad0e2d24e2955fc4c6c78 (docs/zh/architecture.md) -->
+<!-- Translation source: 85ba8e531f12739a3a402a5389f6af013d337e19 (docs/zh/architecture.md) -->
 
 # 全体構成
 
@@ -37,6 +37,8 @@ flowchart TD
 3. `RouteRegistry` がハンドラーを探します。静的な API は内蔵テンプレートを返し、状態を持つ API は `HttpMockBackend` に渡します。
 4. ヘッダーは `default.headers` から来ます。財布、スタミナ、Chapter rank などの共通フィールドはバックエンドが埋めます。
 5. 未登録パスは Android で `no mock file or registered route`、iOS で `no route for` と記録されます。通常、クライアントには通信エラーが出ます。新しい API を追加する手掛かりになります。
+
+アセットのリクエスト（iOS）は別の経路をたどります。ゲームは `http://127.0.0.1:52680/a/<パス>` を要求し、dylib のサーバーはまず `Documents/LinkuraOffline/assets/` を探し、なければ `config.json` の `remoteAssetBase` が示すリモートサーバーに転送します。[リモートアセットサーバー](remote-assets.md)をご覧ください。Android のアセットはすべて、端末に取り込んだリソースパックから読み込みます。
 
 ## クライアント側の修正
 

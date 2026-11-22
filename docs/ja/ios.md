@@ -1,4 +1,4 @@
-<!-- Translation source: 04bc2943bba87c6cc3a4eaddf7b616cde4564e70 (docs/zh/ios.md) -->
+<!-- Translation source: 85ba8e531f12739a3a402a5389f6af013d337e19 (docs/zh/ios.md) -->
 
 # iOS / iPadOS：ビルドとインストール
 
@@ -26,6 +26,13 @@ python3 -m tools.linkura_offline ios-offline-stage \
 ```
 
 既定の Bundle ID は `org.linkura.preservation.probe` です（`--bundle-id` で変更可能）。既定で有効なパッチと無効化方法は `--help` を参照してください。各パッチは書き込み前に元のバイト列を検証し、一致しなければ停止します。不完全な IPA は生成しません。
+
+このうち 2 つはダウンロードとガチャに関わるもので、既定で有効です。
+
+- ダウンロード並列数：スループットに応じて 1 件から増やすのではなく、12 件のアセットを同時にダウンロードします（`--keep-download-concurrency` で無効化）。理由は[リモートアセットサーバー](remote-assets.md#ダウンロード並列数)をご覧ください。
+- ガチャ一覧：マスターデータの EndTime を過ぎたシリーズも除外しません（`--hide-ended-gacha` で無効化）。誕生日ガチャが表示されるかどうかは、マスターデータ上の EndTime にも左右されます。[既知の制限](known-limitations.md)をご覧ください。
+
+アセットを端末に転送せず、自分のサーバーに置いてアプリにダウンロードさせることもできます。[リモートアセットサーバー](remote-assets.md)をご覧ください。
 
 ## 3. 署名・インストール・アセット転送
 
@@ -57,7 +64,7 @@ dylib は実行情報をアプリの `Documents/LinkuraOffline/` に書き込み
 | ファイル | 内容 |
 |---|---|
 | `server.log` | 各リクエストのパスと状態コード、未登録ルート（`no route for`）、不足アセットのリクエスト |
-| `config.json` | 任意：`{"port": 52680, "resVersion": "..."}` |
+| `config.json` | 任意：`{"port": 52680, "resVersion": "..."}`。リモートアセット用の `remoteAssetBase`、`remoteAssetKey`、`motionReplays` は[リモートアセットサーバー](remote-assets.md#configjson)を参照 |
 | `storage-key.json` | 起動前に PlayerPrefs に書き込むストレージキー |
 | `assets/<パス>` | ローカルサーバーが `/a/<パス>` で返すファイル。アーカイブ一覧のサムネイルが `assets/` の同じパス（例：`assets/with_meets/thumbnail_image/<id>.jpg`）にあれば、サムネイルの URL をローカルに向けます。公式 CDN からはほとんどのサムネイルが削除されています |
 | `mock_api/v1/<パス>.json`（および `.headers`） | パスごとのレスポンス上書きファイル。素早い試験に使います。開発版（`LINKURA_REMOTE=0` なしでビルド）だけが読み込み、リリース版は無視します。 |

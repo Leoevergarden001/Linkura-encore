@@ -1,6 +1,6 @@
 [English](README.md) | [简体中文](README.zh-CN.md) | **日本語**
 
-<!-- Translation source: 048b5cfcfaa15e513789731cdd75588d723dcb5f (README.zh-CN.md) -->
+<!-- Translation source: 85ba8e531f12739a3a402a5389f6af013d337e19 (README.zh-CN.md) -->
 
 # linkura-offline
 
@@ -85,7 +85,7 @@ cd Linkura-offline
 | `ios/` | iOS のオフライン用コンポーネント。クライアントの静的パッチとパッケージ化ツールは `tools/` にあります |
 | `tools/` | クライアントのパッケージ化、端末へのインストール、アセット処理、解析ツール |
 
-開発を続ける場合は、[全体構成](docs/ja/architecture.md)、[オフラインサーバー](docs/ja/server.md)、[Android Hook](docs/ja/hooking-android.md)、[iOS パッチ](docs/ja/patching-ios.md)から始めてください。変更後は[回帰確認チェックリスト](docs/ja/regression-checklist.md)で確認し、用語は[用語集](docs/glossary.md)を参照してください。
+開発を続ける場合は、[全体構成](docs/ja/architecture.md)、[オフラインサーバー](docs/ja/server.md)、[Android Hook](docs/ja/hooking-android.md)、[iOS パッチ](docs/ja/patching-ios.md)から始めてください。iOS のアセットを自分のサーバーに置き、アプリにダウンロードさせることもできます。[リモートアセットサーバー](docs/ja/remote-assets.md)をご覧ください。変更後は[回帰確認チェックリスト](docs/ja/regression-checklist.md)で確認し、用語は[用語集](docs/glossary.md)を参照してください。
 
 ```sh
 server/build-host.sh && python3 server/tests/smoke_test.py

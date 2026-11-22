@@ -1,4 +1,4 @@
-<!-- Translation source: 60f383ea76a885c71ddad0e2d24e2955fc4c6c78 (docs/zh/server.md) -->
+<!-- Translation source: 85ba8e531f12739a3a402a5389f6af013d337e19 (docs/zh/server.md) -->
 
 # オフラインサーバーの開発
 
@@ -10,6 +10,8 @@ python3 server/tests/smoke_test.py       # 一時ディレクトリで起動し�
 ```
 
 サーバーを変更した後は、スモークテストで素早く確認できます。API の動作を示す生きた文書でもあり、各 `check(...)` がゲーム内で確認した動作に対応します。
+
+ホスト版では iOS のリモートアセットプロキシもテストできます（`--remote-asset-base`、`--remote-asset-key` など）。[リモートアセットサーバー](remote-assets.md#パソコンでのテスト)をご覧ください。
 
 ## API の追加と変更
 
@@ -40,3 +42,5 @@ python3 -m unittest discover -s server/generators/tests
 - SQL のシードにはオンラインサーバーから取得したアーカイブ詳細（`server/generators/data/archive_archive_details.json`、リポジトリ外）も含みます。これがない場合、`generate_all.py` は JSON だけを再生成します。
 - `user_card_get_list.json` のカード 1 枚（キャラクター 1053）は、取得時の `generations_id` 値 0 を保持しています。生成器なら 100 になりますが、リポジトリ内の値を優先してください。
 - ガチャプール定義の `server/src/backend/MuseumGachaCatalog.hpp` は `generate_gacha_catalog.py` で生成します。`server/GACHA_MUSEUM.md` を参照してください。
+- スクールアイドルコネクト：アーカイブ一覧 `archive_get_archive_list.json`（398 件）、With×STATION の一覧と詳細 `archive_get_with_station_list.json`・`archive_with_station_details.json`（5 回）、アーカイブの公式動画 URL `archive_video_urls.json`（`motionReplays` を無効にしたときに使用）。ホームの「Recent」には最新の With×STATION を表示します。
+- アーカイブ詳細は、起動のたびに `server/db/player-state/008_archive_replay_urls.sql`（モーションリプレイのエントリ）と `009_mrs_video_replays.sql`（5.0.1 クライアントは mrs のモーションデータを再生できないため、With×MEETS の mrs アーカイブは動画で再生）で補正します。

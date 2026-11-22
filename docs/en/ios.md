@@ -1,4 +1,4 @@
-<!-- Translation source: 04bc2943bba87c6cc3a4eaddf7b616cde4564e70 (docs/zh/ios.md) -->
+<!-- Translation source: 85ba8e531f12739a3a402a5389f6af013d337e19 (docs/zh/ios.md) -->
 
 # iOS / iPadOS: build and install
 
@@ -26,6 +26,13 @@ python3 -m tools.linkura_offline ios-offline-stage \
 ```
 
 The default Bundle ID is `org.linkura.preservation.probe`; change it with `--bundle-id`. Run `--help` for the default patch groups and switches. Each patch checks the original bytes before writing; a mismatch stops packaging rather than producing a partial IPA.
+
+Two of them concern downloads and gacha, and are on by default:
+
+- Download concurrency: the game downloads 12 assets at once instead of starting from one and stepping up by throughput (`--keep-download-concurrency` turns it off); see [remote asset host](remote-assets.md#download-concurrency) for why;
+- Gacha list: series past their Master EndTime are no longer dropped (`--hide-ended-gacha` turns it off). Whether the birthday series show still depends on their EndTime in the masterdata; see [known limitations](known-limitations.md).
+
+Assets can also stay off the device: put them on your own server and let the app download them; see [remote asset host](remote-assets.md).
 
 ## 3. Sign, install, and transfer assets in one step
 
@@ -57,7 +64,7 @@ The dylib writes runtime information to `Documents/LinkuraOffline/` inside the a
 | File | Purpose |
 |---|---|
 | `server.log` | Each request's path and status, unmatched routes (`no route for`), and missing asset requests |
-| `config.json` | Optional: `{"port": 52680, "resVersion": "..."}` |
+| `config.json` | Optional: `{"port": 52680, "resVersion": "..."}`; for the remote asset fields `remoteAssetBase`, `remoteAssetKey` and `motionReplays` see [remote asset host](remote-assets.md#configjson) |
 | `storage-key.json` | Storage key written to PlayerPrefs before startup |
 | `assets/<path>` | Files the local server serves at `/a/<path>`. When an archive cover exists under `assets/` at the CDN path (for example `assets/with_meets/thumbnail_image/<id>.jpg`), the archive list points its cover there; the official CDN no longer serves most covers |
 | `mock_api/v1/<path>.json` (and `.headers`) | Optional response override by path for quick experiments; read only by the development build (built without `LINKURA_REMOTE=0`), ignored by the release build |

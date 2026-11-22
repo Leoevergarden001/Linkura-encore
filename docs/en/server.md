@@ -1,4 +1,4 @@
-<!-- Translation source: 60f383ea76a885c71ddad0e2d24e2955fc4c6c78 (docs/zh/server.md) -->
+<!-- Translation source: 85ba8e531f12739a3a402a5389f6af013d337e19 (docs/zh/server.md) -->
 
 # Developing the offline server
 
@@ -10,6 +10,8 @@ python3 server/tests/smoke_test.py       # start in a temporary directory and ch
 ```
 
 Smoke tests are the fastest check after changing the server and serve as living documentation for route behavior: each `check(...)` corresponds to behavior verified in the game.
+
+The host build can also test the iOS remote asset proxy (`--remote-asset-base`, `--remote-asset-key` and so on); see [remote asset host](remote-assets.md#testing-on-a-computer).
 
 ## Add or modify an API route
 
@@ -40,3 +42,5 @@ python3 -m unittest discover -s server/generators/tests
 - SQL seeds also include archived details captured from the online server (`server/generators/data/archive_archive_details.json`, not in this repository). Without that file, `generate_all.py` regenerates only JSON.
 - In `user_card_get_list.json`, one card (character 1053) retains the captured `generations_id` value 0; the generator would calculate 100. Use the checked-in value.
 - `generate_gacha_catalog.py` generates gacha-pool definitions in `server/src/backend/MuseumGachaCatalog.hpp`; see `server/GACHA_MUSEUM.md`.
+- スクールアイドルコネクト: the archive list `archive_get_archive_list.json` (398 archives), the With×STATION list and details `archive_get_with_station_list.json` and `archive_with_station_details.json` (5 episodes), and the archives' official video URLs `archive_video_urls.json` (used with `motionReplays` off). The home "Recent" row shows the latest With×STATION episode.
+- `server/db/player-state/008_archive_replay_urls.sql` (motion replay entries) and `009_mrs_video_replays.sql` (the 5.0.1 client cannot play mrs motion data, so With×MEETS mrs archives play video) correct the archive details on every start.

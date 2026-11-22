@@ -1,6 +1,6 @@
 **English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-<!-- Translation source: 048b5cfcfaa15e513789731cdd75588d723dcb5f (README.zh-CN.md) -->
+<!-- Translation source: 85ba8e531f12739a3a402a5389f6af013d337e19 (README.zh-CN.md) -->
 
 # linkura-offline
 
@@ -85,7 +85,7 @@ The offline build cannot download missing assets from the closed official CDN. S
 | `ios/` | iOS offline component; client static patches and packaging tools are in `tools/` |
 | `tools/` | Client packaging, device installation, asset processing, and analysis |
 
-For development, start with [architecture](docs/en/architecture.md), the [offline server](docs/en/server.md), [Android hooks](docs/en/hooking-android.md), and [iOS patching](docs/en/patching-ios.md). After changes, use the [regression checklist](docs/en/regression-checklist.md); see the [glossary](docs/glossary.md) for terminology.
+For development, start with [architecture](docs/en/architecture.md), the [offline server](docs/en/server.md), [Android hooks](docs/en/hooking-android.md), and [iOS patching](docs/en/patching-ios.md). iOS assets can also live on your own server and be downloaded by the app; see [remote asset host](docs/en/remote-assets.md). After changes, use the [regression checklist](docs/en/regression-checklist.md); see the [glossary](docs/glossary.md) for terminology.
 
 ```sh
 server/build-host.sh && python3 server/tests/smoke_test.py
