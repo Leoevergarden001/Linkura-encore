@@ -72,7 +72,7 @@ class MuseumStateTests(unittest.TestCase):
 
     def test_home_counts_are_player_state_not_catalog_counts(self) -> None:
         counts = dict(self.db.execute(sql("queries/home_counts.sql")).fetchone())
-        self.assertEqual(counts, dict(card_num=1, music_num=2, music_max_num=2,
+        self.assertEqual(counts, dict(card_num=1, dream_style_num=0, music_num=2, music_max_num=2,
                                      sticker_num=1, gallary_num=1, standard_live_max_num=1))
         # Sticker collection includes the catalog's unowned entries as well.
         stickers = self.db.execute(sql("queries/collection_sticker.sql")).fetchall()
@@ -166,9 +166,11 @@ class MuseumStateTests(unittest.TestCase):
                 expected[kind] = len(payloads) if kind != "sticker" else sum(p["is_owned"] for p in payloads)
             db.commit()
             bootstrap(db)
+            db.row_factory = sqlite3.Row
             counts = db.execute(sql("queries/home_counts.sql")).fetchone()
-            self.assertEqual(counts[1:5], (expected["music"], expected["music"], expected["sticker"], expected["gallary"]))
-            self.assertEqual(counts[0], db.execute("SELECT COUNT(*) FROM card_detail").fetchone()[0])
+            self.assertEqual((counts["music_num"], counts["music_max_num"], counts["sticker_num"], counts["gallary_num"]),
+                             (expected["music"], expected["music"], expected["sticker"], expected["gallary"]))
+            self.assertEqual(counts["card_num"], db.execute("SELECT COUNT(*) FROM card_detail").fetchone()[0])
             self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
 
 

@@ -24,6 +24,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The smoke and generator tests read the Master YAML in third_party/link-like-diff.
+          submodules: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -53,6 +56,9 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          # The default "tools platform-tools" fails: current sdkmanager has no "tools" package.
+          packages: platform-tools
       - name: SDK packages
         run: sdkmanager --install "cmake;3.22.1" "ndk;26.3.11579264"
       - name: Build module
