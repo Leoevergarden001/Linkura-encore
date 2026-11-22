@@ -227,6 +227,18 @@ TITLE_ID_PATCHES = (
     (0x24DE3C8, "TitleSceneController::SetPlayerId always empty label", "a0000034", "1f2003d5"),
 )
 
+# Gacha series that ended before the shutdown (the birthday series).  The
+# offline server lists exactly the series the Museum opens, but
+# GachaSceneController.SetGachaInfoList drops every listed series whose
+# Master EndTime lies before ServerTime.Now, so they never show.  Android and
+# the old resource packs edited EndTime in the device's master database
+# (master_patch.py); a fresh install builds that database from the published
+# masterdata, so drop the "ended" check instead (tbnz -> nop).  The
+# not-yet-started check stays.
+GACHA_LIST_PATCHES = (
+    (0x2F465CC, "GachaSceneController::SetGachaInfoList keep series past their Master EndTime", "c0ed0737", "1f2003d5"),
+)
+
 # Asset download concurrency.  Hailstorm's StardustDownloadWorker asks
 # AdaptiveConcurrencyController.RecommendedDownloaderNum how many files to
 # download at once: a static table of 1/2/3/4 downloaders, stepped up only when
@@ -461,6 +473,11 @@ def hide_title_player_id(framework: bytes) -> tuple[bytes, list[dict]]:
     return patch_code(framework, TITLE_ID_PATCHES)
 
 
+def keep_ended_gacha_series(framework: bytes) -> tuple[bytes, list[dict]]:
+    """List every series the server returns, also those past their Master EndTime."""
+    return patch_code(framework, GACHA_LIST_PATCHES)
+
+
 def raise_download_concurrency(framework: bytes) -> tuple[bytes, list[dict]]:
     """Download 12 assets at once instead of the throughput-gated 1-4."""
     return patch_code(framework, DOWNLOAD_CONCURRENCY_PATCHES)
@@ -506,6 +523,7 @@ def stage_offline_ios_client(
     block_chapter: bool = True,
     skip_catalog: bool = True,
     download_concurrency: bool = True,
+    keep_ended_gacha: bool = True,
     res_version: str | None = DEFAULT_RES_VERSION,
     player_id: str | None = OFFLINE_PLAYER_ID,
 ) -> dict:
@@ -561,7 +579,7 @@ def stage_offline_ios_client(
         }
         code_patches: list[dict] = []
         if (disable_lyric_videos or guard_destructive or compat_patches or block_story or block_archive or hide_title_id
-                or block_chapter or skip_catalog or download_concurrency or res_version or player_id):
+                or block_chapter or skip_catalog or download_concurrency or keep_ended_gacha or res_version or player_id):
             if framework not in members:
                 raise IosError("UnityFramework not found")
             framework_data = archive.read(framework)
@@ -574,6 +592,7 @@ def stage_offline_ios_client(
                                      (block_chapter, block_chapter_portal),
                                      (skip_catalog, skip_catalog_sync),
                                      (download_concurrency, raise_download_concurrency),
+                                     (keep_ended_gacha, keep_ended_gacha_series),
                                      (bool(res_version), fixed_res_version),
                                      (bool(player_id), fixed_player_id)):
                 if enabled:
