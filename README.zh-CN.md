@@ -83,7 +83,7 @@ cd Linkura-offline
 | `ios/` | iOS 离线组件；客户端静态补丁和封装工具位于 `tools/` |
 | `tools/` | 客户端封装、设备安装、资源处理和分析工具 |
 
-想了解调用流程或继续开发，可从[整体架构](docs/zh/architecture.md)、[离线服务器](docs/zh/server.md)、[Android Hook](docs/zh/hooking-android.md)和[iOS 补丁](docs/zh/patching-ios.md)开始。修改后按[回归检查清单](docs/zh/regression-checklist.md)验证；术语对照见[术语表](docs/glossary.md)。
+想了解调用流程或继续开发，可从[整体架构](docs/zh/architecture.md)、[离线服务器](docs/zh/server.md)、[Android Hook](docs/zh/hooking-android.md)和[iOS 补丁](docs/zh/patching-ios.md)开始。iOS 资源也可以放在自己的服务器上由 App 下载，见[远程资源服务器](docs/zh/remote-assets.md)。修改后按[回归检查清单](docs/zh/regression-checklist.md)验证；术语对照见[术语表](docs/glossary.md)。
 
 ```sh
 server/build-host.sh && python3 server/tests/smoke_test.py

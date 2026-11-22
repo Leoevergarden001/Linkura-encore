@@ -25,6 +25,13 @@ python3 -m tools.linkura_offline ios-offline-stage \
 
 默认 Bundle ID 是 `org.linkura.preservation.probe`（`--bundle-id` 可改）。默认开启的补丁和关闭方式见 `--help`。每处补丁先核对原始字节，不匹配就停止，不会生成不完整的包。
 
+其中两处与资源下载和扭蛋有关，默认开启：
+
+- 下载并发：游戏同时下载 12 个资源，不再按吞吐量从 1 个起步（`--keep-download-concurrency` 关闭），原因见 [远程资源服务器](remote-assets.md#下载并发)；
+- 扭蛋列表：不再丢掉主数据 EndTime 已过的卡池（`--hide-ended-gacha` 关闭）。生日卡池能否显示，还取决于主数据里它们的 EndTime，见 [已知限制](known-limitations.md)。
+
+资源也可以不推送到设备，而是放在自己的服务器上由 App 下载，见 [远程资源服务器](remote-assets.md)。
+
 ## 3. 签名、安装、推送资源（一步完成）
 
 设备用数据线连接 Mac、点"信任"、开启开发者模式（设置 → 隐私与安全性 → 开发者模式）。设备要登记在描述文件里：在 Xcode 里用同一个 Bundle ID 和你的 Team 运行任意 App 一次，Xcode 会自动登记并生成描述文件。
@@ -55,7 +62,7 @@ dylib 把运行信息写在 App 的 `Documents/LinkuraOffline/`（文件共享�
 | 文件 | 作用 |
 |---|---|
 | `server.log` | 每个请求的路径和状态码、未匹配的路由（`no route for`）、未提供的资源请求 |
-| `config.json` | 可选：`{"port": 52680, "resVersion": "..."}` |
+| `config.json` | 可选：`{"port": 52680, "resVersion": "..."}`；远程资源相关的 `remoteAssetBase`、`remoteAssetKey`、`motionReplays` 见 [远程资源服务器](remote-assets.md#configjson) |
 | `storage-key.json` | 启动前写入 PlayerPrefs 的存储密钥 |
 | `assets/<路径>` | 本地服务端在 `/a/<路径>` 提供的文件。存档列表的封面如果在 `assets/` 下有同路径的文件（例如 `assets/with_meets/thumbnail_image/<id>.jpg`），封面地址就改成本地的；官方 CDN 已删掉大部分封面 |
 | `mock_api/v1/<路径>.json`（及 `.headers`） | 可选：按路径覆盖响应，用于快速试验；只有开发版（不带 `LINKURA_REMOTE=0` 构建）读取，正式版忽略 |

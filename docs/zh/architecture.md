@@ -41,6 +41,8 @@
 4. 响应头来自 `default.headers`（钱包、体力、Chapter rank 等通用字段由后端填写）。
 5. 未注册的路径记为 `no mock file or registered route`（Android）或 `no route for`（iOS），客户端通常会显示通信错误，这是新增接口的入口线索。
 
+资源请求（iOS）走另一条路：游戏请求 `http://127.0.0.1:52680/a/<路径>`，dylib 的服务器先找 `Documents/LinkuraOffline/assets/`，没有就按 `config.json` 的 `remoteAssetBase` 向远程服务器转发，见 [远程资源服务器](remote-assets.md)。Android 的资源全部来自导入设备的资源包。
+
 ## 客户端侧修复
 
 服务器只能决定返回什么。客户端行为本身有问题时（比如去加载从未保存的资源），Android 用 Hook 改（`hooks/`），iOS 用静态补丁改（`tools/linkura_offline/ios_offline.py` 的补丁表）。两边尽量做同一件事，例如 Chapter RANK 点击：Android 在点击状态机里让 rank 读成 0，iOS 把同一个分支改成无条件跳转。

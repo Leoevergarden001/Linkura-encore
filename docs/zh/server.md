@@ -9,6 +9,8 @@ python3 server/tests/smoke_test.py       # 在临时目录启动服务器，逐�
 
 冒烟测试是改服务器后最快的检查，也是接口行为的活文档：每个 `check(...)` 对应一条游戏里验证过的行为。
 
+主机版也能测试 iOS 的远程资源代理（`--remote-asset-base`、`--remote-asset-key` 等），见 [远程资源服务器](remote-assets.md#在电脑上测试)。
+
 ## 新增或修改一个接口
 
 1. 在设备日志里找到未匹配的路径（Android `no mock file or registered route`，iOS `no route for`），以及客户端期望的响应结构。响应 DTO 的字段名可以在 IL2CPP 的 `Org.OpenAPITools.Model.*` 类里找到（`tools/re/il2cpp_re.py find`）。
@@ -38,3 +40,5 @@ python3 -m unittest discover -s server/generators/tests
 - SQL 种子还包含从在线服务器抓取的存档详情（`server/generators/data/archive_archive_details.json`，不在仓库中）。缺少它时 `generate_all.py` 只重新生成 JSON。
 - `user_card_get_list.json` 中有一张卡（角色 1053）的 `generations_id` 保留了抓取值 0，生成器会算成 100；以仓库中的值为准。
 - 扭蛋池定义 `server/src/backend/MuseumGachaCatalog.hpp` 由 `generate_gacha_catalog.py` 生成，说明见 `server/GACHA_MUSEUM.md`。
+- スクールアイドルコネクト：存档列表 `archive_get_archive_list.json`（398 个），With×STATION 的列表和详情 `archive_get_with_station_list.json`、`archive_with_station_details.json`（5 期），存档的官方视频地址 `archive_video_urls.json`（供 `motionReplays` 关闭时使用）。首页「Recent」显示最新一期 With×STATION。
+- 存档详情由 `server/db/player-state/008_archive_replay_urls.sql`（动捕回放入口）和 `009_mrs_video_replays.sql`（5.0.1 客户端播不了 mrs 动捕，With×MEETS 的 mrs 存档改走视频）在每次启动时修正。
