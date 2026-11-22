@@ -1,12 +1,14 @@
 **English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-<!-- Translation source: bcaaae185f13020259e4457f7c0a0324c44da221 (README.zh-CN.md) -->
+<!-- Translation source: fb6c585cb40c1ca6ef8971b608a750c80a890dd6 (README.zh-CN.md) -->
 
 # Linkura-encore
 
 <sub>Formerly linkura-offline. Code, tools and on-device directories keep that name.</sub>
 
-An **unofficial** offline project for 「Link！Like！ラブライブ！蓮ノ空スクールアイドルクラブ」 (リンクラ). After the official servers stopped operating, it lets you keep playing offline with a client and asset cache you already have, and provides a base for further development and fixes.
+An **unofficial** preservation project for 「Link！Like！ラブライブ！蓮ノ空スクールアイドルクラブ」 (リンクラ). After the official servers stopped operating, it runs a replacement server on your own device so the client and assets you have stay playable (Android / iOS), and provides a base for further development and fixes.
+
+The game's API and save are handled entirely on the device, without a network. Assets can live entirely on the device for offline play, or on your own host to be downloaded on demand (iOS only for now).
 
 > This project is unaffiliated with the official game. It aims to preserve the experience after the service ended and to support personal research and technical exchange. The game's developers, publishers, and other rights holders have not endorsed or authorized it.
 >
@@ -16,13 +18,14 @@ An **unofficial** offline project for 「Link！Like！ラブライブ！蓮ノ�
 
 ## Features
 
-The original client connects to an offline service on your device and reads game assets you have already saved. LOGIN on the title screen enters local game state: it does not contact the official servers or restore your old account. Android and iOS share the same offline server and player-state logic.
+The original client connects to a replacement server on your device and reads game assets you have already saved. LOGIN on the title screen enters local game state: it does not contact the official servers or restore your old account. Android and iOS share the same offline server and player-state logic.
 
 - **Home and everyday actions**: enter Home and open cards, missions, profile, collection, restored menus, and shop entries. Some entries show only an empty state or a protective notice; see the limitations below.
 - **SHOW and スクステ**: play and finish SHOW (the rhythm game), and play modes of スクールアイドルステージ（スクステ） such as Daily Live, Quest Live, Learning Live, Grade Live, Dream Live, and Live Grand Prix. Available songs, visuals, and performances depend on your asset cache.
 - **ガチャ and cards**: draw from the local pools that have been implemented, review draw history and points, and use card development, 編成, and item exchange. These pools and rates do not represent the full historical official configuration.
 - **Local progress**: draws, owned cards, 編成, and stage results are stored in an on-device SQLite database and remain after restart. The offline player ID is fixed at `000000000`; it is not your former official account.
 - **Asset preparation and transfer**: tools can measure cache coverage, build and import Android resource packs, and convert a suitable Android cache for iOS. Conversion cannot recover content that was never saved.
+- **Where assets live**: by default every asset is put on the device, and the game runs fully offline. On iOS, assets can instead live on your own server or object storage and the app downloads each one when needed, so the device does not need twenty-odd GB up front; downloading assets then needs a network, while the API and save stay on the device. See [remote asset host](docs/en/remote-assets.md).
 
 These features require a cache matching your client version; some content remains unavailable because assets are missing.
 
@@ -40,7 +43,7 @@ Only these client builds have been targeted and verified. The iOS static patches
 This repository contains code, build tools, and offline service data. It does not contain an original game APK or IPA, a complete asset cache, or account data. Cloning the repository alone will not produce a playable client.
 
 1. **Client**: an Android 5.1.0 APK or a decrypted iOS 5.0.1 IPA. An ordinary encrypted App Store IPA cannot be used directly by the current iOS patching workflow.
-2. **Assets**: the `D/` cache saved on your device, the catalog and master databases in `M/`, and the storage keys paired with both databases. Asset files alone, without the databases or keys, cannot complete a fresh-device installation. See [prepare assets](docs/en/resources.md).
+2. **Assets**: the `D/` cache saved on your device, the catalog and master databases in `M/`, and the storage keys paired with both databases. Asset files alone, without the databases or keys, cannot complete a fresh-device installation. See [prepare assets](docs/en/resources.md). With a remote asset host on iOS, the assets stay on the host and need not be pushed to the device.
 3. **Computer and device**: Android installation needs ADB. iOS installation needs a Mac with Xcode tools, a trusted device with Developer Mode enabled, and a provisioning profile covering that device. Building from source also needs the relevant SDKs, compilers, and Python dependencies; see [getting started](docs/en/getting-started.md).
 
 An asset cache can take tens of gigabytes, and building or transferring a pack needs additional space for temporary files. Resource packs and device backups may contain private data. Keep original archives intact and back up existing progress before changing a device. By default, the pack builder generates fresh keys for the catalog and master databases and omits the source account's `app` database.
@@ -67,7 +70,7 @@ Check your inputs against [getting started and supported versions](docs/en/getti
 
 ## Verify your installation
 
-1. Take the device offline or enable airplane mode. Cold-start the game, tap LOGIN on the title screen, and confirm that Home opens.
+1. Cold-start the game, tap LOGIN on the title screen, and confirm that Home opens. If every asset is on the device, take the device offline or enable airplane mode first to confirm nothing depends on the network; with a remote asset host, stay online.
 2. Open a cached SHOW song or スクステ stage, and confirm that you can start, finish, and return.
 3. Perform an action that changes local state and confirm its result remains after a restart. Do not test this by deleting the cache, logging out, or deleting the user.
 4. If you see a download error, blank screen, or inaccessible page, compare it with the limitations below, then use the [regression checklist](docs/en/regression-checklist.md) and platform logs.
@@ -76,7 +79,7 @@ These checks establish only that the tested paths work with the cache you used; 
 
 ## Known limitations
 
-The offline build cannot download missing assets from the closed official CDN. Story voices, lyric MVs, and archive videos that were not saved cannot play. Some notice, social, and Chapter pages show only an empty state or a message. To protect assets that cannot be downloaded again, キャッシュ削除, ログアウト, and ユーザー削除 are intercepted. See [known limitations](docs/en/known-limitations.md) for the full list and reasons.
+The official CDN is closed, so assets missing from the cache cannot be downloaded again. Story voices, lyric MVs, and other content that was not saved cannot play. スクールアイドルコネクト archive videos are not in the cache; they play only from reachable HLS playlists (see [remote asset host](docs/en/remote-assets.md)). Some notice, social, and Chapter pages show only an empty state or a message. To protect assets that cannot be downloaded again, キャッシュ削除, ログアウト, and ユーザー削除 are intercepted. See [known limitations](docs/en/known-limitations.md) for the full list and reasons.
 
 ## Project layout and development
 
