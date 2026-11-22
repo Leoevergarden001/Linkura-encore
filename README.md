@@ -1,8 +1,10 @@
 **English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-<!-- Translation source: 77dbd449d49a1c8a20703f7b2da796dad2fa0411 (README.zh-CN.md) -->
+<!-- Translation source: bcaaae185f13020259e4457f7c0a0324c44da221 (README.zh-CN.md) -->
 
-# linkura-offline
+# Linkura-encore
+
+<sub>Formerly linkura-offline. Code, tools and on-device directories keep that name.</sub>
 
 An **unofficial** offline project for 「Link！Like！ラブライブ！蓮ノ空スクールアイドルクラブ」 (リンクラ). After the official servers stopped operating, it lets you keep playing offline with a client and asset cache you already have, and provides a base for further development and fixes.
 
@@ -48,8 +50,8 @@ An asset cache can take tens of gigabytes, and building or transferring a pack n
 Both paths use the installation tools in this repository. If you have not obtained the code yet:
 
 ```sh
-git clone --recurse-submodules https://github.com/LeoEvergarden/Linkura-offline.git
-cd Linkura-offline
+git clone --recurse-submodules https://github.com/Leoevergarden001/Linkura-encore.git
+cd Linkura-encore
 ```
 
 ### If you already have an offline package and resource pack

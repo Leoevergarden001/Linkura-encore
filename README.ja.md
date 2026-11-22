@@ -1,8 +1,10 @@
 [English](README.md) | [简体中文](README.zh-CN.md) | **日本語**
 
-<!-- Translation source: 77dbd449d49a1c8a20703f7b2da796dad2fa0411 (README.zh-CN.md) -->
+<!-- Translation source: bcaaae185f13020259e4457f7c0a0324c44da221 (README.zh-CN.md) -->
 
-# linkura-offline
+# Linkura-encore
+
+<sub>旧名 linkura-offline。コード、ツール、端末上のディレクトリは引き続きこの名前を使います。</sub>
 
 「Link！Like！ラブライブ！蓮ノ空スクールアイドルクラブ」（リンクラ）の**非公式**オフライン実行プロジェクトです。公式サーバーのサービス終了後も、手元にあるクライアントとアセットキャッシュを使ってオフラインで遊び続けられるようにし、今後の開発や修正の基盤を提供します。
 
@@ -48,8 +50,8 @@
 どちらの方法でも本リポジトリのインストールツールを使用します。まだコードを取得していない場合は、次を実行してください。
 
 ```sh
-git clone --recurse-submodules https://github.com/LeoEvergarden/Linkura-offline.git
-cd Linkura-offline
+git clone --recurse-submodules https://github.com/Leoevergarden001/Linkura-encore.git
+cd Linkura-encore
 ```
 
 ### オフライン版のインストールパッケージとリソースパックがある場合
