@@ -1,4 +1,4 @@
-<!-- Translation source: 77dbd449d49a1c8a20703f7b2da796dad2fa0411 (docs/zh/architecture.md) -->
+<!-- Translation source: 90518a6248a5ba37092c565288849fabc9dd2310 (docs/zh/architecture.md) -->
 
 # Architecture
 
