@@ -314,6 +314,7 @@ namespace LinkuraLocal::HttpMock {
         std::optional<MockStoredResponse> GachaSetGuaranteePointExchangeLocked(std::string_view payloadJson);
         std::optional<MockStoredResponse> GetCardDetailByDCardIdLocked(std::string_view dCardDatasId);
         std::optional<MockStoredResponse> GetCardListResponseLocked();
+        nlohmann::json OwnedCardDataListLocked();
         std::optional<MockStoredResponse> GetItemDetailByDItemIdLocked(std::string_view dItemDatasId);
         std::optional<MockStoredResponse> GetItemListResponseLocked();
         std::optional<MockStoredResponse> GetItemExchangeListResponseLocked(std::string_view payloadJson);
@@ -1295,6 +1296,24 @@ namespace LinkuraLocal::HttpMock {
         nlohmann::json result;
         result["user_card_data_list"] = std::move(cards);
         return MockStoredResponse{result.dump(), {}, 200, "OK (offline mock)"};
+    }
+
+    // The cards the save owns, with their current growth, as user/card/get_list
+    // reports them. rhythm_game/home and quest/get_live_setting list these, so
+    // dropped cards (010_drop_placeholder_cards.sql) and growth show up there too.
+    // Falls back to the bundled catalog only if the save cannot be read.
+    nlohmann::json HttpMockBackend::Impl::OwnedCardDataListLocked() {
+        if (const auto owned = GetCardListResponseLocked()) {
+            auto parsed = nlohmann::json::parse(owned->body, nullptr, false);
+            if (parsed.is_object() && parsed.contains("user_card_data_list")
+                && parsed["user_card_data_list"].is_array()) {
+                return std::move(parsed["user_card_data_list"]);
+            }
+        }
+        Log::WarnFmt("[HttpMockBackend] owned card list unavailable; using the bundled card catalog");
+        const auto& cardListObj = OfflineApiMockBuiltIn::UserCardGetListJsonObj();
+        return cardListObj.contains("user_card_data_list") ? cardListObj["user_card_data_list"]
+                                                           : nlohmann::json::array();
     }
 
     std::optional<HttpMockBackend::Impl::GachaState> HttpMockBackend::Impl::LoadGachaStateLocked(int seriesId) {
@@ -4411,11 +4430,7 @@ namespace LinkuraLocal::HttpMock {
             }
         }
 
-        const auto& cardListObj = OfflineApiMockBuiltIn::UserCardGetListJsonObj();
-        nlohmann::json cardDataList = nlohmann::json::array();
-        if (cardListObj.contains("user_card_data_list")) {
-            cardDataList = cardListObj["user_card_data_list"];
-        }
+        nlohmann::json cardDataList = OwnedCardDataListLocked();
         for (auto& card : cardDataList) {
             if (!card.contains("character_bonus") || card["character_bonus"].empty()) {
                 card["character_bonus"] = kDefaultCharacterBonus;
@@ -5421,11 +5436,7 @@ namespace LinkuraLocal::HttpMock {
             }
         }
 
-        const auto& cardListObj = OfflineApiMockBuiltIn::UserCardGetListJsonObj();
-        nlohmann::json userCardDataList = nlohmann::json::array();
-        if (cardListObj.contains("user_card_data_list")) {
-            userCardDataList = cardListObj["user_card_data_list"];
-        }
+        nlohmann::json userCardDataList = OwnedCardDataListLocked();
 
         nlohmann::json musicList = nlohmann::json::array();
         if (questMusicsType == 2 && musicId > 0) {

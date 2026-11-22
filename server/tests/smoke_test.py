@@ -203,6 +203,14 @@ def main() -> int:
             db_path = data / "HasuKikaisann.sqlite3"
             status, _, body = post(conn, "/v1/rhythm_game/home", {})
             check("rhythm home total order 0", status == 200 and json.loads(body)["received_total_mission_order"] == 0)
+            # The SHOW and stage card pickers list the save's owned cards, not the bundled catalog.
+            rhythm_cards = json.loads(body)["card_data_list"]
+            check("rhythm home lists owned cards only", len(rhythm_cards) == 549 and not any(
+                c["card_datas_id"] // 10 in (1010400, 1010500) for c in rhythm_cards), str(len(rhythm_cards)))
+            status, _, body = post(conn, "/v1/out_quest_live/get_live_setting", {})
+            live_cards = json.loads(body).get("user_card_data_list", []) if status == 200 else []
+            check("live setting lists owned cards only", len(live_cards) == 549 and not any(
+                c["card_datas_id"] // 10 in (1010400, 1010500) for c in live_cards), f"{status} {len(live_cards)}")
             status, _, body = post(conn, "/v1/rhythm_game/receive_total_mission", {})
             check("receive total mission, not reached", status == 200 and json.loads(body) ==
                   {"received_total_mission_ids": [], "received_total_mission_order": 0}, body[:200].decode())
